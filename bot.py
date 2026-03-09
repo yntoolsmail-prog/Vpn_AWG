@@ -767,10 +767,17 @@ async def send_share(query, name: str):
         await query.message.reply_text(f"❌ vpn-файл не найден для {name}")
         return
     short = name.split(".", 1)[1] if "." in name else name
+    vpn_link = open(vpn_path).read().strip()
+    # Отправляем файл
     await query.message.reply_document(
         document=open(vpn_path, "rb"),
         filename=f"{name}.vpn",
         caption=f"📤 Файл для AmneziaVPN — *{short}*\n\nВставьте в приложении: + → Открыть файл",
+        parse_mode="Markdown"
+    )
+    # Отправляем ссылку текстом для копирования
+    await query.message.reply_text(
+        f"🔗 Ссылка для AmneziaVPN (нажмите чтобы скопировать):\n\n`{vpn_link}`",
         parse_mode="Markdown"
     )
 

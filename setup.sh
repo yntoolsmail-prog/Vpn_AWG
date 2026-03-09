@@ -146,8 +146,12 @@ chmod 600 /etc/amnezia/amneziawg/awg0.conf
 
 # ── Шаг 7: IP форвардинг и запуск ────────────────────────────────────────────
 log "IP форвардинг..."
+# Принудительно включаем сразу в ядро
+sysctl -w net.ipv4.ip_forward=1
+# Сохраняем в оба места для надёжности на Ubuntu 22 и 24
 grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf || echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
-sysctl -p
+echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-awg-forward.conf
+sysctl -p /etc/sysctl.d/99-awg-forward.conf
 
 log "Запуск AWG интерфейса..."
 awg-quick up /etc/amnezia/amneziawg/awg0.conf
