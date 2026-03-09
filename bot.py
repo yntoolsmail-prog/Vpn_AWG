@@ -117,7 +117,6 @@ def get_awg_dump() -> dict:
     return peers
 
 def next_ip() -> int:
-    # Читаем файл один раз
     with open(AWG_CONF) as f:
         content = f.read()
     i = 2
@@ -135,16 +134,28 @@ def get_user_clients(user_id: int) -> list:
     return [c for c in get_all_clients() if c.startswith(prefix)]
 
 def get_client_pub(name: str) -> str | None:
-    """Получить публичный ключ клиента из его PrivateKey"""
+    """Получить публичный ключ клиента — сначала из .pub файла, иначе вычислить и сохранить"""
+    pub_path = f"{CLIENTS_DIR}/{name}.pub"
+
+    # Быстрый путь: .pub файл уже есть
+    if os.path.exists(pub_path):
+        with open(pub_path) as f:
+            return f.read().strip()
+
+    # Медленный путь: вычисляем из PrivateKey и сохраняем на будущее
     try:
         with open(f"{CLIENTS_DIR}/{name}.conf") as f:
             for line in f:
                 line = line.strip()
                 if line.startswith("PrivateKey"):
                     priv = line.split("=", 1)[1].strip()
-                    return subprocess.check_output(
+                    pub = subprocess.check_output(
                         ["awg", "pubkey"], input=priv, text=True
                     ).strip()
+                    # Сохраняем чтобы больше не вычислять
+                    with open(pub_path, "w") as pf:
+                        pf.write(pub)
+                    return pub
     except:
         pass
     return None
@@ -155,7 +166,6 @@ def remove_client_from_awg(name: str):
     if not os.path.exists(conf_path):
         return
 
-    # Получаем PublicKey из секции [Peer] клиентского конфига
     pub = get_client_pub(name)
     if pub:
         subprocess.run(["awg", "set", AWG_IFACE, "peer", pub, "remove"])
@@ -175,8 +185,8 @@ def remove_client_from_awg(name: str):
     with open(AWG_CONF, "w") as f:
         f.write("\n".join(new_lines))
 
-    # Удаляем все файлы клиента (.conf, .vpn, .vpnlink на случай старых)
-    for ext in [".conf", ".vpn", ".vpnlink"]:
+    # Удаляем все файлы клиента
+    for ext in [".conf", ".pub", ".vpn", ".vpnlink"]:
         p = f"{CLIENTS_DIR}/{name}{ext}"
         if os.path.exists(p):
             os.remove(p)
@@ -247,10 +257,14 @@ async def create_client(name: str, app, notify_chat_id: int = None):
 
     os.makedirs(CLIENTS_DIR, exist_ok=True)
     conf_path = f"{CLIENTS_DIR}/{name}.conf"
+    pub_path  = f"{CLIENTS_DIR}/{name}.pub"
     vpn_file  = f"{CLIENTS_DIR}/{name}.vpn"
 
     with open(conf_path, "w") as f:
         f.write(make_wg_conf(priv, ip, psk, obfs))
+    # Сохраняем pubkey сразу — get_client_pub() больше не будет запускать subprocess
+    with open(pub_path, "w") as f:
+        f.write(pub)
     with open(vpn_file, "w") as f:
         f.write(make_vpn_link(priv, pub, ip, psk, obfs, name))
 
@@ -270,9 +284,9 @@ async def create_client(name: str, app, notify_chat_id: int = None):
                 photo=open(qr_path, "rb"),
                 caption=f"📱 QR для AmneziaWG — {name}"
             )
-            os.remove(qr_path)
-        except:
-            pass
+        finally:
+            if os.path.exists(qr_path):
+                os.remove(qr_path)
 
 # ── Бэкап ──────────────────────────────────────────────────────────────────────
 async def do_backup(query):
@@ -741,9 +755,11 @@ async def send_qr(query, name: str):
             caption=f"📱 QR для AmneziaWG — *{short}*",
             parse_mode="Markdown"
         )
-        os.remove(qr_path)
     except Exception as e:
         await query.message.reply_text(f"❌ Ошибка QR: {e}")
+    finally:
+        if os.path.exists(qr_path):
+            os.remove(qr_path)
 
 async def send_share(query, name: str):
     vpn_path = f"{CLIENTS_DIR}/{name}.vpn"
@@ -751,15 +767,11 @@ async def send_share(query, name: str):
         await query.message.reply_text(f"❌ vpn-файл не найден для {name}")
         return
     short = name.split(".", 1)[1] if "." in name else name
-    code  = open(vpn_path).read().strip()
-    await query.message.reply_text(
-        f"📤 Код для AmneziaVPN — *{short}*\n\nВставьте в приложении: + → Вставить ключ\n\n`{code}`",
-        parse_mode="Markdown"
-    )
     await query.message.reply_document(
         document=open(vpn_path, "rb"),
         filename=f"{name}.vpn",
-        caption=f"📁 Файл .vpn для AmneziaVPN"
+        caption=f"📤 Файл для AmneziaVPN — *{short}*\n\nВставьте в приложении: + → Открыть файл",
+        parse_mode="Markdown"
     )
 
 # ══════════════════════════════════════════════════════════════════════════════
