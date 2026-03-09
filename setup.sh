@@ -34,23 +34,56 @@ if [[ "$UBUNTU_MAJOR" -gt 24 ]]; then
     warn "Ubuntu ${UBUNTU_VERSION} не тестировалась. Продолжаем..."
 fi
 
+# ── Выбор режима установки ────────────────────────────────────────────────────
+echo ""
+echo -e "${BOLD}  Выберите режим установки:${NC}"
+echo ""
+echo -e "  ${CYAN}1)${NC} Тихая     — только ключевые шаги (быстрее читать)"
+echo -e "  ${CYAN}2)${NC} Подробная — показывать все процессы"
+echo ""
+while true; do
+    read -p "  Ваш выбор [1]: " INSTALL_MODE
+    INSTALL_MODE=${INSTALL_MODE:-1}
+    [[ "$INSTALL_MODE" == "1" || "$INSTALL_MODE" == "2" ]] && break
+    warn "Введите 1 или 2."
+done
+
+if [[ "$INSTALL_MODE" == "1" ]]; then
+    APT_FLAGS="-qq"
+    info "Режим: тихая установка"
+else
+    APT_FLAGS=""
+    info "Режим: подробная установка"
+fi
+
+# Хелпер для выполнения команд с учётом режима
+run() {
+    if [[ "$INSTALL_MODE" == "1" ]]; then
+        eval "$@" > /dev/null 2>&1
+    else
+        eval "$@"
+    fi
+}
+
+echo ""
+
 # ── Шаг 1: Зависимости ────────────────────────────────────────────────────────
 log "Установка зависимостей..."
-apt-get update -qq
-apt-get install -y -qq curl wget software-properties-common qrencode python3 python3-pip
+run "apt-get update"
+run "apt-get install -y $APT_FLAGS curl wget software-properties-common qrencode python3 python3-pip"
 
 # resolvconf только для Ubuntu 22, на 24 он заменён systemd-resolved
 if [[ "$UBUNTU_MAJOR" -le 22 ]]; then
-    apt-get install -y -qq resolvconf
+    run "apt-get install -y $APT_FLAGS resolvconf"
 fi
 
 # ── Шаг 2: AmneziaWG ──────────────────────────────────────────────────────────
 log "Добавление PPA Amnezia..."
-add-apt-repository -y ppa:amnezia/ppa > /dev/null 2>&1
-apt-get update -qq
+run "add-apt-repository -y ppa:amnezia/ppa"
+run "apt-get update $APT_FLAGS"
 
 log "Установка AmneziaWG (компиляция ~3-5 мин)..."
-apt-get install -y amneziawg amneziawg-tools
+run "apt-get install -y $APT_FLAGS amneziawg amneziawg-tools"
 
 log "Загрузка модуля ядра..."
 modprobe amneziawg || err "Не удалось загрузить модуль ядра"
@@ -99,7 +132,9 @@ log "Создание конфига интерфейса..."
     printf "PrivateKey = %s\n" "$SERVER_PRIVATE"
     printf "Address = 10.8.0.1/24\n"
     printf "ListenPort = %s\n" "$AWG_PORT"
-    printf "DNS = 1.1.1.1\n"
+    # DNS не указываем в серверном конфиге:
+    # на Ubuntu 24 вызывает ошибку resolvconf (заменён на systemd-resolved)
+    # DNS прописывается только в клиентских конфигах
     printf "Jc = %s\nJmin = %s\nJmax = %s\n" "$JC" "$JMIN" "$JMAX"
     printf "S1 = %s\nS2 = %s\n" "$S1" "$S2"
     printf "H1 = %s\nH2 = %s\nH3 = %s\nH4 = %s\n" "$H1" "$H2" "$H3" "$H4"
@@ -112,7 +147,7 @@ chmod 600 /etc/amnezia/amneziawg/awg0.conf
 # ── Шаг 7: IP форвардинг и запуск ────────────────────────────────────────────
 log "IP форвардинг..."
 grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf || echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
-sysctl -p > /dev/null
+sysctl -p
 
 log "Запуск AWG интерфейса..."
 awg-quick up /etc/amnezia/amneziawg/awg0.conf
@@ -154,7 +189,13 @@ chmod +x /root/vpn.sh
 
 # ── Шаг 10: Python зависимости ───────────────────────────────────────────────
 log "Установка python-telegram-bot..."
-pip3 install python-telegram-bot 2>/dev/null || pip3 install python-telegram-bot --break-system-packages 2>/dev/null
+if [[ "$INSTALL_MODE" == "1" ]]; then
+    pip3 install python-telegram-bot --break-system-packages > /dev/null 2>&1 || \
+    pip3 install python-telegram-bot > /dev/null 2>&1
+else
+    pip3 install python-telegram-bot --break-system-packages || \
+    pip3 install python-telegram-bot
+fi
 
 # ── Шаг 11: Настройка бота ───────────────────────────────────────────────────
 echo ""
