@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Version: 1.1
 import os, subprocess, logging, json, zlib, base64, struct, time, tarfile, tempfile
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -228,7 +229,7 @@ def make_vpn_link(priv, pub, ip, psk, obfs, name) -> str:
     )
     lc = {**obfs, "allowed_ips": ["0.0.0.0/0", "::/0"], "clientId": pub,
           "client_ip": ip, "client_priv_key": priv, "client_pub_key": pub,
-          "config": wg, "hostName": SERVER_IP, "mtu": "1376",
+          "config": wg, "hostName": SERVER_IP, "mtu": "1420",
           "persistent_keep_alive": "25", "port": int(SERVER_PORT),
           "psk_key": psk, "server_pub_key": SERVER_PUBLIC}
     c = {"containers": [{"awg": {**obfs, "last_config": json.dumps(lc, indent=4),

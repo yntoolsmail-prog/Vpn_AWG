@@ -1,4 +1,5 @@
 #!/bin/bash
+# Version: 1.1
 # =============================================================================
 # AmneziaWG — управление клиентами
 # Запускать: bash vpn.sh
@@ -120,7 +121,7 @@ wg = (f"[Interface]\nAddress = {ip}/32\nDNS = {dns1}, {dns2}\n"
       f"AllowedIPs = 0.0.0.0/0, ::/0\nEndpoint = {srv_ip}:{srv_port}\nPersistentKeepalive = 25\n")
 lc = {**obfs,"allowed_ips":["0.0.0.0/0","::/0"],"clientId":pub,"client_ip":ip,
       "client_priv_key":priv,"client_pub_key":pub,"config":wg,"hostName":srv_ip,
-      "mtu":"1376","persistent_keep_alive":"25","port":int(srv_port),"psk_key":psk,"server_pub_key":srv_pub}
+      "mtu":"1420","persistent_keep_alive":"25","port":int(srv_port),"psk_key":psk,"server_pub_key":srv_pub}
 c = {"containers":[{"awg":{**obfs,"last_config":json.dumps(lc,indent=4),
      "port":srv_port,"subnet_address":".".join(ip.split(".")[:3])+".0","transport_proto":"udp"},
      "container":"amnezia-awg"}],"defaultContainer":"amnezia-awg","description":name,
