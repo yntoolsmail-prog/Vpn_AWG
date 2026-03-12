@@ -70,17 +70,12 @@ echo ""
 # ── Шаг 1: Зависимости ────────────────────────────────────────────────────────
 log "Установка зависимостей..."
 run "apt-get update"
-run "apt-get install -y $APT_FLAGS curl wget software-properties-common qrencode python3 python3-pip"
-
-# resolvconf только для Ubuntu 22, на 24 он заменён systemd-resolved
-if [[ "$UBUNTU_MAJOR" -le 22 ]]; then
-    run "apt-get install -y $APT_FLAGS resolvconf"
-fi
+run "apt-get install -y $APT_FLAGS curl software-properties-common qrencode python3 python3-pip"
 
 # ── Шаг 2: AmneziaWG ──────────────────────────────────────────────────────────
 log "Добавление PPA Amnezia..."
 run "add-apt-repository -y ppa:amnezia/ppa"
-run "apt-get update $APT_FLAGS"
+run "apt-get $APT_FLAGS update"
 
 log "Установка AmneziaWG (компиляция ~3-5 мин)..."
 run "apt-get install -y $APT_FLAGS amneziawg amneziawg-tools"
@@ -91,7 +86,8 @@ echo "amneziawg" > /etc/modules-load.d/amneziawg.conf
 
 # ── Шаг 3: Параметры сервера ──────────────────────────────────────────────────
 echo ""
-SERVER_IP=$(curl -s ifconfig.me 2>/dev/null || curl -s api.ipify.org)
+SERVER_IP=$(curl -s ifconfig.me 2>/dev/null || curl -s api.ipify.org 2>/dev/null)
+[[ -z "$SERVER_IP" ]] && err "Не удалось определить внешний IP сервера"
 IFACE=$(ip route | grep default | awk '{print $5}' | head -1)
 info "Внешний IP: $SERVER_IP"
 info "Интерфейс:  $IFACE"
@@ -132,9 +128,7 @@ log "Создание конфига интерфейса..."
     printf "PrivateKey = %s\n" "$SERVER_PRIVATE"
     printf "Address = 10.8.0.1/24\n"
     printf "ListenPort = %s\n" "$AWG_PORT"
-    # DNS не указываем в серверном конфиге:
-    # на Ubuntu 24 вызывает ошибку resolvconf (заменён на systemd-resolved)
-    # DNS прописывается только в клиентских конфигах
+    # DNS прописывается только в клиентских конфигах, не в серверном
     printf "Jc = %s\nJmin = %s\nJmax = %s\n" "$JC" "$JMIN" "$JMAX"
     printf "S1 = %s\nS2 = %s\n" "$S1" "$S2"
     printf "H1 = %s\nH2 = %s\nH3 = %s\nH4 = %s\n" "$H1" "$H2" "$H3" "$H4"
@@ -146,10 +140,6 @@ chmod 600 /etc/amnezia/amneziawg/awg0.conf
 
 # ── Шаг 7: IP форвардинг и запуск ────────────────────────────────────────────
 log "IP форвардинг..."
-# Принудительно включаем сразу в ядро
-sysctl -w net.ipv4.ip_forward=1
-# Сохраняем в оба места для надёжности на Ubuntu 22 и 24
-grep -q "net.ipv4.ip_forward=1" /etc/sysctl.conf || echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
 echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-awg-forward.conf
 sysctl -p /etc/sysctl.d/99-awg-forward.conf
 
@@ -194,11 +184,11 @@ chmod +x /root/vpn.sh
 # ── Шаг 10: Python зависимости ───────────────────────────────────────────────
 log "Установка python-telegram-bot..."
 if [[ "$INSTALL_MODE" == "1" ]]; then
-    pip3 install python-telegram-bot --break-system-packages > /dev/null 2>&1 || \
-    pip3 install python-telegram-bot > /dev/null 2>&1
+    pip3 install "python-telegram-bot>=20.0,<22" --break-system-packages > /dev/null 2>&1 || \
+    pip3 install "python-telegram-bot>=20.0,<22" > /dev/null 2>&1
 else
-    pip3 install python-telegram-bot --break-system-packages || \
-    pip3 install python-telegram-bot
+    pip3 install "python-telegram-bot>=20.0,<22" --break-system-packages || \
+    pip3 install "python-telegram-bot>=20.0,<22"
 fi
 
 # ── Шаг 11: Настройка бота ───────────────────────────────────────────────────
