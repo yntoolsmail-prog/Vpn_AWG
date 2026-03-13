@@ -3,7 +3,7 @@
 # AmneziaWG + Telegram Bot — Установщик
 # Использование: bash <(curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/setup.sh)
 # =============================================================================
-# Version: 1.1
+# Version: 1.2
 
 set -e
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
@@ -91,6 +91,253 @@ else
     info "Ядро актуально (${CURRENT_KERNEL})"
 fi
 
+# ══════════════════════════════════════════════════════════════════════════════
+# ── Автодетект существующего AmneziaWG ───────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+
+EXISTING_IFACES=()       # список найденных awg-интерфейсов
+EXISTING_DOCKER=0        # флаг: обнаружен Docker-контейнер amnezia-awg
+EXISTING_NATIVE=0        # флаг: обнаружен нативный модуль ядра
+EXISTING_PORTS=()        # занятые UDP-порты
+EXISTING_SUBNETS=()      # занятые подсети
+
+# Проверяем работающие awg* интерфейсы
+while IFS= read -r line; do
+    IFACE_NAME=$(echo "$line" | grep -oP 'awg\d+' | head -1)
+    [[ -n "$IFACE_NAME" ]] && EXISTING_IFACES+=("$IFACE_NAME")
+done < <(ip link show 2>/dev/null | grep awg || true)
+
+# Проверяем Docker-контейнер от официального AmneziaVPN
+if command -v docker &>/dev/null; then
+    if docker ps 2>/dev/null | grep -q "amnezia-awg"; then
+        EXISTING_DOCKER=1
+    fi
+fi
+
+# Проверяем нативный модуль ядра
+if lsmod 2>/dev/null | grep -q "amneziawg"; then
+    EXISTING_NATIVE=1
+fi
+
+# Проверяем systemd-сервисы awg-quick@*
+while IFS= read -r line; do
+    SVC_IFACE=$(echo "$line" | grep -oP 'awg-quick@\K[^\s.]+')
+    [[ -n "$SVC_IFACE" ]] && EXISTING_IFACES+=("$SVC_IFACE")
+done < <(systemctl list-units --type=service 2>/dev/null | grep "awg-quick@" || true)
+
+# Дедупликация интерфейсов
+EXISTING_IFACES=($(printf "%s\n" "${EXISTING_IFACES[@]}" | sort -u))
+
+# Собираем занятые порты и подсети из существующих конфигов
+for IFACE_NAME in "${EXISTING_IFACES[@]}"; do
+    CONF_PATH="/etc/amnezia/amneziawg/${IFACE_NAME}.conf"
+    if [[ -f "$CONF_PATH" ]]; then
+        PORT=$(grep "^ListenPort" "$CONF_PATH" 2>/dev/null | awk '{print $3}')
+        [[ -n "$PORT" ]] && EXISTING_PORTS+=("$PORT")
+        SUBNET=$(grep "^Address" "$CONF_PATH" 2>/dev/null | awk '{print $3}' | grep -oP '^\d+\.\d+\.\d+' | head -1)
+        [[ -n "$SUBNET" ]] && EXISTING_SUBNETS+=("$SUBNET")
+    fi
+done
+
+# Если нашли Docker-контейнер — пробуем вытащить порт из него
+if [[ "$EXISTING_DOCKER" -eq 1 ]]; then
+    DOCKER_PORT=$(docker inspect amnezia-awg 2>/dev/null | python3 -c "
+import sys,json
+try:
+    data=json.load(sys.stdin)
+    ports=data[0].get('HostConfig',{}).get('PortBindings',{})
+    for k,v in ports.items():
+        if v: print(v[0].get('HostPort',''))
+except: pass
+" 2>/dev/null | head -1)
+    [[ -n "$DOCKER_PORT" ]] && EXISTING_PORTS+=("$DOCKER_PORT")
+fi
+
+EXISTING_PORTS=($(printf "%s\n" "${EXISTING_PORTS[@]}" | sort -u))
+EXISTING_SUBNETS=($(printf "%s\n" "${EXISTING_SUBNETS[@]}" | sort -u))
+
+# ── Если что-то обнаружено — показываем детальное объяснение ─────────────────
+AWG_ALREADY_EXISTS=0
+if [[ ${#EXISTING_IFACES[@]} -gt 0 || "$EXISTING_DOCKER" -eq 1 || "$EXISTING_NATIVE" -eq 1 ]]; then
+    AWG_ALREADY_EXISTS=1
+fi
+
+if [[ "$AWG_ALREADY_EXISTS" -eq 1 ]]; then
+    echo ""
+    echo -e "${YELLOW}${BOLD}  ╔══════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${YELLOW}${BOLD}  ║          ⚠  AmneziaWG уже установлен на сервере  ⚠       ║${NC}"
+    echo -e "${YELLOW}${BOLD}  ╚══════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "  ${BOLD}Что обнаружено:${NC}"
+    echo ""
+
+    # Выводим найденные интерфейсы
+    if [[ ${#EXISTING_IFACES[@]} -gt 0 ]]; then
+        for IFACE_NAME in "${EXISTING_IFACES[@]}"; do
+            CONF_PATH="/etc/amnezia/amneziawg/${IFACE_NAME}.conf"
+            PORT=$(grep "^ListenPort" "$CONF_PATH" 2>/dev/null | awk '{print $3}' || echo "неизвестен")
+            ADDR=$(grep "^Address"    "$CONF_PATH" 2>/dev/null | awk '{print $3}' || echo "неизвестен")
+            echo -e "    ${GREEN}●${NC} Интерфейс: ${CYAN}${IFACE_NAME}${NC}  |  Порт: ${CYAN}${PORT}/UDP${NC}  |  Адрес: ${CYAN}${ADDR}${NC}"
+        done
+    fi
+
+    if [[ "$EXISTING_DOCKER" -eq 1 ]]; then
+        echo -e "    ${YELLOW}●${NC} Тип: ${YELLOW}Docker-контейнер${NC} (официальное приложение AmneziaVPN)"
+        [[ -n "$DOCKER_PORT" ]] && echo -e "       Порт контейнера: ${CYAN}${DOCKER_PORT}/UDP${NC}"
+    fi
+
+    if [[ "$EXISTING_NATIVE" -eq 1 ]]; then
+        echo -e "    ${GREEN}●${NC} Тип: ${GREEN}нативный модуль ядра${NC} (amneziawg загружен в kernelspace)"
+    fi
+
+    # Показываем занятые порты сводно
+    if [[ ${#EXISTING_PORTS[@]} -gt 0 ]]; then
+        echo ""
+        echo -e "    ${RED}Занятые UDP-порты:${NC} ${EXISTING_PORTS[*]}"
+        echo -e "    ${YELLOW}→ При вводе порта ниже выберите другой номер!${NC}"
+    fi
+
+    echo ""
+    echo -e "  ${BOLD}Что это значит и чем грозит каждый вариант:${NC}"
+    echo ""
+    echo -e "  ┌──────────────────────────────────────────────────────────────────┐"
+    echo -e "  │  ${CYAN}Вариант 1 — Установить параллельно (РЕКОМЕНДУЕТСЯ)${NC}            │"
+    echo -e "  │                                                                  │"
+    echo -e "  │  Существующий VPN продолжает работать в штатном режиме.          │"
+    echo -e "  │  Все текущие клиенты остаются подключёнными — никто не отвалится.│"
+    echo -e "  │                                                                  │"
+    echo -e "  │  Установщик автоматически выберет следующий свободный            │"
+    echo -e "  │  интерфейс (awg1, awg2...) и незанятую подсеть (10.9.0.x...).   │"
+    echo -e "  │  Вы управляете двумя независимыми VPN-серверами.                │"
+    echo -e "  │                                                                  │"
+    echo -e "  │  Единственное требование: выбрать другой порт UDP.               │"
+    echo -e "  └──────────────────────────────────────────────────────────────────┘"
+    echo ""
+    echo -e "  ┌──────────────────────────────────────────────────────────────────┐"
+    echo -e "  │  ${RED}Вариант 2 — Заменить существующий (ОПАСНО)${NC}                    │"
+    echo -e "  │                                                                  │"
+    echo -e "  │  Старый интерфейс будет остановлен и удалён.                     │"
+    echo -e "  │  Все подключённые клиенты потеряют связь немедленно.             │"
+    echo -e "  │  Конфиги старых клиентов удаляются и восстановлению              │"
+    echo -e "  │  не подлежат (если нет бэкапа).                                  │"
+    echo -e "  │                                                                  │"
+    echo -e "  │  Выбирайте только если вы точно хотите начать с нуля и           │"
+    echo -e "  │  понимаете что старый VPN перестанет существовать.               │"
+    echo -e "  └──────────────────────────────────────────────────────────────────┘"
+    echo ""
+    echo -e "  ┌──────────────────────────────────────────────────────────────────┐"
+    echo -e "  │  ${YELLOW}Вариант 0 — Выйти${NC}                                             │"
+    echo -e "  │                                                                  │"
+    echo -e "  │  Ничего не изменится. Установщик завершится без каких-либо       │"
+    echo -e "  │  изменений на сервере.                                           │"
+    echo -e "  └──────────────────────────────────────────────────────────────────┘"
+    echo ""
+
+    while true; do
+        read -p "  Ваш выбор [1]: " AWG_CONFLICT_CHOICE
+        AWG_CONFLICT_CHOICE=${AWG_CONFLICT_CHOICE:-1}
+        [[ "$AWG_CONFLICT_CHOICE" == "0" || "$AWG_CONFLICT_CHOICE" == "1" || "$AWG_CONFLICT_CHOICE" == "2" ]] && break
+        warn "Введите 0, 1 или 2."
+    done
+
+    if [[ "$AWG_CONFLICT_CHOICE" == "0" ]]; then
+        echo ""
+        info "Выход без изменений. Существующий AWG не затронут."
+        exit 0
+
+    elif [[ "$AWG_CONFLICT_CHOICE" == "2" ]]; then
+        echo ""
+        echo -e "${RED}${BOLD}  !! ВНИМАНИЕ — ДЕСТРУКТИВНОЕ ДЕЙСТВИЕ !!${NC}"
+        echo ""
+        echo -e "  Вы выбрали замену существующего AWG."
+        echo -e "  ${RED}Все текущие клиенты будут отключены, их конфиги удалены.${NC}"
+        echo -e "  Это действие необратимо без бэкапа."
+        echo ""
+        read -p "  Для подтверждения введите YES (заглавными): " CONFIRM_REPLACE
+        if [[ "$CONFIRM_REPLACE" != "YES" ]]; then
+            echo ""
+            info "Отменено. Выход без изменений."
+            exit 0
+        fi
+
+        echo ""
+        log "Остановка существующих AWG интерфейсов..."
+        for IFACE_NAME in "${EXISTING_IFACES[@]}"; do
+            systemctl stop "awg-quick@${IFACE_NAME}" 2>/dev/null || true
+            systemctl disable "awg-quick@${IFACE_NAME}" 2>/dev/null || true
+            awg-quick down "/etc/amnezia/amneziawg/${IFACE_NAME}.conf" 2>/dev/null || \
+                ip link delete "$IFACE_NAME" 2>/dev/null || true
+        done
+        if [[ "$EXISTING_DOCKER" -eq 1 ]]; then
+            log "Остановка Docker-контейнера amnezia-awg..."
+            docker stop amnezia-awg 2>/dev/null || true
+            docker rm   amnezia-awg 2>/dev/null || true
+        fi
+
+        # Используем дефолтный интерфейс awg0 и подсеть 10.8.0
+        VPN_IFACE="awg0"
+        VPN_SUBNET="10.8.0"
+        log "Замена: будет использован интерфейс ${VPN_IFACE}, подсеть ${VPN_SUBNET}.x"
+
+    else
+        # ── Параллельная установка ────────────────────────────────────────────
+        echo ""
+        echo -e "${GREEN}${BOLD}  Параллельная установка — ищем свободный интерфейс...${NC}"
+        echo ""
+
+        # Находим следующий свободный интерфейс
+        IDX=1
+        while ip link show "awg${IDX}" &>/dev/null || systemctl is-active "awg-quick@awg${IDX}" &>/dev/null; do
+            ((IDX++))
+        done
+        SUGGESTED_IFACE="awg${IDX}"
+
+        # Находим следующую свободную подсеть из списка кандидатов
+        SUBNET_CANDIDATES=("10.8.0" "10.9.0" "10.10.0" "10.11.0" "10.12.0" "10.13.0" "10.14.0" "10.15.0")
+        SUGGESTED_SUBNET=""
+        for CANDIDATE in "${SUBNET_CANDIDATES[@]}"; do
+            OCCUPIED=0
+            for USED in "${EXISTING_SUBNETS[@]}"; do
+                [[ "$USED" == "$CANDIDATE" ]] && OCCUPIED=1 && break
+            done
+            # Дополнительно проверяем через ip route
+            if ip route 2>/dev/null | grep -q "${CANDIDATE}.0/24"; then
+                OCCUPIED=1
+            fi
+            if [[ "$OCCUPIED" -eq 0 ]]; then
+                SUGGESTED_SUBNET="$CANDIDATE"
+                break
+            fi
+        done
+        [[ -z "$SUGGESTED_SUBNET" ]] && SUGGESTED_SUBNET="10.20.0"
+
+        echo -e "  Предлагаемый интерфейс: ${CYAN}${SUGGESTED_IFACE}${NC}"
+        echo -e "  Предлагаемая подсеть:   ${CYAN}${SUGGESTED_SUBNET}.x/24${NC}"
+        echo ""
+
+        if [[ ${#EXISTING_PORTS[@]} -gt 0 ]]; then
+            echo -e "  ${RED}Уже занятые порты: ${EXISTING_PORTS[*]}${NC}"
+            echo -e "  ${YELLOW}Выберите другой порт для нового VPN!${NC}"
+            echo ""
+        fi
+
+        # Даём пользователю возможность поменять предложенные значения
+        read -p "  Имя интерфейса [${SUGGESTED_IFACE}]: " USER_IFACE
+        VPN_IFACE="${USER_IFACE:-$SUGGESTED_IFACE}"
+
+        read -p "  Подсеть (первые три октета) [${SUGGESTED_SUBNET}]: " USER_SUBNET
+        VPN_SUBNET="${USER_SUBNET:-$SUGGESTED_SUBNET}"
+
+        echo ""
+        log "Будет установлен новый AWG: интерфейс ${VPN_IFACE}, подсеть ${VPN_SUBNET}.x"
+    fi
+
+else
+    # ── Чистая установка — дефолтные значения ────────────────────────────────
+    VPN_IFACE="awg0"
+    VPN_SUBNET="10.8.0"
+fi
+
 # ── Выбор режима установки ────────────────────────────────────────────────────
 echo ""
 echo -e "${BOLD}  Выберите режим установки:${NC}"
@@ -147,9 +394,26 @@ SERVER_IP=$(curl -s ifconfig.me 2>/dev/null || curl -s api.ipify.org 2>/dev/null
 IFACE=$(ip route | grep default | awk '{print $5}' | head -1)
 info "Внешний IP: $SERVER_IP"
 info "Интерфейс:  $IFACE"
+info "AWG интерфейс: ${VPN_IFACE}  |  Подсеть: ${VPN_SUBNET}.x"
 echo ""
+
+# Показываем занятые порты при вводе, если есть
+if [[ ${#EXISTING_PORTS[@]} -gt 0 ]]; then
+    warn "Уже занятые порты: ${EXISTING_PORTS[*]} — выберите другой!"
+fi
+
 read -p "  Порт AWG [51820]: " AWG_PORT
 AWG_PORT=${AWG_PORT:-51820}
+
+# Проверяем что введённый порт не занят
+for BUSY_PORT in "${EXISTING_PORTS[@]}"; do
+    if [[ "$AWG_PORT" == "$BUSY_PORT" ]]; then
+        echo ""
+        warn "Порт ${AWG_PORT} уже используется другим AWG-интерфейсом."
+        warn "Это вызовет конфликт. Поменяйте порт и запустите установщик снова."
+        err "Конфликт порта ${AWG_PORT}"
+    fi
+done
 
 # ── Шаг 4: Ключи сервера ──────────────────────────────────────────────────────
 log "Генерация ключей сервера..."
@@ -178,29 +442,30 @@ print(
 info "Jc=$JC Jmin=$JMIN Jmax=$JMAX S1=$S1 S2=$S2"
 
 # ── Шаг 6: Конфиг AWG ────────────────────────────────────────────────────────
-log "Создание конфига интерфейса..."
+log "Создание конфига интерфейса ${VPN_IFACE}..."
 {
     printf "[Interface]\n"
     printf "PrivateKey = %s\n" "$SERVER_PRIVATE"
-    printf "Address = 10.8.0.1/24\n"
+    printf "Address = %s.1/24\n" "$VPN_SUBNET"
     printf "ListenPort = %s\n" "$AWG_PORT"
-    # DNS прописывается только в клиентских конфигах, не в серверном
     printf "Jc = %s\nJmin = %s\nJmax = %s\n" "$JC" "$JMIN" "$JMAX"
     printf "S1 = %s\nS2 = %s\n" "$S1" "$S2"
     printf "H1 = %s\nH2 = %s\nH3 = %s\nH4 = %s\n" "$H1" "$H2" "$H3" "$H4"
     printf "\n"
-    printf "PostUp = iptables -A FORWARD -i awg0 -j ACCEPT; iptables -A FORWARD -o awg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o %s -j MASQUERADE\n" "$IFACE"
-    printf "PostDown = iptables -D FORWARD -i awg0 -j ACCEPT; iptables -D FORWARD -o awg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o %s -j MASQUERADE\n" "$IFACE"
-} > /etc/amnezia/amneziawg/awg0.conf
-chmod 600 /etc/amnezia/amneziawg/awg0.conf
+    printf "PostUp = iptables -A FORWARD -i %s -j ACCEPT; iptables -A FORWARD -o %s -j ACCEPT; iptables -t nat -A POSTROUTING -o %s -j MASQUERADE\n" \
+        "$VPN_IFACE" "$VPN_IFACE" "$IFACE"
+    printf "PostDown = iptables -D FORWARD -i %s -j ACCEPT; iptables -D FORWARD -o %s -j ACCEPT; iptables -t nat -D POSTROUTING -o %s -j MASQUERADE\n" \
+        "$VPN_IFACE" "$VPN_IFACE" "$IFACE"
+} > "/etc/amnezia/amneziawg/${VPN_IFACE}.conf"
+chmod 600 "/etc/amnezia/amneziawg/${VPN_IFACE}.conf"
 
 # ── Шаг 7: IP форвардинг и запуск ────────────────────────────────────────────
 log "IP форвардинг..."
 echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-awg-forward.conf
 sysctl -p /etc/sysctl.d/99-awg-forward.conf
 
-log "Запуск AWG интерфейса..."
-awg-quick up /etc/amnezia/amneziawg/awg0.conf
+log "Запуск AWG интерфейса ${VPN_IFACE}..."
+awg-quick up "/etc/amnezia/amneziawg/${VPN_IFACE}.conf"
 
 log "Автозапуск AWG..."
 cat > /etc/systemd/system/awg-quick@.service << 'EOF'
@@ -219,11 +484,11 @@ ExecStop=/usr/bin/awg-quick down /etc/amnezia/amneziawg/%i.conf
 WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
-systemctl enable awg-quick@awg0
+systemctl enable "awg-quick@${VPN_IFACE}"
 
 # ── Шаг 8: Сохраняем server.env ──────────────────────────────────────────────
-printf "SERVER_IP=%s\nSERVER_PORT=%s\nSERVER_PUBLIC=%s\nVPN_IFACE=awg0\nVPN_SUBNET=10.8.0\n" \
-    "$SERVER_IP" "$AWG_PORT" "$SERVER_PUBLIC" \
+printf "SERVER_IP=%s\nSERVER_PORT=%s\nSERVER_PUBLIC=%s\nVPN_IFACE=%s\nVPN_SUBNET=%s\n" \
+    "$SERVER_IP" "$AWG_PORT" "$SERVER_PUBLIC" "$VPN_IFACE" "$VPN_SUBNET" \
     > /etc/amnezia/amneziawg/server.env
 printf "JC=%s\nJMIN=%s\nJMAX=%s\nS1=%s\nS2=%s\nH1=%s\nH2=%s\nH3=%s\nH4=%s\n" \
     "$JC" "$JMIN" "$JMAX" "$S1" "$S2" "$H1" "$H2" "$H3" "$H4" \
@@ -321,6 +586,7 @@ echo -e "${GREEN}${BOLD}══════════════════�
 echo -e "${GREEN}${BOLD}   Установка завершена!${NC}"
 echo -e "${GREEN}${BOLD}══════════════════════════════════════════${NC}"
 echo ""
+info "AWG интерфейс: ${VPN_IFACE}  |  Подсеть: ${VPN_SUBNET}.x  |  Порт: ${AWG_PORT}/UDP"
 info "AWG запущен с параметрами: Jc=$JC Jmin=$JMIN Jmax=$JMAX"
 info "DNS: 1.1.1.1, 1.0.0.1 (можно изменить, см. README)"
 info "Бот: systemctl status awg-bot"
