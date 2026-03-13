@@ -11,8 +11,8 @@ CONFIG_FILE = "/etc/amnezia/amneziawg/bot.env"
 ENV_FILE    = "/etc/amnezia/amneziawg/server.env"
 USERS_FILE  = "/etc/amnezia/amneziawg/users.json"
 CLIENTS_DIR = "/etc/amnezia/amneziawg/clients"
-AWG_CONF    = "/etc/amnezia/amneziawg/awg0.conf"
 BACKUP_DIR  = "/etc/amnezia/amneziawg/backups"
+# AWG_CONF строится динамически после загрузки server.env — см. ниже
 
 # ── Конфиг ─────────────────────────────────────────────────────────────────────
 def load_env(path):
@@ -56,6 +56,7 @@ SERVER_PORT   = srv["SERVER_PORT"]
 SERVER_PUBLIC = srv["SERVER_PUBLIC"]
 VPN_SUBNET    = srv["VPN_SUBNET"]
 AWG_IFACE     = srv["VPN_IFACE"]
+AWG_CONF      = f"/etc/amnezia/amneziawg/{AWG_IFACE}.conf"
 PRIMARY_DNS   = srv.get("PRIMARY_DNS", "1.1.1.1")
 SECONDARY_DNS = srv.get("SECONDARY_DNS", "1.0.0.1")
 
@@ -171,7 +172,7 @@ def remove_client_from_awg(name: str):
     if pub:
         subprocess.run(["awg", "set", AWG_IFACE, "peer", pub, "remove"])
 
-    # Удаляем блок из awg0.conf
+    # Удаляем блок из конфига интерфейса
     with open(AWG_CONF, encoding="utf-8", errors="replace") as f:
         lines = f.read().split("\n")
     new_lines, skip = [], False
@@ -297,7 +298,7 @@ async def do_backup(query):
 
     try:
         with tarfile.open(backup_path, "w:gz") as tar:
-            tar.add(AWG_CONF,    arcname="awg0.conf")
+            tar.add(AWG_CONF,    arcname=f"{AWG_IFACE}.conf")
             tar.add(ENV_FILE,    arcname="server.env")
             tar.add(CLIENTS_DIR, arcname="clients")
             if os.path.exists(USERS_FILE):
