@@ -34,6 +34,62 @@ if [[ "$UBUNTU_MAJOR" -gt 24 ]]; then
     warn "Ubuntu ${UBUNTU_VERSION} не тестировалась. Продолжаем..."
 fi
 
+# ── Проверка ядра ─────────────────────────────────────────────────────────────
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
+
+CURRENT_KERNEL=$(uname -r)
+apt-get update -qq
+
+NEW_KERNEL=$(apt list --upgradable 2>/dev/null | grep "^linux-image-generic/" | awk -F'[ /]' '{print $2}' | head -1)
+
+if [[ -n "$NEW_KERNEL" ]]; then
+    echo ""
+    echo -e "${YELLOW}${BOLD}  ┌─────────────────────────────────────────────────┐${NC}"
+    echo -e "${YELLOW}${BOLD}  │              Требуется обновление ядра          │${NC}"
+    echo -e "${YELLOW}${BOLD}  └─────────────────────────────────────────────────┘${NC}"
+    echo ""
+    echo -e "  Текущее ядро:  ${RED}${CURRENT_KERNEL}${NC}"
+    echo -e "  Доступно:      ${GREEN}${NEW_KERNEL}${NC}"
+    echo ""
+    echo -e "  AmneziaWG компилируется как модуль ядра и должен"
+    echo -e "  совпадать с загруженным ядром. Без обновления"
+    echo -e "  установка завершится ошибкой."
+    echo ""
+    echo -e "  ${CYAN}1)${NC} Обновить ядро и перезагрузиться ${GREEN}(рекомендуется)${NC}"
+    echo -e "  ${CYAN}2)${NC} Продолжить без обновления ${RED}(может не заработать)${NC}"
+    echo -e "  ${CYAN}0)${NC} Выйти"
+    echo ""
+    while true; do
+        read -p "  Ваш выбор [1]: " KERNEL_CHOICE
+        KERNEL_CHOICE=${KERNEL_CHOICE:-1}
+        [[ "$KERNEL_CHOICE" == "0" || "$KERNEL_CHOICE" == "1" || "$KERNEL_CHOICE" == "2" ]] && break
+        warn "Введите 0, 1 или 2."
+    done
+
+    if [[ "$KERNEL_CHOICE" == "0" ]]; then
+        echo ""
+        info "Выход. Запустите установщик снова когда будете готовы."
+        exit 0
+    elif [[ "$KERNEL_CHOICE" == "1" ]]; then
+        echo ""
+        log "Обновление ядра..."
+        apt-get install -y -qq linux-image-generic linux-headers-generic
+        echo ""
+        echo -e "${GREEN}${BOLD}  Ядро обновлено. Сервер перезагрузится через 5 секунд.${NC}"
+        echo -e "${GREEN}  После перезагрузки запустите установщик снова.${NC}"
+        echo ""
+        sleep 5
+        reboot
+        exit 0
+    else
+        warn "Продолжаем без обновления ядра. Если установка упадёт — вернитесь и выберите вариант 1."
+        echo ""
+    fi
+else
+    info "Ядро актуально (${CURRENT_KERNEL})"
+fi
+
 # ── Выбор режима установки ────────────────────────────────────────────────────
 echo ""
 echo -e "${BOLD}  Выберите режим установки:${NC}"
@@ -69,7 +125,6 @@ echo ""
 
 # ── Шаг 1: Зависимости ────────────────────────────────────────────────────────
 log "Установка зависимостей..."
-run "apt-get update"
 run "apt-get install -y $APT_FLAGS curl software-properties-common qrencode python3 python3-pip"
 
 # ── Шаг 2: AmneziaWG ──────────────────────────────────────────────────────────
