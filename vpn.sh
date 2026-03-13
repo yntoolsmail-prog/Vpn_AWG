@@ -1,5 +1,5 @@
 #!/bin/bash
-# Version: 1.1
+# Version: 1.2
 # =============================================================================
 # AmneziaWG — управление клиентами
 # Запускать: bash vpn.sh
@@ -7,7 +7,6 @@
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
-AWG_CONF="/etc/amnezia/amneziawg/awg0.conf"
 CLIENTS_DIR="/etc/amnezia/amneziawg/clients"
 ENV_FILE="/etc/amnezia/amneziawg/server.env"
 
@@ -15,6 +14,9 @@ ENV_FILE="/etc/amnezia/amneziawg/server.env"
 [[ ! -f "$ENV_FILE" ]] && echo -e "${RED}Сначала запустите setup.sh${NC}" && exit 1
 
 source "$ENV_FILE"
+# Фолбэк на awg0 если VPN_IFACE отсутствует в server.env (старые установки)
+VPN_IFACE="${VPN_IFACE:-awg0}"
+AWG_CONF="/etc/amnezia/amneziawg/${VPN_IFACE}.conf"
 mkdir -p "$CLIENTS_DIR"
 
 # DNS из server.env с дефолтами
@@ -278,7 +280,7 @@ delete_client() {
     # Удаляем пир из живого интерфейса
     [[ -n "$CLIENT_PUBLIC" ]] && awg set "$VPN_IFACE" peer "$CLIENT_PUBLIC" remove
 
-    # Удаляем блок из awg0.conf
+    # Удаляем блок из конфига интерфейса
     python3 - "$AWG_CONF" "$NAME" << 'PYEOF'
 import sys
 conf_path, name = sys.argv[1], sys.argv[2]
