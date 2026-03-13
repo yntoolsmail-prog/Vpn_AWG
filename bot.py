@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Version: 1.1
+# Version: 1.2
 import os, subprocess, logging, json, zlib, base64, struct, time, tarfile, tempfile
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -55,7 +55,7 @@ SERVER_IP     = srv["SERVER_IP"]
 SERVER_PORT   = srv["SERVER_PORT"]
 SERVER_PUBLIC = srv["SERVER_PUBLIC"]
 VPN_SUBNET    = srv["VPN_SUBNET"]
-AWG_IFACE     = srv["VPN_IFACE"]
+AWG_IFACE     = srv.get("VPN_IFACE", "awg0")   # фолбэк на awg0 для старых установок
 AWG_CONF      = f"/etc/amnezia/amneziawg/{AWG_IFACE}.conf"
 PRIMARY_DNS   = srv.get("PRIMARY_DNS", "1.1.1.1")
 SECONDARY_DNS = srv.get("SECONDARY_DNS", "1.0.0.1")
