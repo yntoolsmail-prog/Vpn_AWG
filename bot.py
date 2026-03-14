@@ -979,12 +979,12 @@ async def do_maint_ptb(query):
         f"Если мажорная версия не изменилась (например всё ещё 20.x) — "
         f"достаточно нажать «Бэкап + apt upgrade».\n\n"
         f"Если мажорная версия выросла (20.x → 21.x) — загляните в Breaking Changes. "
-        f"Скорее всего потребуется небольшая правка bot\\.py\\."
+        f"Скорее всего потребуется небольшая правка bot.py."
     )
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("◀️ Назад", callback_data="maintenance")],
     ])
-    await query.edit_message_text(text, reply_markup=kb, parse_mode="MarkdownV2")
+    await query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
 
 async def do_maint_done(query):
     now = time.strftime("%d.%m.%Y")
@@ -1117,6 +1117,7 @@ def main():
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         per_chat=True,
+        per_message=False,
         allow_reentry=True,
     )
 
