@@ -127,14 +127,10 @@ crontab -l | grep -v update.sh | crontab -
 <details>
 <summary>Как обновить ключ</summary>
 
-```bash
-apt-get install -y git
-git clone https://github.com/yntoolsmail-prog/Vpn_AWG.git
-cd Vpn_AWG
-curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x57290828" > amnezia.gpg.asc
-git add amnezia.gpg.asc
-git commit -m "update amnezia gpg key"
-git push
-```
+1. Скачать файл с ключом: [keyserver.ubuntu.com](https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x57290828) → сохранить как `amnezia.gpg.asc`
+2. Открыть репозиторий на GitHub
+3. Нажать **Add file → Upload files**
+4. Перетащить скачанный файл
+5. Нажать **Commit changes**
 
 </details>
