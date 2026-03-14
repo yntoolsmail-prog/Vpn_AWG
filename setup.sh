@@ -379,7 +379,7 @@ run "apt-get install -y $APT_FLAGS curl software-properties-common qrencode pyth
 
 # ── Шаг 2: AmneziaWG ──────────────────────────────────────────────────────────
 log "Добавление PPA Amnezia..."
-run "add-apt-repository -y ppa:amnezia/ppa" \
+run "add-apt-repository -y --no-update ppa:amnezia/ppa" \
     || err "Не удалось добавить PPA Amnezia. Проверьте подключение к интернету."
 run "apt-get $APT_FLAGS update" \
     || err "Не удалось обновить списки пакетов."
