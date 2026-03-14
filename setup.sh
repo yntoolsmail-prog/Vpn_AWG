@@ -387,23 +387,33 @@ AMNEZIA_KEY_ID="57290828"
 PPA_ADDED=0
 
 # ── Способ 1: напрямую, без api.launchpad.net ─────────────────────────────────
-# Пробуем получить GPG-ключ через curl с нескольких keyserver-ов
+# Пробуем получить GPG-ключ из нескольких источников по приоритету:
+#   1. raw.githubusercontent.com — тот же хост что и установщик, почти всегда доступен
+#   2. keyserver.ubuntu.com — стандартный путь
+#   3. keys.openpgp.org — резервный keyserver
 KEY_ADDED=0
 for KEYSERVER_URL in \
+    "https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/amnezia.gpg.asc" \
     "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x${AMNEZIA_KEY_ID}" \
-    "https://keyserver.ubuntu.com/pks/lookup?op=get&search=${AMNEZIA_KEY_ID}"
+    "https://keys.openpgp.org/vks/v1/by-keyid/${AMNEZIA_KEY_ID}"
 do
     KEY_TMP=$(mktemp)
-    if curl -fsSL --max-time 15 "$KEYSERVER_URL" -o "$KEY_TMP" 2>/dev/null \
-        && [[ -s "$KEY_TMP" ]] \
-        && gpg --dearmor < "$KEY_TMP" > "$AMNEZIA_GPG" 2>/dev/null \
-        && [[ -s "$AMNEZIA_GPG" ]]; then
-        chmod 644 "$AMNEZIA_GPG"
-        KEY_ADDED=1
-        rm -f "$KEY_TMP"
-        break
+    if curl -fsSL --max-time 15 "$KEYSERVER_URL" -o "$KEY_TMP" 2>/dev/null && [[ -s "$KEY_TMP" ]]; then
+        # Файл может быть ASCII-armored или уже бинарным — пробуем оба варианта
+        if gpg --dearmor < "$KEY_TMP" > "$AMNEZIA_GPG" 2>/dev/null && [[ -s "$AMNEZIA_GPG" ]]; then
+            chmod 644 "$AMNEZIA_GPG"
+            KEY_ADDED=1
+            rm -f "$KEY_TMP"
+            break
+        elif cp "$KEY_TMP" "$AMNEZIA_GPG" 2>/dev/null && [[ -s "$AMNEZIA_GPG" ]]; then
+            chmod 644 "$AMNEZIA_GPG"
+            KEY_ADDED=1
+            rm -f "$KEY_TMP"
+            break
+        fi
     fi
     rm -f "$KEY_TMP" "$AMNEZIA_GPG"
+    warn "  → ${KEYSERVER_URL} недоступен, пробуем следующий..."
 done
 
 # Если ключ получен — пишем sources.list напрямую (ppa.launchpadcontent.net — CDN, не API)
