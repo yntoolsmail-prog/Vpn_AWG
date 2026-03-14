@@ -3,7 +3,7 @@
 # AmneziaWG + Telegram Bot — Установщик
 # Использование: bash <(curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/setup.sh)
 # =============================================================================
-# Version: 1.5
+# Version: 1.6
 
 set -e
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
@@ -384,7 +384,27 @@ log "Установка AmneziaWG (компиляция ~3-5 мин)..."
 run "apt-get install -y $APT_FLAGS amneziawg amneziawg-tools"
 
 log "Загрузка модуля ядра..."
-modprobe amneziawg || err "Не удалось загрузить модуль ядра"
+if ! modprobe amneziawg 2>/dev/null; then
+    RUNNING_KERNEL=$(uname -r)
+    INSTALLED_KERNEL=$(ls /lib/modules/ | grep -v "$RUNNING_KERNEL" | tail -1)
+    echo ""
+    echo -e "${YELLOW}${BOLD}  ┌─────────────────────────────────────────────────────┐${NC}"
+    echo -e "${YELLOW}${BOLD}  │         Требуется перезагрузка сервера              │${NC}"
+    echo -e "${YELLOW}${BOLD}  └─────────────────────────────────────────────────────┘${NC}"
+    echo ""
+    echo -e "  Модуль AWG скомпилирован под ядро: ${GREEN}${INSTALLED_KERNEL}${NC}"
+    echo -e "  Сейчас загружено старое ядро:      ${RED}${RUNNING_KERNEL}${NC}"
+    echo ""
+    echo -e "  В процессе установки AWG автоматически обновил ядро."
+    echo -e "  После перезагрузки запустите установщик повторно —"
+    echo -e "  AWG уже скомпилирован и установится мгновенно."
+    echo ""
+    echo -e "${GREEN}${BOLD}  Перезагружаюсь через 5 секунд...${NC}"
+    echo "amneziawg" > /etc/modules-load.d/amneziawg.conf
+    sleep 5
+    reboot
+    exit 0
+fi
 echo "amneziawg" > /etc/modules-load.d/amneziawg.conf
 
 # ── Шаг 3: Параметры сервера ──────────────────────────────────────────────────
