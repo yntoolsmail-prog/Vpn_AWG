@@ -127,44 +127,14 @@ crontab -l | grep -v update.sh | crontab -
 <details>
 <summary>Как обновить ключ</summary>
 
-**Linux / macOS:**
 ```bash
+apt-get install -y git
+git clone https://github.com/yntoolsmail-prog/Vpn_AWG.git
+cd Vpn_AWG
 curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x57290828" > amnezia.gpg.asc
-git clone https://github.com/yntoolsmail-prog/Vpn_AWG.git
-cd Vpn_AWG
-cp ../amnezia.gpg.asc .
-git add amnezia.gpg.asc
-git commit -m "update amnezia gpg key"
-git push
-```
-
-**Windows (PowerShell):**
-
-Если git не установлен — сначала установить:
-```powershell
-winget install --id Git.Git -e --source winget
-```
-> После установки закрыть и открыть PowerShell заново.
-
-```powershell
-git clone https://github.com/yntoolsmail-prog/Vpn_AWG.git
-cd Vpn_AWG
-Invoke-WebRequest "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x57290828" -OutFile amnezia.gpg.asc
 git add amnezia.gpg.asc
 git commit -m "update amnezia gpg key"
 git push
 ```
 
 </details>
-
----
-
-## История версий
-
-| Версия | Что изменилось |
-|---|---|
-| 1.6 | Добавление PPA без зависимости от api.launchpad.net (каскад: GitHub → keyserver → add-apt-repository) |
-| 1.5 | Переход на python-telegram-bot 22.x |
-| 1.4 | Техобслуживание, напоминания, кнопки перезапуска |
-| 1.3 | allow_reentry для диалога добавления устройства, исправлены файловые дескрипторы |
-| 1.2 | Начальная версия |
