@@ -139,11 +139,17 @@ git push
 ```
 
 **Windows (PowerShell):**
+
+Если git не установлен — сначала установить:
 ```powershell
-Invoke-WebRequest "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x57290828" -OutFile amnezia.gpg.asc
+winget install --id Git.Git -e --source winget
+```
+> После установки закрыть и открыть PowerShell заново.
+
+```powershell
 git clone https://github.com/yntoolsmail-prog/Vpn_AWG.git
 cd Vpn_AWG
-Copy-Item ..\amnezia.gpg.asc .
+Invoke-WebRequest "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x57290828" -OutFile amnezia.gpg.asc
 git add amnezia.gpg.asc
 git commit -m "update amnezia gpg key"
 git push
