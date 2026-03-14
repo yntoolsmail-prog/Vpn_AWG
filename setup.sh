@@ -3,7 +3,7 @@
 # AmneziaWG + Telegram Bot — Установщик
 # Использование: bash <(curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/setup.sh)
 # =============================================================================
-# Version: 1.5
+# Version: 1.6
 
 set -e
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
@@ -378,11 +378,61 @@ run "apt-get install -y $APT_FLAGS curl software-properties-common qrencode pyth
     || err "Не удалось установить зависимости. Проверьте подключение к интернету и повторите."
 
 # ── Шаг 2: AmneziaWG ──────────────────────────────────────────────────────────
-log "Добавление PPA Amnezia..."
-run "add-apt-repository -y --no-update ppa:amnezia/ppa" \
-    || err "Не удалось добавить PPA Amnezia. Проверьте подключение к интернету."
-run "apt-get $APT_FLAGS update" \
-    || err "Не удалось обновить списки пакетов."
+log "Добавление репозитория Amnezia..."
+
+UBUNTU_CODENAME=$(lsb_release -cs 2>/dev/null || echo "noble")
+AMNEZIA_GPG="/etc/apt/trusted.gpg.d/amnezia.gpg"
+AMNEZIA_LIST="/etc/apt/sources.list.d/amnezia-ppa.list"
+AMNEZIA_KEY_ID="57290828"
+PPA_ADDED=0
+
+# ── Способ 1: напрямую, без api.launchpad.net ─────────────────────────────────
+# Пробуем получить GPG-ключ через curl с нескольких keyserver-ов
+KEY_ADDED=0
+for KEYSERVER_URL in \
+    "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x${AMNEZIA_KEY_ID}" \
+    "https://keyserver.ubuntu.com/pks/lookup?op=get&search=${AMNEZIA_KEY_ID}"
+do
+    KEY_TMP=$(mktemp)
+    if curl -fsSL --max-time 15 "$KEYSERVER_URL" -o "$KEY_TMP" 2>/dev/null \
+        && [[ -s "$KEY_TMP" ]] \
+        && gpg --dearmor < "$KEY_TMP" > "$AMNEZIA_GPG" 2>/dev/null \
+        && [[ -s "$AMNEZIA_GPG" ]]; then
+        chmod 644 "$AMNEZIA_GPG"
+        KEY_ADDED=1
+        rm -f "$KEY_TMP"
+        break
+    fi
+    rm -f "$KEY_TMP" "$AMNEZIA_GPG"
+done
+
+# Если ключ получен — пишем sources.list напрямую (ppa.launchpadcontent.net — CDN, не API)
+if [[ "$KEY_ADDED" -eq 1 ]]; then
+    echo "deb https://ppa.launchpadcontent.net/amnezia/ppa/ubuntu ${UBUNTU_CODENAME} main" \
+        > "$AMNEZIA_LIST"
+    # Проверяем что apt видит репозиторий
+    if apt-get -qq update 2>/dev/null; then
+        PPA_ADDED=1
+        info "Репозиторий добавлен напрямую (без api.launchpad.net)"
+    else
+        warn "Репозиторий добавлен, но apt update вернул ошибку — пробуем через add-apt-repository"
+        rm -f "$AMNEZIA_GPG" "$AMNEZIA_LIST"
+    fi
+else
+    warn "Не удалось получить GPG-ключ напрямую — пробуем через add-apt-repository"
+fi
+
+# ── Способ 2: классический add-apt-repository (требует api.launchpad.net) ─────
+if [[ "$PPA_ADDED" -eq 0 ]]; then
+    if add-apt-repository -y --no-update ppa:amnezia/ppa 2>/dev/null; then
+        run "apt-get $APT_FLAGS update" \
+            || err "Не удалось обновить списки пакетов."
+        PPA_ADDED=1
+        info "Репозиторий добавлен через add-apt-repository"
+    fi
+fi
+
+[[ "$PPA_ADDED" -eq 0 ]] && err "Не удалось добавить репозиторий Amnezia. Проверьте подключение к интернету."
 
 log "Установка AmneziaWG (компиляция ~3-5 мин)..."
 run "apt-get install -y $APT_FLAGS amneziawg amneziawg-tools" \
