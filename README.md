@@ -6,7 +6,7 @@ AmneziaWG нативно в kernelspace (300+ мбит) с управление�
 
 - **AWG нативно** — модуль ядра, не userspace/Go, полная скорость
 - **Обфускация** — не детектируется РКН/DPI
-- **Telegram бот** — добавление клиентов, список, удаление, статус, бэкап, техобслуживание
+- **Telegram бот** — добавление клиентов, список, удаление, статус, бэкап
 - **Терминальное меню** — управление через vpn.sh
 - **Автозапуск** — AWG и бот стартуют при перезагрузке сервера
 
@@ -40,7 +40,6 @@ bash <(curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/s
 - Удалить устройство (с подтверждением)
 - Статус сервера + кнопки перезапуска бота и AWG
 - Бэкап конфигурации (только для администратора)
-- Техобслуживание (только для администратора)
 
 **Через терминал:**
 ```bash
@@ -81,29 +80,56 @@ systemctl restart awg-bot
 
 ---
 
-## Техобслуживание
+## Автообновление
 
-Бот напоминает о техобслуживании раз в 6 месяцев. В меню администратора кнопка **🔧 Техобслуживание** позволяет:
+Установщик настраивает автообновление `bot.py` и `vpn.sh` из этого репозитория. Скрипт `/root/update.sh` запускается каждые 5 минут через cron, проверяет последний коммит в `main` и при изменении скачивает новые версии файлов и перезапускает бота.
 
-- Сделать бэкап и запустить `apt upgrade` одной кнопкой
-- Проверить версию `python-telegram-bot` и сравнить с актуальной
+### Управление автообновлением
 
-### Зависимости
-
-| Компонент | Версия | Где смотреть обновления |
-|---|---|---|
-| python-telegram-bot | 22.x | [Releases](https://github.com/python-telegram-bot/python-telegram-bot/releases) |
-| Ubuntu | 22.04 / 24.04 | `apt upgrade` |
-
-### Обновление python-telegram-bot вручную
-
+**Проверить статус:**
 ```bash
-pip3 install "python-telegram-bot[job-queue]>=22.0,<23" && systemctl restart awg-bot
+crontab -l | grep update.sh          # есть ли задача в cron
+cat /root/.bot_version               # текущая версия
+cat /var/log/awg-update.log          # лог обновлений
 ```
 
-### Что смотреть при выходе новой мажорной версии (23.x и выше)
+**Отключить автообновление:**
+```bash
+crontab -l | grep -v update.sh | crontab -
+```
 
-Открыть [релизы на GitHub](https://github.com/python-telegram-bot/python-telegram-bot/releases) и найти раздел **Breaking Changes**. Если он пустой или не касается базовых хендлеров и ConversationHandler — обновляйте спокойно. Если есть изменения — потребуется небольшая правка `bot.py`.
+**Включить обратно:**
+```bash
+(crontab -l 2>/dev/null; echo "*/5 * * * * /root/update.sh") | crontab -
+```
+
+**Обновить вручную прямо сейчас:**
+```bash
+bash /root/update.sh
+```
+
+**Изменить частоту** (например раз в час вместо каждые 5 минут):
+```bash
+crontab -l | grep -v update.sh | crontab -
+(crontab -l 2>/dev/null; echo "0 * * * * /root/update.sh") | crontab -
+```
+
+> Автообновление тянет только `bot.py` и `vpn.sh`. Конфиги, ключи и данные клиентов не затрагиваются.
+
+---
+
+## Файл amnezia.gpg.asc
+
+В репозитории хранится GPG-ключ PPA Amnezia (`amnezia.gpg.asc`). Установщик берёт его оттуда в первую очередь — это позволяет установке работать даже на серверах где заблокирован `keyserver.ubuntu.com` и `api.launchpad.net`.
+
+### Как обновить ключ (если истечёт)
+
+```bash
+# Выполнить на любой машине с доступом в интернет
+curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x57290828" > amnezia.gpg.asc
+# Закоммитить файл в репозиторий
+git add amnezia.gpg.asc && git commit -m "update amnezia gpg key" && git push
+```
 
 ---
 
@@ -111,6 +137,7 @@ pip3 install "python-telegram-bot[job-queue]>=22.0,<23" && systemctl restart awg
 
 | Версия | Что изменилось |
 |---|---|
+| 1.6 | Добавление PPA без зависимости от api.launchpad.net (каскад: GitHub → keyserver → add-apt-repository) |
 | 1.5 | Переход на python-telegram-bot 22.x |
 | 1.4 | Техобслуживание, напоминания, кнопки перезапуска |
 | 1.3 | allow_reentry для диалога добавления устройства, исправлены файловые дескрипторы |
