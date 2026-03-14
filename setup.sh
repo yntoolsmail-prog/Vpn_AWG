@@ -3,7 +3,7 @@
 # AmneziaWG + Telegram Bot — Установщик
 # Использование: bash <(curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/setup.sh)
 # =============================================================================
-# Version: 1.6
+# Version: 1.5
 
 set -e
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
@@ -361,9 +361,10 @@ else
 fi
 
 # Хелпер для выполнения команд с учётом режима
+# В тихом режиме прячем только stdout — stderr всегда видим чтобы ошибки не терялись
 run() {
     if [[ "$INSTALL_MODE" == "1" ]]; then
-        eval "$@" > /dev/null 2>&1
+        eval "$@" > /dev/null
     else
         eval "$@"
     fi
@@ -373,15 +374,19 @@ echo ""
 
 # ── Шаг 1: Зависимости ────────────────────────────────────────────────────────
 log "Установка зависимостей..."
-run "apt-get install -y $APT_FLAGS curl software-properties-common qrencode python3 python3-pip"
+run "apt-get install -y $APT_FLAGS curl software-properties-common qrencode python3 python3-pip" \
+    || err "Не удалось установить зависимости. Проверьте подключение к интернету и повторите."
 
 # ── Шаг 2: AmneziaWG ──────────────────────────────────────────────────────────
 log "Добавление PPA Amnezia..."
-run "add-apt-repository -y ppa:amnezia/ppa"
-run "apt-get $APT_FLAGS update"
+run "add-apt-repository -y ppa:amnezia/ppa" \
+    || err "Не удалось добавить PPA Amnezia. Проверьте подключение к интернету."
+run "apt-get $APT_FLAGS update" \
+    || err "Не удалось обновить списки пакетов."
 
 log "Установка AmneziaWG (компиляция ~3-5 мин)..."
-run "apt-get install -y $APT_FLAGS amneziawg amneziawg-tools"
+run "apt-get install -y $APT_FLAGS amneziawg amneziawg-tools" \
+    || err "Не удалось установить AmneziaWG. Попробуйте подробный режим установки для диагностики."
 
 log "Загрузка модуля ядра..."
 if ! modprobe amneziawg 2>/dev/null; then
@@ -532,18 +537,22 @@ printf "PRIMARY_DNS=1.1.1.1\nSECONDARY_DNS=1.0.0.1\n" \
 
 # ── Шаг 9: Скачиваем скрипты ─────────────────────────────────────────────────
 log "Загрузка скриптов управления..."
-curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/vpn.sh -o /root/vpn.sh
-curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/bot.py  -o /root/bot.py
+curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/vpn.sh -o /root/vpn.sh \
+    || err "Не удалось скачать vpn.sh. Проверьте подключение к интернету."
+curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/bot.py  -o /root/bot.py \
+    || err "Не удалось скачать bot.py. Проверьте подключение к интернету."
 chmod +x /root/vpn.sh
 
 # ── Шаг 10: Python зависимости ───────────────────────────────────────────────
 log "Установка python-telegram-bot..."
 if [[ "$INSTALL_MODE" == "1" ]]; then
-    pip3 install "python-telegram-bot[job-queue]>=22.0,<23" --break-system-packages > /dev/null 2>&1 || \
-    pip3 install "python-telegram-bot[job-queue]>=22.0,<23" > /dev/null 2>&1
+    pip3 install "python-telegram-bot[job-queue]>=22.0,<23" --break-system-packages > /dev/null || \
+    pip3 install "python-telegram-bot[job-queue]>=22.0,<23" > /dev/null || \
+    err "Не удалось установить python-telegram-bot."
 else
     pip3 install "python-telegram-bot[job-queue]>=22.0,<23" --break-system-packages || \
-    pip3 install "python-telegram-bot[job-queue]>=22.0,<23"
+    pip3 install "python-telegram-bot[job-queue]>=22.0,<23" || \
+    err "Не удалось установить python-telegram-bot."
 fi
 
 # ── Шаг 11: Настройка бота ───────────────────────────────────────────────────
