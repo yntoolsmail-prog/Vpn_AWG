@@ -3,7 +3,7 @@
 # AmneziaWG + Telegram Bot — Установщик
 # Использование: bash <(curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/setup.sh)
 # =============================================================================
-# Version: 1.2
+# Version: 1.3
 
 set -e
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
@@ -389,8 +389,22 @@ echo "amneziawg" > /etc/modules-load.d/amneziawg.conf
 
 # ── Шаг 3: Параметры сервера ──────────────────────────────────────────────────
 echo ""
-SERVER_IP=$(curl -s ifconfig.me 2>/dev/null || curl -s api.ipify.org 2>/dev/null)
-[[ -z "$SERVER_IP" ]] && err "Не удалось определить внешний IP сервера"
+SERVER_IP=$(curl -4 -s ifconfig.me 2>/dev/null || curl -4 -s api.ipify.org 2>/dev/null || curl -4 -s ifconfig.co 2>/dev/null)
+
+# Проверяем что получили именно IPv4 (не IPv6 и не пусто)
+if [[ -z "$SERVER_IP" ]] || [[ "$SERVER_IP" == *":"* ]]; then
+    warn "Не удалось автоматически определить внешний IPv4 (получено: '${SERVER_IP}')."
+    warn "Это может случиться на серверах с только IPv6 на внешнем интерфейсе."
+    echo ""
+    while true; do
+        read -p "  Введите внешний IPv4 вашего сервера вручную: " SERVER_IP
+        # Простая проверка формата IPv4
+        if [[ "$SERVER_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+            break
+        fi
+        warn "Неверный формат. Введите IPv4, например: 185.123.45.67"
+    done
+fi
 IFACE=$(ip route | grep default | awk '{print $5}' | head -1)
 info "Внешний IP: $SERVER_IP"
 info "Интерфейс:  $IFACE"
