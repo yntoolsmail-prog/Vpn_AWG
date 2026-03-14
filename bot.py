@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Version: 1.3
+# Version: 1.4
 import os, subprocess, logging, json, zlib, base64, struct, time, tarfile, tempfile
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -12,6 +12,7 @@ ENV_FILE    = "/etc/amnezia/amneziawg/server.env"
 USERS_FILE  = "/etc/amnezia/amneziawg/users.json"
 CLIENTS_DIR = "/etc/amnezia/amneziawg/clients"
 BACKUP_DIR  = "/etc/amnezia/amneziawg/backups"
+MAINTENANCE_FILE = "/etc/amnezia/amneziawg/maintenance.json"
 # AWG_CONF строится динамически после загрузки server.env — см. ниже
 
 # ── Конфиг ─────────────────────────────────────────────────────────────────────
@@ -446,6 +447,7 @@ async def main_menu(msg, user_id: int, edit=False):
             [InlineKeyboardButton("📊 Статус сервера",       callback_data="status")],
             [InlineKeyboardButton("🧹 Очистить мусор",       callback_data="cleanup")],
             [InlineKeyboardButton("💾 Бэкап",                callback_data="backup")],
+            [InlineKeyboardButton("🔧 Техобслуживание",      callback_data="maintenance")],
             [InlineKeyboardButton("📖 Инструкция",           callback_data="help")],
         ]
         text = (
@@ -553,6 +555,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await do_cleanup(query)
     elif data == "backup" and is_admin:
         await do_backup(query)
+    elif data == "maintenance" and is_admin:
+        await show_maintenance(query)
+    elif data == "maint_upgrade" and is_admin:
+        await do_maint_upgrade(query)
+    elif data == "maint_ptb" and is_admin:
+        await do_maint_ptb(query)
+    elif data == "maint_done" and is_admin:
+        await do_maint_done(query)
     elif data == "help":
         await show_help(query)
     elif data.startswith("device_"):
@@ -891,6 +901,120 @@ async def do_cleanup(query):
         reply_markup=back_kb()
     )
 
+# ══════════════════════════════════════════════════════════════════════════════
+# ТЕХОБСЛУЖИВАНИЕ
+# ══════════════════════════════════════════════════════════════════════════════
+
+def load_maintenance() -> dict:
+    try:
+        with open(MAINTENANCE_FILE) as f:
+            return json.load(f)
+    except:
+        return {"last_date": None, "last_ts": 0}
+
+def save_maintenance(data: dict):
+    with open(MAINTENANCE_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+def get_ptb_version() -> str:
+    try:
+        import telegram
+        return telegram.__version__
+    except:
+        return "неизвестно"
+
+def get_ubuntu_version() -> str:
+    try:
+        return subprocess.check_output(["lsb_release", "-ds"], text=True).strip()
+    except:
+        return "неизвестно"
+
+def get_kernel_version() -> str:
+    try:
+        return subprocess.check_output(["uname", "-r"], text=True).strip()
+    except:
+        return "неизвестно"
+
+async def show_maintenance(query):
+    m         = load_maintenance()
+    last_date = m.get("last_date") or "никогда"
+    ptb_ver   = get_ptb_version()
+    ubuntu    = get_ubuntu_version()
+    kernel    = get_kernel_version()
+
+    text = (
+        f"🔧 Техобслуживание\n\n"
+        f"📅 Последнее: {last_date}\n\n"
+        f"🖥 Система: {ubuntu}\n"
+        f"⚙️ Ядро: {kernel}\n"
+        f"🐍 python-telegram-bot: {ptb_ver}\n\n"
+        f"Рекомендуется проводить раз в 6 месяцев."
+    )
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("💾 Бэкап + apt upgrade",         callback_data="maint_upgrade")],
+        [InlineKeyboardButton("📦 Проверить версию библиотеки", callback_data="maint_ptb")],
+        [InlineKeyboardButton("✅ Отмечено — всё ок",            callback_data="maint_done")],
+        [InlineKeyboardButton("◀️ В меню",                       callback_data="back")],
+    ])
+    await query.edit_message_text(text, reply_markup=kb)
+
+async def do_maint_upgrade(query):
+    """Бэкап + apt upgrade + перезапуск бота"""
+    await do_backup(query)
+    await query.message.reply_text(
+        "⏳ Запускаю apt upgrade...\n\nЭто займёт пару минут. Бот перезапустится автоматически."
+    )
+    subprocess.Popen(
+        ["bash", "-c", "apt-get update -qq && apt-get upgrade -y -qq && systemctl restart awg-bot"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+
+async def do_maint_ptb(query):
+    ptb_ver = get_ptb_version()
+    text = (
+        f"📦 python-telegram-bot\n\n"
+        f"Установлена: *{ptb_ver}*\n\n"
+        f"Список релизов и Breaking Changes:\n"
+        f"https://github.com/python-telegram-bot/python-telegram-bot/releases\n\n"
+        f"Если мажорная версия не изменилась (например всё ещё 20.x) — "
+        f"достаточно нажать «Бэкап + apt upgrade».\n\n"
+        f"Если мажорная версия выросла (20.x → 21.x) — загляните в Breaking Changes. "
+        f"Скорее всего потребуется небольшая правка bot\\.py\\."
+    )
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("◀️ Назад", callback_data="maintenance")],
+    ])
+    await query.edit_message_text(text, reply_markup=kb, parse_mode="MarkdownV2")
+
+async def do_maint_done(query):
+    now = time.strftime("%d.%m.%Y")
+    save_maintenance({"last_date": now, "last_ts": int(time.time())})
+    await query.edit_message_text(
+        f"✅ Техобслуживание отмечено\n\nДата: {now}\nСледующее напоминание через 6 месяцев.",
+        reply_markup=back_kb()
+    )
+
+async def maintenance_reminder(context: ContextTypes.DEFAULT_TYPE):
+    """Напоминание раз в 6 месяцев — запускается через job_queue"""
+    m       = load_maintenance()
+    last_ts = m.get("last_ts", 0)
+    now_ts  = int(time.time())
+    # 6 месяцев = 183 дня
+    if now_ts - last_ts < 183 * 86400:
+        return
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔧 Перейти к обслуживанию", callback_data="maintenance")],
+    ])
+    await context.bot.send_message(
+        chat_id=ADMIN_ID,
+        text=(
+            "🔔 Напоминание о техобслуживании\n\n"
+            "Прошло 6 месяцев с последнего обслуживания.\n"
+            "Рекомендуется сделать бэкап и обновить систему."
+        ),
+        reply_markup=kb
+    )
+
 async def show_help(query):
     text = (
         "📖 Инструкция\n\n"
@@ -999,6 +1123,9 @@ def main():
     app.add_handler(reg_conv)
     app.add_handler(add_conv)
     app.add_handler(CallbackQueryHandler(button_handler))
+
+    # Проверка напоминания о техобслуживании — раз в сутки
+    app.job_queue.run_repeating(maintenance_reminder, interval=86400, first=60)
 
     logger.info(f"Бот запущен. Admin ID: {ADMIN_ID}")
     print(f"\n\033[0;32m✓ Бот запущен! Admin ID: {ADMIN_ID}\033[0m\n")
