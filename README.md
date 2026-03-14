@@ -122,14 +122,34 @@ crontab -l | grep -v update.sh | crontab -
 
 В репозитории хранится GPG-ключ PPA Amnezia (`amnezia.gpg.asc`). Установщик берёт его оттуда в первую очередь — это позволяет установке работать даже на серверах где заблокирован `keyserver.ubuntu.com` и `api.launchpad.net`.
 
-### Как обновить ключ (если истечёт)
+> **Для владельца репозитория** — если ключ истечёт и установка начнёт падать на этом шаге, его нужно обновить. Пользователям этого делать не нужно.
 
+<details>
+<summary>Как обновить ключ</summary>
+
+**Linux / macOS:**
 ```bash
-# Выполнить на любой машине с доступом в интернет
 curl -fsSL "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x57290828" > amnezia.gpg.asc
-# Закоммитить файл в репозиторий
-git add amnezia.gpg.asc && git commit -m "update amnezia gpg key" && git push
+git clone https://github.com/yntoolsmail-prog/Vpn_AWG.git
+cd Vpn_AWG
+cp ../amnezia.gpg.asc .
+git add amnezia.gpg.asc
+git commit -m "update amnezia gpg key"
+git push
 ```
+
+**Windows (PowerShell):**
+```powershell
+Invoke-WebRequest "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0x57290828" -OutFile amnezia.gpg.asc
+git clone https://github.com/yntoolsmail-prog/Vpn_AWG.git
+cd Vpn_AWG
+Copy-Item ..\amnezia.gpg.asc .
+git add amnezia.gpg.asc
+git commit -m "update amnezia gpg key"
+git push
+```
+
+</details>
 
 ---
 
