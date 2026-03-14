@@ -1,5 +1,5 @@
 #!/bin/bash
-# Version: 1.3
+# Version: 1.4
 # =============================================================================
 # AmneziaWG — управление клиентами
 # Запускать: bash vpn.sh
@@ -318,6 +318,7 @@ PYEOF
 
     # Удаляем все файлы клиента
     rm -f "$CLIENTS_DIR/${NAME}.conf"
+    rm -f "$CLIENTS_DIR/${NAME}.pub"
     rm -f "$CLIENTS_DIR/${NAME}.vpn"
     rm -f "$CLIENTS_DIR/${NAME}.vpnlink"  # на случай старых файлов
 
