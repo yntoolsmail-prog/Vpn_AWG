@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Version: 1.4
+# Version: 1.5
 import os, subprocess, logging, json, zlib, base64, struct, time, tarfile, tempfile
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
