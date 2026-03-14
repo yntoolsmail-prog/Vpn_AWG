@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Version: 1.5
+# Version: 1.6
 import os, subprocess, logging, json, zlib, base64, struct, time, tarfile, tempfile
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -67,6 +67,7 @@ logger = logging.getLogger(__name__)
 # Состояния ConversationHandler
 WAITING_REGISTER_NAME = 10
 WAITING_DEVICE_NAME   = 11
+WAITING_RESTORE_FILE  = 12
 
 # ── Пользователи ───────────────────────────────────────────────────────────────
 def load_users() -> dict:
@@ -447,6 +448,7 @@ async def main_menu(msg, user_id: int, edit=False):
             [InlineKeyboardButton("📊 Статус сервера",       callback_data="status")],
             [InlineKeyboardButton("🧹 Очистить мусор",       callback_data="cleanup")],
             [InlineKeyboardButton("💾 Бэкап",                callback_data="backup")],
+            [InlineKeyboardButton("📥 Восстановить из бэкапа", callback_data="restore")],
             [InlineKeyboardButton("🔧 Техобслуживание",      callback_data="maintenance")],
             [InlineKeyboardButton("📖 Инструкция",           callback_data="help")],
         ]
@@ -555,6 +557,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await do_cleanup(query)
     elif data == "backup" and is_admin:
         await do_backup(query)
+    elif data == "restore" and is_admin:
+        await start_restore(query)
+    elif data == "restore_cancel" and is_admin:
+        await query.edit_message_text("❌ Восстановление отменено.", reply_markup=back_kb())
     elif data == "maintenance" and is_admin:
         await show_maintenance(query)
     elif data == "maint_upgrade" and is_admin:
@@ -902,6 +908,151 @@ async def do_cleanup(query):
     )
 
 # ══════════════════════════════════════════════════════════════════════════════
+# ВОССТАНОВЛЕНИЕ ИЗ БЭКАПА
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def start_restore(query):
+    """Шаг 1 — предупреждение и запрос файла"""
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("❌ Отмена", callback_data="restore_cancel")],
+    ])
+    await query.edit_message_text(
+        "📥 Восстановление из бэкапа\n\n"
+        "⚠️ *Внимание* — текущие конфиги будут перезаписаны!\n"
+        "Используйте только при переезде на новый сервер.\n\n"
+        "Перед восстановлением будет автоматически создан бэкап текущего состояния.\n\n"
+        "Отправьте файл бэкапа (`awg_backup_*.tar.gz`) в этот чат.\n\n"
+        "Для отмены нажмите кнопку ниже или напишите /cancel",
+        reply_markup=kb,
+        parse_mode="Markdown"
+    )
+
+async def receive_restore_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Шаг 2 — получаем файл, показываем что внутри и просим подтверждение"""
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        return ConversationHandler.END
+
+    doc = update.message.document
+    if not doc or not doc.file_name.endswith(".tar.gz"):
+        await update.message.reply_text(
+            "❌ Ожидается файл `.tar.gz`\n\nОтправьте файл бэкапа или напишите /cancel для отмены.",
+            parse_mode="Markdown"
+        )
+        return WAITING_RESTORE_FILE
+
+    await update.message.reply_text("⏳ Проверяю бэкап...")
+
+    # Скачиваем во временный файл
+    tmp_path = f"/tmp/restore_{int(time.time())}.tar.gz"
+    tg_file  = await doc.get_file()
+    await tg_file.download_to_drive(tmp_path)
+
+    # Проверяем содержимое архива
+    try:
+        with tarfile.open(tmp_path, "r:gz") as tar:
+            names = tar.getnames()
+    except Exception as e:
+        os.remove(tmp_path)
+        await update.message.reply_text(f"❌ Не удалось открыть архив: {e}")
+        return ConversationHandler.END
+
+    # Ищем ключевые файлы
+    has_conf    = any(n.endswith(".conf") and "awg" in n for n in names)
+    has_env     = "server.env" in names
+    has_clients = any(n.startswith("clients/") for n in names)
+    clients_count = len([n for n in names if n.startswith("clients/") and n.endswith(".conf")])
+    has_users   = "users.json" in names
+
+    if not has_conf or not has_env:
+        os.remove(tmp_path)
+        await update.message.reply_text(
+            "❌ Файл не похож на бэкап AmneziaWG.\n"
+            "Не найдены обязательные файлы (конфиг интерфейса, server.env)."
+        )
+        return ConversationHandler.END
+
+    # Сохраняем путь к файлу в user_data
+    context.user_data["restore_path"] = tmp_path
+
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Подтвердить восстановление", callback_data="restore_confirm")],
+        [InlineKeyboardButton("❌ Отмена",                     callback_data="restore_cancel")],
+    ])
+    await update.message.reply_text(
+        f"📦 Содержимое бэкапа:\n\n"
+        f"{'✅' if has_conf else '❌'} Конфиг интерфейса\n"
+        f"{'✅' if has_env else '❌'} server.env\n"
+        f"{'✅' if has_clients else '❌'} Клиенты: {clients_count} шт.\n"
+        f"{'✅' if has_users else '⚠️'} users.json {'(найден)' if has_users else '(не найден — пользователи бота не восстановятся)'}\n\n"
+        f"⚠️ Текущие конфиги будут перезаписаны.\n"
+        f"Сначала будет создан автобэкап текущего состояния.",
+        reply_markup=kb
+    )
+    return WAITING_RESTORE_FILE
+
+async def confirm_restore(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Шаг 3 — подтверждение через callback кнопку"""
+    query   = update.callback_query
+    user_id = query.from_user.id
+    await query.answer()
+
+    if user_id != ADMIN_ID:
+        return ConversationHandler.END
+
+    tmp_path = context.user_data.get("restore_path")
+    if not tmp_path or not os.path.exists(tmp_path):
+        await query.edit_message_text("❌ Файл бэкапа не найден. Начните заново.")
+        return ConversationHandler.END
+
+    await query.edit_message_text("⏳ Создаю бэкап текущего состояния...")
+
+    # Автобэкап перед восстановлением
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    ts          = time.strftime("%Y%m%d_%H%M%S")
+    auto_backup = f"{BACKUP_DIR}/pre_restore_{ts}.tar.gz"
+    try:
+        with tarfile.open(auto_backup, "w:gz") as tar:
+            tar.add(AWG_CONF,    arcname=f"{AWG_IFACE}.conf")
+            tar.add(ENV_FILE,    arcname="server.env")
+            tar.add(CLIENTS_DIR, arcname="clients")
+            if os.path.exists(USERS_FILE):
+                tar.add(USERS_FILE, arcname="users.json")
+    except Exception as e:
+        await query.message.reply_text(f"⚠️ Не удалось создать автобэкап: {e}\nВосстановление отменено.")
+        os.remove(tmp_path)
+        return ConversationHandler.END
+
+    await query.message.reply_text("⏳ Восстанавливаю конфиги...")
+
+    # Распаковываем бэкап
+    try:
+        with tarfile.open(tmp_path, "r:gz") as tar:
+            tar.extractall("/etc/amnezia/amneziawg/")
+    except Exception as e:
+        await query.message.reply_text(f"❌ Ошибка при распаковке: {e}")
+        os.remove(tmp_path)
+        return ConversationHandler.END
+
+    os.remove(tmp_path)
+    context.user_data.pop("restore_path", None)
+
+    await query.message.reply_text(
+        f"✅ Конфиги восстановлены!\n\n"
+        f"Автобэкап сохранён: `{auto_backup}`\n\n"
+        f"⏳ Перезапускаю AWG и бота...",
+        parse_mode="Markdown"
+    )
+
+    # Перезапускаем AWG и бота
+    subprocess.Popen(
+        ["bash", "-c",
+         f"sleep 2 && systemctl restart awg-quick@{AWG_IFACE} && systemctl restart awg-bot"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
+    return ConversationHandler.END
+
+# ══════════════════════════════════════════════════════════════════════════════
 # ТЕХОБСЛУЖИВАНИЕ
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -1121,8 +1272,23 @@ def main():
         allow_reentry=True,
     )
 
+    restore_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(start_restore, pattern="^restore$")],
+        states={
+            WAITING_RESTORE_FILE: [
+                MessageHandler(filters.Document.ALL, receive_restore_file),
+                CallbackQueryHandler(confirm_restore, pattern="^restore_confirm$"),
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+        per_chat=True,
+        per_message=False,
+        allow_reentry=True,
+    )
+
     app.add_handler(reg_conv)
     app.add_handler(add_conv)
+    app.add_handler(restore_conv)
     app.add_handler(CallbackQueryHandler(button_handler))
 
     # Проверка напоминания о техобслуживании — раз в сутки
