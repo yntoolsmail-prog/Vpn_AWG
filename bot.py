@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Version: 1.2
+# Version: 1.3
 import os, subprocess, logging, json, zlib, base64, struct, time, tarfile, tempfile
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -70,12 +70,14 @@ WAITING_DEVICE_NAME   = 11
 # ── Пользователи ───────────────────────────────────────────────────────────────
 def load_users() -> dict:
     try:
-        return json.load(open(USERS_FILE))
+        with open(USERS_FILE) as f:
+            return json.load(f)
     except:
         return {"approved": {}, "pending": {}}
 
 def save_users(data: dict):
-    json.dump(data, open(USERS_FILE, "w"), indent=2, ensure_ascii=False)
+    with open(USERS_FILE, "w") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
 
 def is_approved(user_id: int) -> bool:
     if user_id == ADMIN_ID:
@@ -271,13 +273,14 @@ async def create_client(name: str, app, notify_chat_id: int = None):
         f.write(make_vpn_link(priv, pub, ip, psk, obfs, name))
 
     if notify_chat_id:
-        await app.bot.send_document(
-            chat_id=notify_chat_id,
-            document=open(conf_path, "rb"),
-            filename=f"{name}.conf",
-            caption=f"✅ Устройство *{name}* добавлено\n🌐 IP: `{ip}`",
-            parse_mode="Markdown"
-        )
+        with open(conf_path, "rb") as fh:
+            await app.bot.send_document(
+                chat_id=notify_chat_id,
+                document=fh,
+                filename=f"{name}.conf",
+                caption=f"✅ Устройство *{name}* добавлено\n🌐 IP: `{ip}`",
+                parse_mode="Markdown"
+            )
         qr_path = f"/tmp/{name}_qr.png"
         try:
             subprocess.run(["qrencode", "-o", qr_path, "-r", conf_path], check=True)
@@ -304,12 +307,13 @@ async def do_backup(query):
             if os.path.exists(USERS_FILE):
                 tar.add(USERS_FILE, arcname="users.json")
 
-        await query.message.reply_document(
-            document=open(backup_path, "rb"),
-            filename=f"awg_backup_{ts}.tar.gz",
-            caption=f"💾 Бэкап от {time.strftime('%d.%m.%Y %H:%M:%S')}\n"
-                    f"Клиентов: {len(get_all_clients())}"
-        )
+        with open(backup_path, "rb") as fh:
+            await query.message.reply_document(
+                document=fh,
+                filename=f"awg_backup_{ts}.tar.gz",
+                caption=f"💾 Бэкап от {time.strftime('%d.%m.%Y %H:%M:%S')}\n"
+                        f"Клиентов: {len(get_all_clients())}"
+            )
         await query.edit_message_text(
             f"✅ Бэкап создан и отправлен.\n\nФайл также сохранён на сервере:\n`{backup_path}`",
             reply_markup=back_kb(), parse_mode="Markdown"
@@ -539,6 +543,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_manage_users(query)
     elif data == "status":
         await show_status(query)
+    elif data == "restart_bot":
+        await query.edit_message_text("🔄 Перезапускаю бота...")
+        subprocess.Popen(["systemctl", "restart", "awg-bot"])
+    elif data == "restart_awg" and is_admin:
+        await query.edit_message_text("⚡ Перезапускаю AWG...\n\nVPN будет недоступен ~5 секунд.")
+        subprocess.Popen(["systemctl", "restart", f"awg-quick@{AWG_IFACE}"])
     elif data == "cleanup" and is_admin:
         await do_cleanup(query)
     elif data == "backup" and is_admin:
@@ -739,12 +749,13 @@ async def confirm_kick_user(query, target_id: int):
 async def send_conf(query, name: str):
     conf_path = f"{CLIENTS_DIR}/{name}.conf"
     short = name.split(".", 1)[1] if "." in name else name
-    await query.message.reply_document(
-        document=open(conf_path, "rb"),
-        filename=f"{name}.conf",
-        caption=f"📄 Конфиг устройства *{short}*",
-        parse_mode="Markdown"
-    )
+    with open(conf_path, "rb") as fh:
+        await query.message.reply_document(
+            document=fh,
+            filename=f"{name}.conf",
+            caption=f"📄 Конфиг устройства *{short}*",
+            parse_mode="Markdown"
+        )
 
 async def send_qr(query, name: str):
     conf_path = f"{CLIENTS_DIR}/{name}.conf"
@@ -769,14 +780,15 @@ async def send_share(query, name: str):
         await query.message.reply_text(f"❌ vpn-файл не найден для {name}")
         return
     short = name.split(".", 1)[1] if "." in name else name
-    vpn_link = open(vpn_path).read().strip()
-    # Отправляем файл
-    await query.message.reply_document(
-        document=open(vpn_path, "rb"),
-        filename=f"{name}.vpn",
-        caption=f"📤 Файл для AmneziaVPN — *{short}*\n\nВставьте в приложении: + → Открыть файл",
-        parse_mode="Markdown"
-    )
+    with open(vpn_path) as f:
+        vpn_link = f.read().strip()
+    with open(vpn_path, "rb") as fh:
+        await query.message.reply_document(
+            document=fh,
+            filename=f"{name}.vpn",
+            caption=f"📤 Файл для AmneziaVPN — *{short}*\n\nВставьте в приложении: + → Открыть файл",
+            parse_mode="Markdown"
+        )
     # Отправляем ссылку текстом для копирования
     await query.message.reply_text(
         f"🔗 Ссылка для AmneziaVPN (нажмите чтобы скопировать):\n\n`{vpn_link}`",
@@ -853,7 +865,13 @@ async def show_status(query):
         f"🟢 Онлайн: {online}\n"
         f"📶 Трафик (с перезагрузки): ↓{fmt_bytes(total_rx)} ↑{fmt_bytes(total_tx)}"
     )
-    await query.edit_message_text(text, reply_markup=back_kb())
+
+    is_admin = (query.from_user.id == ADMIN_ID)
+    kb_rows = [[InlineKeyboardButton("🔄 Перезапустить бота", callback_data="restart_bot")]]
+    if is_admin:
+        kb_rows.append([InlineKeyboardButton("⚡ Перезапустить AWG", callback_data="restart_awg")])
+    kb_rows.append([InlineKeyboardButton("◀️ В меню", callback_data="back")])
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb_rows))
 
 async def do_cleanup(query):
     peers      = get_awg_dump()
@@ -975,6 +993,7 @@ def main():
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         per_chat=True,
+        allow_reentry=True,
     )
 
     app.add_handler(reg_conv)
