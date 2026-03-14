@@ -1,5 +1,5 @@
 #!/bin/bash
-# Version: 1.2
+# Version: 1.3
 # =============================================================================
 # AmneziaWG — управление клиентами
 # Запускать: bash vpn.sh
@@ -14,6 +14,21 @@ ENV_FILE="/etc/amnezia/amneziawg/server.env"
 [[ ! -f "$ENV_FILE" ]] && echo -e "${RED}Сначала запустите setup.sh${NC}" && exit 1
 
 source "$ENV_FILE"
+
+# Проверка: SERVER_IP не должен быть IPv6
+if [[ "$SERVER_IP" == *":"* ]]; then
+    echo -e "${YELLOW}[!] В server.env записан IPv6 адрес: ${SERVER_IP}${NC}"
+    echo -e "${YELLOW}    Клиентские конфиги будут генерироваться с IPv6 Endpoint — это не работает в большинстве случаев.${NC}"
+    echo ""
+    read -p "  Введите правильный IPv4 сервера (или Enter чтобы продолжить с IPv6): " FIX_IP
+    if [[ -n "$FIX_IP" ]]; then
+        SERVER_IP="$FIX_IP"
+        sed -i "s/^SERVER_IP=.*/SERVER_IP=${FIX_IP}/" "$ENV_FILE"
+        echo -e "${GREEN}[+] SERVER_IP исправлен на ${FIX_IP} в server.env${NC}"
+        sleep 1
+    fi
+fi
+
 # Фолбэк на awg0 если VPN_IFACE отсутствует в server.env (старые установки)
 VPN_IFACE="${VPN_IFACE:-awg0}"
 AWG_CONF="/etc/amnezia/amneziawg/${VPN_IFACE}.conf"
