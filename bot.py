@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Version: 1.7
+# Version: 1.8
 import os, subprocess, logging, json, zlib, base64, struct, time, tarfile, tempfile
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -773,24 +773,39 @@ async def show_bw_days(query, page: int = 0):
 
 async def show_bw_reset_ask(query):
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Да, сбросить",  callback_data="bw_reset_confirm")],
-        [InlineKeyboardButton("❌ Отмена",         callback_data="bandwidth")],
+        [InlineKeyboardButton("🗑 Сбросить только пики",    callback_data="bw_reset_confirm")],
+        [InlineKeyboardButton("💣 Сбросить всё (с нуля)",  callback_data="bw_reset_all_confirm")],
+        [InlineKeyboardButton("❌ Отмена",                  callback_data="bandwidth")],
     ])
     await query.edit_message_text(
-        "🗑 Сброс пиков скорости\n\n"
-        "Будут обнулены:\n"
-        "• Абсолютный пик скорости\n"
-        "• Пик сегодняшнего дня\n\n"
-        "Лог и месячная статистика vnstat не затрагиваются.",
-        reply_markup=kb
+        "🗑 Сброс данных трафика\n\n"
+        "🗑 *Только пики* — обнуляет абсолютный пик и пик дня.\n"
+        "Лог и статистика vnstat сохраняются.\n\n"
+        "💣 *Всё с нуля* — удаляет пики И лог замеров.\n"
+        "Гистограмма и топ-5 начнут собираться заново.\n"
+        "Статистика vnstat не затрагивается — её хранит система.",
+        reply_markup=kb,
+        parse_mode="Markdown"
     )
 
 async def do_bw_reset(query):
+    """Сброс только пиков"""
     peak = load_bw_peak()
-    peak["all"] = {"rx": 0, "tx": 0}
+    peak["all"] = {"total": 0, "rx": 0, "tx": 0}
     peak["day"]  = {}
     save_bw_peak(peak)
     await query.answer("✅ Пики сброшены", show_alert=False)
+    await show_bandwidth(query)
+
+async def do_bw_reset_all(query):
+    """Полный сброс — пики + лог"""
+    peak = {"all": {"total": 0, "rx": 0, "tx": 0}, "day": {}, "last": {}}
+    save_bw_peak(peak)
+    try:
+        open(BW_LOG_FILE, "w").close()
+    except:
+        pass
+    await query.answer("✅ Все данные сброшены", show_alert=False)
     await show_bandwidth(query)
 
 
@@ -1063,6 +1078,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_bw_reset_ask(query)
     elif data == "bw_reset_confirm" and is_admin:
         await do_bw_reset(query)
+    elif data == "bw_reset_all_confirm" and is_admin:
+        await do_bw_reset_all(query)
     elif data == "noop":
         await query.answer()
     elif data == "cleanup" and is_admin:
