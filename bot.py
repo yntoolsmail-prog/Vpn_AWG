@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Version: 1.8
+# Version: 1.7
 import os, subprocess, logging, json, zlib, base64, struct, time, tarfile, tempfile
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -356,27 +356,35 @@ async def bw_monitor_job(context: ContextTypes.DEFAULT_TYPE):
         if dt > 0:
             rx_mbit = round((r2 - prev["rx"]) * 8 / 1_000_000 / dt, 2)
             tx_mbit = round((t2 - prev["tx"]) * 8 / 1_000_000 / dt, 2)
+            total   = round(rx_mbit + tx_mbit, 2)
 
-            # Пики обновляем при каждом замере (каждые 5 сек) — не теряем всплески
-            peak = load_bw_peak()
-            today = time.strftime("%Y-%m-%d")
+            # Защита от фантомных всплесков после перезапуска:
+            # если счётчики прыгнули назад (перезагрузка сервера) или
+            # скорость физически невозможна (>10 Gbit) — пропускаем замер
+            if r2 < prev["rx"] or t2 < prev["tx"] or total > 10_000:
+                context.bot_data["bw_prev"] = {"rx": r2, "tx": t2, "ts": now}
+                return
+
+            # Пики храним как суммарный RX+TX — единая метрика как в гистограмме
+            peak    = load_bw_peak()
+            today   = time.strftime("%Y-%m-%d")
             day_peak = peak.get("day", {})
             if day_peak.get("date") != today:
-                day_peak = {"date": today, "rx": 0, "tx": 0}
-            if rx_mbit > day_peak["rx"]: day_peak["rx"] = rx_mbit
-            if tx_mbit > day_peak["tx"]: day_peak["tx"] = tx_mbit
+                day_peak = {"date": today, "total": 0, "rx": 0, "tx": 0}
+            if total > day_peak.get("total", 0):
+                day_peak = {"date": today, "total": total, "rx": rx_mbit, "tx": tx_mbit}
 
-            all_peak = peak.get("all", {"rx": 0, "tx": 0})
-            if rx_mbit > all_peak["rx"]: all_peak["rx"] = rx_mbit
-            if tx_mbit > all_peak["tx"]: all_peak["tx"] = tx_mbit
+            all_peak = peak.get("all", {"total": 0, "rx": 0, "tx": 0})
+            if total > all_peak.get("total", 0):
+                all_peak = {"total": total, "rx": rx_mbit, "tx": tx_mbit}
 
             save_bw_peak({"day": day_peak, "all": all_peak,
                           "last": {"rx": rx_mbit, "tx": tx_mbit, "ts": now}})
 
-            # В лог пишем раз в минуту — накапливаем максимум за окно
-            minute_max = context.bot_data.get("bw_minute_max", {"rx": 0, "tx": 0, "ts": now})
-            if rx_mbit > minute_max["rx"]: minute_max["rx"] = rx_mbit
-            if tx_mbit > minute_max["tx"]: minute_max["tx"] = tx_mbit
+            # В лог пишем раз в минуту — накапливаем максимум суммарного трафика
+            minute_max = context.bot_data.get("bw_minute_max", {"rx": 0, "tx": 0, "total": 0, "ts": now})
+            if total > minute_max.get("total", 0):
+                minute_max = {"rx": rx_mbit, "tx": tx_mbit, "total": total, "ts": minute_max["ts"]}
             context.bot_data["bw_minute_max"] = minute_max
 
             if now - minute_max["ts"] >= 60:
@@ -390,7 +398,7 @@ async def bw_monitor_job(context: ContextTypes.DEFAULT_TYPE):
                             f.writelines(lines[-10080:])
                 except:
                     pass
-                context.bot_data["bw_minute_max"] = {"rx": 0, "tx": 0, "ts": now}
+                context.bot_data["bw_minute_max"] = {"rx": 0, "tx": 0, "total": 0, "ts": now}
 
     context.bot_data["bw_prev"] = {"rx": r2, "tx": t2, "ts": now}
 
@@ -688,11 +696,13 @@ async def show_bandwidth(query, period_days: int = 0):
         lines.append("\n📦 Месячный трафик: vnstat ещё собирает данные.")
 
     if day:
+        total_day = day.get("total", round(day.get("rx", 0) + day.get("tx", 0), 2))
         lines.append(f"\n📅 Пик сегодня ({day.get('date', '—')}):")
-        lines.append(f"   ↓{day.get('rx', 0)} ↑{day.get('tx', 0)} Mbit/s")
+        lines.append(f"   {total_day} Mbit/s  (↓{day.get('rx', 0)} + ↑{day.get('tx', 0)})")
     if allp:
+        total_all = allp.get("total", round(allp.get("rx", 0) + allp.get("tx", 0), 2))
         lines.append(f"\n🏆 Абс. пик скорости:")
-        lines.append(f"   ↓{allp.get('rx', 0)} ↑{allp.get('tx', 0)} Mbit/s")
+        lines.append(f"   {total_all} Mbit/s  (↓{allp.get('rx', 0)} + ↑{allp.get('tx', 0)})")
     if top:
         lines.append(f"\n🔝 Топ-5 минут по нагрузке:")
         for dt, rx, tx in top:
