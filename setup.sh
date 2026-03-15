@@ -3,7 +3,7 @@
 # AmneziaWG + Telegram Bot — Установщик
 # Использование: bash <(curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/setup.sh)
 # =============================================================================
-# Version: 1.7
+# Version: 1.8
 
 set -e
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
@@ -585,7 +585,41 @@ EOF
 systemctl daemon-reload
 systemctl enable "awg-quick@${VPN_IFACE}"
 
-# ── Шаг 8: Сохраняем server.env ──────────────────────────────────────────────
+# ── Шаг 8: Часовой пояс ──────────────────────────────────────────────────────
+echo ""
+echo -e "${CYAN}${BOLD}Часовой пояс${NC}"
+echo ""
+echo -e "  Используется для отображения времени в статистике трафика."
+echo ""
+echo -e "  ${CYAN}1)${NC} Europe/Moscow      — Москва (UTC+3)"
+echo -e "  ${CYAN}2)${NC} Asia/Yekaterinburg — Екатеринбург (UTC+5)"
+echo -e "  ${CYAN}3)${NC} Asia/Novosibirsk   — Новосибирск (UTC+7)"
+echo -e "  ${CYAN}4)${NC} Asia/Vladivostok   — Владивосток (UTC+10)"
+echo -e "  ${CYAN}5)${NC} Europe/Kiev        — Киев (UTC+2)"
+echo -e "  ${CYAN}6)${NC} Asia/Almaty        — Алматы (UTC+5)"
+echo -e "  ${CYAN}7)${NC} Europe/Berlin      — Берлин (UTC+1/2)"
+echo -e "  ${CYAN}8)${NC} UTC                — UTC (по умолчанию)"
+echo ""
+while true; do
+    read -p "  Ваш выбор [1]: " TZ_CHOICE
+    TZ_CHOICE=${TZ_CHOICE:-1}
+    [[ "$TZ_CHOICE" =~ ^[1-8]$ ]] && break
+    warn "Введите число от 1 до 8."
+done
+case "$TZ_CHOICE" in
+    1) TIMEZONE="Europe/Moscow" ;;
+    2) TIMEZONE="Asia/Yekaterinburg" ;;
+    3) TIMEZONE="Asia/Novosibirsk" ;;
+    4) TIMEZONE="Asia/Vladivostok" ;;
+    5) TIMEZONE="Europe/Kiev" ;;
+    6) TIMEZONE="Asia/Almaty" ;;
+    7) TIMEZONE="Europe/Berlin" ;;
+    8) TIMEZONE="UTC" ;;
+esac
+timedatectl set-timezone "$TIMEZONE" 2>/dev/null || true
+info "Часовой пояс: ${TIMEZONE}"
+
+# ── Шаг 9: Сохраняем server.env ──────────────────────────────────────────────
 printf "SERVER_IP=%s\nSERVER_PORT=%s\nSERVER_PUBLIC=%s\nVPN_IFACE=%s\nVPN_SUBNET=%s\n" \
     "$SERVER_IP" "$AWG_PORT" "$SERVER_PUBLIC" "$VPN_IFACE" "$VPN_SUBNET" \
     > /etc/amnezia/amneziawg/server.env
@@ -594,8 +628,10 @@ printf "JC=%s\nJMIN=%s\nJMAX=%s\nS1=%s\nS2=%s\nH1=%s\nH2=%s\nH3=%s\nH4=%s\n" \
     >> /etc/amnezia/amneziawg/server.env
 printf "PRIMARY_DNS=1.1.1.1\nSECONDARY_DNS=1.0.0.1\n" \
     >> /etc/amnezia/amneziawg/server.env
+printf "TIMEZONE=%s\n" "$TIMEZONE" \
+    >> /etc/amnezia/amneziawg/server.env
 
-# ── Шаг 9: Скачиваем скрипты ─────────────────────────────────────────────────
+# ── Шаг 10: Скачиваем скрипты ─────────────────────────────────────────────────
 log "Загрузка скриптов управления..."
 curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/vpn.sh -o /root/vpn.sh \
     || err "Не удалось скачать vpn.sh. Проверьте подключение к интернету."
@@ -603,7 +639,7 @@ curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/bot.py  
     || err "Не удалось скачать bot.py. Проверьте подключение к интернету."
 chmod +x /root/vpn.sh
 
-# ── Шаг 10: Python зависимости ───────────────────────────────────────────────
+# ── Шаг 11: Python зависимости ───────────────────────────────────────────────
 log "Установка python-telegram-bot..."
 if [[ "$INSTALL_MODE" == "1" ]]; then
     pip3 install "python-telegram-bot[job-queue]>=22.0,<23" --break-system-packages > /dev/null || \
@@ -615,7 +651,7 @@ else
     err "Не удалось установить python-telegram-bot."
 fi
 
-# ── Шаг 10.5: Мониторинг трафика ─────────────────────────────────────────────
+# ── Шаг 11.5: Мониторинг трафика ─────────────────────────────────────────────
 log "Установка vnstat (статистика трафика)..."
 apt-get install -y -qq vnstat
 systemctl enable vnstat --now 2>/dev/null || true
@@ -628,7 +664,7 @@ touch /var/log/awg-bw.log
 chmod 644 /var/log/awg-bw.log
 info "Мониторинг трафика настроен (интерфейс: ${HOST_IFACE})"
 
-# ── Шаг 11: Настройка бота ───────────────────────────────────────────────────
+# ── Шаг 12: Настройка бота ───────────────────────────────────────────────────
 echo ""
 echo -e "  1. Найдите ${YELLOW}@BotFather${NC} в Telegram"
 echo -e "  2. Напишите ${YELLOW}/newbot${NC} и следуйте инструкциям"
@@ -653,7 +689,7 @@ done
 printf "BOT_TOKEN=%s\nADMIN_ID=%s\n" "$BOT_TOKEN" "$ADMIN_ID" > /etc/amnezia/amneziawg/bot.env
 chmod 600 /etc/amnezia/amneziawg/bot.env
 
-# ── Шаг 12: systemd сервис для бота ──────────────────────────────────────────
+# ── Шаг 13: systemd сервис для бота ──────────────────────────────────────────
 log "Настройка автозапуска бота..."
 cat > /etc/systemd/system/awg-bot.service << 'EOF'
 [Unit]
@@ -676,7 +712,7 @@ systemctl daemon-reload
 systemctl enable awg-bot
 systemctl start awg-bot
 
-# ── Шаг 13: Автообновление ───────────────────────────────────────────────────
+# ── Шаг 14: Автообновление ───────────────────────────────────────────────────
 log "Настройка автообновления..."
 cat > /root/update.sh << 'EOF'
 #!/bin/bash
@@ -692,7 +728,31 @@ if [ "$CURRENT" != "$LATEST" ]; then
 fi
 EOF
 chmod +x /root/update.sh
-(crontab -l 2>/dev/null; echo "*/5 * * * * /root/update.sh") | crontab -
+
+# ── Автообновление: спрашиваем пользователя ───────────────────────────────────
+echo ""
+echo -e "${CYAN}${BOLD}Автообновление bot.py и vpn.sh${NC}"
+echo ""
+echo -e "  Скрипт /root/update.sh проверяет репозиторий каждые 5 минут"
+echo -e "  и при появлении новой версии обновляет бота автоматически."
+echo -e "  Конфиги, ключи и данные клиентов ${GREEN}не затрагиваются${NC}."
+echo ""
+echo -e "  ${CYAN}1)${NC} Включить автообновление ${GREEN}(рекомендуется)${NC}"
+echo -e "  ${CYAN}2)${NC} Не включать — обновлять вручную"
+echo ""
+while true; do
+    read -p "  Ваш выбор [1]: " AU_CHOICE
+    AU_CHOICE=${AU_CHOICE:-1}
+    [[ "$AU_CHOICE" == "1" || "$AU_CHOICE" == "2" ]] && break
+    warn "Введите 1 или 2."
+done
+
+if [[ "$AU_CHOICE" == "1" ]]; then
+    (crontab -l 2>/dev/null; echo "*/5 * * * * /root/update.sh") | crontab -
+    AU_STATUS="${GREEN}активно (каждые 5 минут)${NC}"
+else
+    AU_STATUS="${YELLOW}отключено — включить: (crontab -l 2>/dev/null; echo \"*/5 * * * * /root/update.sh\") | crontab -${NC}"
+fi
 
 # ── Готово ────────────────────────────────────────────────────────────────────
 echo ""
@@ -704,6 +764,7 @@ info "AWG интерфейс: ${VPN_IFACE}  |  Подсеть: ${VPN_SUBNET}.x  
 info "AWG запущен с параметрами: Jc=$JC Jmin=$JMIN Jmax=$JMAX"
 info "DNS: 1.1.1.1, 1.0.0.1 (можно изменить, см. README)"
 info "Бот: systemctl status awg-bot"
+echo -e "${CYAN}[i]${NC} Автообновление: ${AU_STATUS}"
 echo ""
 echo -e "  Терминал: ${CYAN}bash /root/vpn.sh${NC}"
 echo -e "  Telegram: ${CYAN}напишите /start вашему боту${NC}"
