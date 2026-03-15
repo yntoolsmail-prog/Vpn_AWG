@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Version: 1.8
+# Version: 1.7
 import os, subprocess, logging, json, zlib, base64, struct, time, tarfile, tempfile
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -356,35 +356,34 @@ async def bw_monitor_job(context: ContextTypes.DEFAULT_TYPE):
         if dt > 0:
             rx_mbit = round((r2 - prev["rx"]) * 8 / 1_000_000 / dt, 2)
             tx_mbit = round((t2 - prev["tx"]) * 8 / 1_000_000 / dt, 2)
-            total   = round(rx_mbit + tx_mbit, 2)
+            # Метрика нагрузки на канал — максимум из двух направлений
+            load    = round(max(rx_mbit, tx_mbit), 2)
 
-            # Защита от фантомных всплесков после перезапуска:
-            # если счётчики прыгнули назад (перезагрузка сервера) или
-            # скорость физически невозможна (>10 Gbit) — пропускаем замер
-            if r2 < prev["rx"] or t2 < prev["tx"] or total > 10_000:
+            # Защита от фантомных всплесков после перезапуска
+            if r2 < prev["rx"] or t2 < prev["tx"] or load > 10_000:
                 context.bot_data["bw_prev"] = {"rx": r2, "tx": t2, "ts": now}
                 return
 
-            # Пики храним как суммарный RX+TX — единая метрика как в гистограмме
+            # Пики по max(RX, TX)
             peak    = load_bw_peak()
             today   = time.strftime("%Y-%m-%d")
             day_peak = peak.get("day", {})
             if day_peak.get("date") != today:
-                day_peak = {"date": today, "total": 0, "rx": 0, "tx": 0}
-            if total > day_peak.get("total", 0):
-                day_peak = {"date": today, "total": total, "rx": rx_mbit, "tx": tx_mbit}
+                day_peak = {"date": today, "load": 0, "rx": 0, "tx": 0}
+            if load > day_peak.get("load", 0):
+                day_peak = {"date": today, "load": load, "rx": rx_mbit, "tx": tx_mbit}
 
-            all_peak = peak.get("all", {"total": 0, "rx": 0, "tx": 0})
-            if total > all_peak.get("total", 0):
-                all_peak = {"total": total, "rx": rx_mbit, "tx": tx_mbit}
+            all_peak = peak.get("all", {"load": 0, "rx": 0, "tx": 0})
+            if load > all_peak.get("load", 0):
+                all_peak = {"load": load, "rx": rx_mbit, "tx": tx_mbit}
 
             save_bw_peak({"day": day_peak, "all": all_peak,
                           "last": {"rx": rx_mbit, "tx": tx_mbit, "ts": now}})
 
-            # В лог пишем раз в минуту — накапливаем максимум суммарного трафика
-            minute_max = context.bot_data.get("bw_minute_max", {"rx": 0, "tx": 0, "total": 0, "ts": now})
-            if total > minute_max.get("total", 0):
-                minute_max = {"rx": rx_mbit, "tx": tx_mbit, "total": total, "ts": minute_max["ts"]}
+            # В лог пишем раз в минуту — максимальный load за окно
+            minute_max = context.bot_data.get("bw_minute_max", {"rx": 0, "tx": 0, "load": 0, "ts": now})
+            if load > minute_max.get("load", 0):
+                minute_max = {"rx": rx_mbit, "tx": tx_mbit, "load": load, "ts": minute_max["ts"]}
             context.bot_data["bw_minute_max"] = minute_max
 
             if now - minute_max["ts"] >= 60:
@@ -398,7 +397,7 @@ async def bw_monitor_job(context: ContextTypes.DEFAULT_TYPE):
                             f.writelines(lines[-10080:])
                 except:
                     pass
-                context.bot_data["bw_minute_max"] = {"rx": 0, "tx": 0, "total": 0, "ts": now}
+                context.bot_data["bw_minute_max"] = {"rx": 0, "tx": 0, "load": 0, "ts": now}
 
     context.bot_data["bw_prev"] = {"rx": r2, "tx": t2, "ts": now}
 
@@ -583,7 +582,7 @@ def get_bw_histogram_for(lines_data: list[str]) -> dict | None:
             try:
                 rx  = float(parts[2].split("=")[1])
                 tx  = float(parts[3].split("=")[1])
-                val = rx + tx
+                val = max(rx, tx)  # нагрузка на канал = максимум из двух направлений
                 total += 1
                 for i, (lo, hi, _) in enumerate(buckets):
                     if hi is None or val < hi:
@@ -632,10 +631,10 @@ def get_bw_histogram_day(date_str: str) -> dict | None:
 
 def fmt_histogram(hist: dict, period_label: str = "") -> list[str]:
     """Форматирует гистограмму для вывода в Telegram"""
-    header = f"\n📊 Распределение нагрузки"
+    header = f"\n📊 Распределение нагрузки на канал"
     if period_label:
         header += f" ({period_label})"
-    header += ":"
+    header += "\n   (по max из RX/TX, мин/сут):"
     lines  = [header]
     bar_max = 10
     for i, (lo, hi, label) in enumerate(hist["buckets"]):
@@ -696,13 +695,13 @@ async def show_bandwidth(query, period_days: int = 0):
         lines.append("\n📦 Месячный трафик: vnstat ещё собирает данные.")
 
     if day:
-        total_day = day.get("total", round(day.get("rx", 0) + day.get("tx", 0), 2))
+        load_day = day.get("load", max(day.get("rx", 0), day.get("tx", 0)))
         lines.append(f"\n📅 Пик сегодня ({day.get('date', '—')}):")
-        lines.append(f"   {total_day} Mbit/s  (↓{day.get('rx', 0)} + ↑{day.get('tx', 0)})")
+        lines.append(f"   {load_day} Mbit/s  (↓{day.get('rx', 0)} ↑{day.get('tx', 0)})")
     if allp:
-        total_all = allp.get("total", round(allp.get("rx", 0) + allp.get("tx", 0), 2))
+        load_all = allp.get("load", max(allp.get("rx", 0), allp.get("tx", 0)))
         lines.append(f"\n🏆 Абс. пик скорости:")
-        lines.append(f"   {total_all} Mbit/s  (↓{allp.get('rx', 0)} + ↑{allp.get('tx', 0)})")
+        lines.append(f"   {load_all} Mbit/s  (↓{allp.get('rx', 0)} ↑{allp.get('tx', 0)})")
     if top:
         lines.append(f"\n🔝 Топ-5 минут по нагрузке:")
         for dt, rx, tx in top:
