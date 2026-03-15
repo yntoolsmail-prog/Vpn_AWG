@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Version: 1.6
+# Version: 1.7
 import os, subprocess, logging, json, zlib, base64, struct, time, tarfile, tempfile
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -13,6 +13,8 @@ USERS_FILE  = "/etc/amnezia/amneziawg/users.json"
 CLIENTS_DIR = "/etc/amnezia/amneziawg/clients"
 BACKUP_DIR  = "/etc/amnezia/amneziawg/backups"
 MAINTENANCE_FILE = "/etc/amnezia/amneziawg/maintenance.json"
+BW_LOG_FILE      = "/var/log/awg-bw.log"
+BW_PEAK_FILE     = "/etc/amnezia/amneziawg/bw_peak.json"
 # AWG_CONF строится динамически после загрузки server.env — см. ниже
 
 # ── Конфиг ─────────────────────────────────────────────────────────────────────
@@ -295,6 +297,261 @@ async def create_client(name: str, app, notify_chat_id: int = None):
             if os.path.exists(qr_path):
                 os.remove(qr_path)
 
+# ── Мониторинг трафика ─────────────────────────────────────────────────────────
+def _read_iface_bytes(iface: str) -> tuple[int, int]:
+    """Читает rx/tx байты для сетевого интерфейса из /sys"""
+    try:
+        rx = int(open(f"/sys/class/net/{iface}/statistics/rx_bytes").read())
+        tx = int(open(f"/sys/class/net/{iface}/statistics/tx_bytes").read())
+        return rx, tx
+    except:
+        return 0, 0
+
+def _get_host_iface() -> str:
+    """Определяет основной сетевой интерфейс сервера (не awg)"""
+    try:
+        out = subprocess.check_output(["ip", "route", "get", "8.8.8.8"], text=True)
+        for part in out.split():
+            if part not in ("via", "dev", "src", "uid", "8.8.8.8", "cache") and "/" not in part:
+                prev = out.split()[out.split().index(part) - 1]
+                if prev == "dev":
+                    return part
+    except:
+        pass
+    # фолбэк — первый не-loopback не-awg интерфейс
+    try:
+        for line in open("/proc/net/dev").readlines()[2:]:
+            iface = line.split(":")[0].strip()
+            if iface and iface != "lo" and not iface.startswith("awg"):
+                return iface
+    except:
+        pass
+    return "eth0"
+
+def load_bw_peak() -> dict:
+    try:
+        with open(BW_PEAK_FILE) as f:
+            return json.load(f)
+    except:
+        return {}
+
+def save_bw_peak(data: dict):
+    try:
+        with open(BW_PEAK_FILE, "w") as f:
+            json.dump(data, f)
+    except:
+        pass
+
+async def bw_monitor_job(context: ContextTypes.DEFAULT_TYPE):
+    """Job: раз в минуту замеряет скорость и пишет лог + обновляет пики"""
+    iface = _get_host_iface()
+    now   = int(time.time())
+
+    # Читаем предыдущее состояние из context.bot_data
+    prev = context.bot_data.get("bw_prev")
+    r2, t2 = _read_iface_bytes(iface)
+
+    if prev:
+        dt = now - prev["ts"]
+        if dt > 0:
+            rx_mbit = round((r2 - prev["rx"]) * 8 / 1_000_000 / dt, 2)
+            tx_mbit = round((t2 - prev["tx"]) * 8 / 1_000_000 / dt, 2)
+
+            # Пишем в лог
+            try:
+                with open(BW_LOG_FILE, "a") as f:
+                    f.write(f"{time.strftime('%Y-%m-%d %H:%M')} RX={rx_mbit} TX={tx_mbit}\n")
+                # Обрезаем лог — держим только последние 10080 строк (7 дней по минуте)
+                lines = open(BW_LOG_FILE).readlines()
+                if len(lines) > 10080:
+                    with open(BW_LOG_FILE, "w") as f:
+                        f.writelines(lines[-10080:])
+            except:
+                pass
+
+            # Обновляем пики
+            peak = load_bw_peak()
+            today = time.strftime("%Y-%m-%d")
+            day_peak = peak.get("day", {})
+            if day_peak.get("date") != today:
+                day_peak = {"date": today, "rx": 0, "tx": 0}
+            if rx_mbit > day_peak["rx"]: day_peak["rx"] = rx_mbit
+            if tx_mbit > day_peak["tx"]: day_peak["tx"] = tx_mbit
+
+            all_peak = peak.get("all", {"rx": 0, "tx": 0})
+            if rx_mbit > all_peak["rx"]: all_peak["rx"] = rx_mbit
+            if tx_mbit > all_peak["tx"]: all_peak["tx"] = tx_mbit
+
+            save_bw_peak({"day": day_peak, "all": all_peak,
+                          "last": {"rx": rx_mbit, "tx": tx_mbit, "ts": now}})
+
+    context.bot_data["bw_prev"] = {"rx": r2, "tx": t2, "ts": now}
+
+def get_vnstat_monthly() -> list[dict]:
+    """Парсит vnstat --months и возвращает последние месяцы с трафиком"""
+    iface = _get_host_iface()
+    try:
+        out = subprocess.check_output(
+            ["vnstat", "-i", iface, "--months", "--json"],
+            text=True, stderr=subprocess.DEVNULL
+        )
+        data = json.loads(out)
+        months = data["interfaces"][0]["traffic"]["month"]
+        result = []
+        for m in months[-6:]:  # последние 6 месяцев
+            rx_gb = round(m["rx"] / 1024**3, 2)
+            tx_gb = round(m["tx"] / 1024**3, 2)
+            result.append({
+                "label": f"{m['date']['year']}-{m['date']['month']:02d}",
+                "rx_gb": rx_gb,
+                "tx_gb": tx_gb,
+                "total_gb": round(rx_gb + tx_gb, 2),
+            })
+        return result
+    except Exception:
+        pass
+
+    # фолбэк — текстовый вывод если нет --json (старый vnstat)
+    try:
+        out = subprocess.check_output(
+            ["vnstat", "-i", iface, "--months"],
+            text=True, stderr=subprocess.DEVNULL
+        )
+        result = []
+        for line in out.splitlines():
+            # Формат: "  2024-01  |  1.23 GiB  |  4.56 GiB  |  5.79 GiB"
+            parts = [p.strip() for p in line.split("|")]
+            if len(parts) >= 4 and "-" in parts[0] and len(parts[0].strip()) == 7:
+                label = parts[0].strip()
+                def parse_gb(s):
+                    s = s.strip()
+                    try:
+                        val, unit = s.split()
+                        val = float(val)
+                        unit = unit.lower()
+                        if "gib" in unit or "gb" in unit: return round(val, 2)
+                        if "mib" in unit or "mb" in unit: return round(val / 1024, 2)
+                        if "kib" in unit or "kb" in unit: return round(val / 1024**2, 2)
+                    except: pass
+                    return 0.0
+                rx = parse_gb(parts[1])
+                tx = parse_gb(parts[2])
+                result.append({"label": label, "rx_gb": rx, "tx_gb": tx,
+                                "total_gb": round(rx + tx, 2)})
+        return result[-6:]
+    except Exception:
+        return []
+
+def get_bw_top(n: int = 5) -> list[tuple[str, float, float]]:
+    """Топ-N минут по суммарному трафику из лога"""
+    try:
+        lines = open(BW_LOG_FILE).readlines()
+        rows = []
+        for line in lines:
+            parts = line.strip().split()
+            if len(parts) == 3:
+                try:
+                    dt   = parts[0] + " " + parts[1]
+                    rx   = float(parts[2].split("=")[1])
+                    tx   = float(parts[3].split("=")[1]) if len(parts) > 3 else 0.0
+                    rows.append((dt, rx, tx))
+                except:
+                    pass
+        rows.sort(key=lambda x: x[1] + x[2], reverse=True)
+        return rows[:n]
+    except:
+        return []
+
+def get_bw_top_fixed(n: int = 5) -> list[tuple[str, float, float]]:
+    """Топ-N минут по суммарному трафику из лога (фиксированный парсер)"""
+    try:
+        rows = []
+        for line in open(BW_LOG_FILE).readlines():
+            # Формат: 2024-01-15 14:32 RX=12.34 TX=5.67
+            parts = line.strip().split()
+            if len(parts) == 4:
+                try:
+                    dt = parts[0] + " " + parts[1]
+                    rx = float(parts[2].split("=")[1])
+                    tx = float(parts[3].split("=")[1])
+                    rows.append((dt, rx, tx))
+                except:
+                    pass
+        rows.sort(key=lambda x: x[1] + x[2], reverse=True)
+        return rows[:n]
+    except:
+        return []
+
+async def show_bandwidth(query):
+    """Экран статистики трафика для админа"""
+    iface = _get_host_iface()
+    peak  = load_bw_peak()
+    last  = peak.get("last", {})
+    day   = peak.get("day", {})
+    allp  = peak.get("all", {})
+    top   = get_bw_top_fixed(5)
+
+    # Текущая скорость — быстрый замер за 1 сек
+    r1, t1 = _read_iface_bytes(iface)
+    time.sleep(1)
+    r2, t2 = _read_iface_bytes(iface)
+    cur_rx = round((r2 - r1) * 8 / 1_000_000, 2)
+    cur_tx = round((t2 - t1) * 8 / 1_000_000, 2)
+
+    lines = [
+        f"📈 Статистика трафика\n",
+        f"🌐 Интерфейс: {iface}",
+        f"⚡ Сейчас: ↓{cur_rx} ↑{cur_tx} Mbit/s",
+    ]
+
+    if last:
+        last_time = time.strftime("%H:%M", time.localtime(last.get("ts", 0)))
+        lines.append(f"🕐 Замер {last_time}: ↓{last.get('rx', 0)} ↑{last.get('tx', 0)} Mbit/s")
+
+    # ── Месячный трафик из vnstat ──────────────────────────────────────────────
+    monthly = get_vnstat_monthly()
+    if monthly:
+        lines.append(f"\n📦 Трафик по месяцам (↓вх + ↑исх = итого):")
+        for m in monthly:
+            lines.append(f"   {m['label']}  ↓{m['rx_gb']} + ↑{m['tx_gb']} = {m['total_gb']} GB")
+        # Текущий месяц отдельно с прогресс-баром
+        cur = monthly[-1]
+        cur_label = time.strftime("%Y-%m")
+        if cur["label"] == cur_label:
+            total = cur["total_gb"]
+            # Типичные лимиты хостеров: подсказка если > 1 TB
+            warn = ""
+            if total >= 4000:   warn = "  🔴 >4 TB!"
+            elif total >= 3000: warn = "  🟠 >3 TB"
+            elif total >= 2000: warn = "  🟡 >2 TB"
+            elif total >= 1000: warn = "  🟢 >1 TB"
+            lines.append(f"\n📅 Текущий месяц: {total} GB{warn}")
+    else:
+        lines.append("\n📦 Месячный трафик: vnstat ещё собирает данные,\n   вернитесь через час.")
+
+    # ── Пики скорости ──────────────────────────────────────────────────────────
+    if day:
+        lines.append(f"\n📅 Пик сегодня ({day.get('date', '—')}):")
+        lines.append(f"   ↓{day.get('rx', 0)} ↑{day.get('tx', 0)} Mbit/s")
+
+    if allp:
+        lines.append(f"\n🏆 Абс. пик скорости:")
+        lines.append(f"   ↓{allp.get('rx', 0)} ↑{allp.get('tx', 0)} Mbit/s")
+
+    if top:
+        lines.append(f"\n🔝 Топ-5 минут по нагрузке:")
+        for dt, rx, tx in top:
+            lines.append(f"   {dt}  ↓{rx} ↑{tx}")
+    elif not peak:
+        lines.append("\n⏳ Замеры скорости идут каждую минуту.")
+
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔄 Обновить", callback_data="bandwidth")],
+        [InlineKeyboardButton("◀️ Статус",   callback_data="status")],
+        [InlineKeyboardButton("◀️ В меню",   callback_data="back")],
+    ])
+    await query.edit_message_text("\n".join(lines), reply_markup=kb)
+
 # ── Бэкап ──────────────────────────────────────────────────────────────────────
 async def do_backup(query):
     os.makedirs(BACKUP_DIR, exist_ok=True)
@@ -553,6 +810,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "restart_awg" and is_admin:
         await query.edit_message_text("⚡ Перезапускаю AWG...\n\nVPN будет недоступен ~5 секунд.")
         subprocess.Popen(["systemctl", "restart", f"awg-quick@{AWG_IFACE}"])
+    elif data == "bandwidth" and is_admin:
+        await show_bandwidth(query)
     elif data == "cleanup" and is_admin:
         await do_cleanup(query)
     elif data == "backup" and is_admin:
@@ -885,7 +1144,8 @@ async def show_status(query):
     is_admin = (query.from_user.id == ADMIN_ID)
     kb_rows = [[InlineKeyboardButton("🔄 Перезапустить бота", callback_data="restart_bot")]]
     if is_admin:
-        kb_rows.append([InlineKeyboardButton("⚡ Перезапустить AWG", callback_data="restart_awg")])
+        kb_rows.append([InlineKeyboardButton("⚡ Перезапустить AWG",  callback_data="restart_awg")])
+        kb_rows.append([InlineKeyboardButton("📈 Трафик / пики",      callback_data="bandwidth")])
     kb_rows.append([InlineKeyboardButton("◀️ В меню", callback_data="back")])
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb_rows))
 
@@ -1293,6 +1553,8 @@ def main():
 
     # Проверка напоминания о техобслуживании — раз в сутки
     app.job_queue.run_repeating(maintenance_reminder, interval=86400, first=60)
+    # Мониторинг трафика — раз в минуту
+    app.job_queue.run_repeating(bw_monitor_job, interval=60, first=10)
 
     logger.info(f"Бот запущен. Admin ID: {ADMIN_ID}")
     print(f"\n\033[0;32m✓ Бот запущен! Admin ID: {ADMIN_ID}\033[0m\n")
