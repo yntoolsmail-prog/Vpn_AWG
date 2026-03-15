@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Version: 1.7
+# Version: 1.8
 import os, subprocess, logging, json, zlib, base64, struct, time, tarfile, tempfile
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -343,11 +343,11 @@ def save_bw_peak(data: dict):
         pass
 
 async def bw_monitor_job(context: ContextTypes.DEFAULT_TYPE):
-    """Job: раз в минуту замеряет скорость и пишет лог + обновляет пики"""
+    """Job: каждые 5 секунд замеряет скорость, обновляет пики.
+    В лог пишет раз в минуту чтобы не раздувать файл."""
     iface = _get_host_iface()
     now   = int(time.time())
 
-    # Читаем предыдущее состояние из context.bot_data
     prev = context.bot_data.get("bw_prev")
     r2, t2 = _read_iface_bytes(iface)
 
@@ -357,19 +357,7 @@ async def bw_monitor_job(context: ContextTypes.DEFAULT_TYPE):
             rx_mbit = round((r2 - prev["rx"]) * 8 / 1_000_000 / dt, 2)
             tx_mbit = round((t2 - prev["tx"]) * 8 / 1_000_000 / dt, 2)
 
-            # Пишем в лог
-            try:
-                with open(BW_LOG_FILE, "a") as f:
-                    f.write(f"{time.strftime('%Y-%m-%d %H:%M')} RX={rx_mbit} TX={tx_mbit}\n")
-                # Обрезаем лог — держим только последние 10080 строк (7 дней по минуте)
-                lines = open(BW_LOG_FILE).readlines()
-                if len(lines) > 10080:
-                    with open(BW_LOG_FILE, "w") as f:
-                        f.writelines(lines[-10080:])
-            except:
-                pass
-
-            # Обновляем пики
+            # Пики обновляем при каждом замере (каждые 5 сек) — не теряем всплески
             peak = load_bw_peak()
             today = time.strftime("%Y-%m-%d")
             day_peak = peak.get("day", {})
@@ -384,6 +372,25 @@ async def bw_monitor_job(context: ContextTypes.DEFAULT_TYPE):
 
             save_bw_peak({"day": day_peak, "all": all_peak,
                           "last": {"rx": rx_mbit, "tx": tx_mbit, "ts": now}})
+
+            # В лог пишем раз в минуту — накапливаем максимум за окно
+            minute_max = context.bot_data.get("bw_minute_max", {"rx": 0, "tx": 0, "ts": now})
+            if rx_mbit > minute_max["rx"]: minute_max["rx"] = rx_mbit
+            if tx_mbit > minute_max["tx"]: minute_max["tx"] = tx_mbit
+            context.bot_data["bw_minute_max"] = minute_max
+
+            if now - minute_max["ts"] >= 60:
+                try:
+                    with open(BW_LOG_FILE, "a") as f:
+                        f.write(f"{time.strftime('%Y-%m-%d %H:%M')} "
+                                f"RX={minute_max['rx']} TX={minute_max['tx']}\n")
+                    lines = open(BW_LOG_FILE).readlines()
+                    if len(lines) > 10080:
+                        with open(BW_LOG_FILE, "w") as f:
+                            f.writelines(lines[-10080:])
+                except:
+                    pass
+                context.bot_data["bw_minute_max"] = {"rx": 0, "tx": 0, "ts": now}
 
     context.bot_data["bw_prev"] = {"rx": r2, "tx": t2, "ts": now}
 
@@ -482,7 +489,164 @@ def get_bw_top_fixed(n: int = 5) -> list[tuple[str, float, float]]:
     except:
         return []
 
-async def show_bandwidth(query):
+def get_bw_histogram() -> dict | None:
+    """Читает лог и строит распределение по диапазонам скорости (RX+TX суммарно)"""
+    buckets = [
+        (0,   50,  "0–50"),
+        (50,  100, "50–100"),
+        (100, 150, "100–150"),
+        (150, 200, "150–200"),
+        (200, 300, "200–300"),
+        (300, 400, "300–400"),
+        (400, 500, "400–500"),
+        (500, None,"500+"),
+    ]
+    counts = [0] * len(buckets)
+    total  = 0
+    try:
+        for line in open(BW_LOG_FILE).readlines():
+            parts = line.strip().split()
+            if len(parts) == 4:
+                try:
+                    rx = float(parts[2].split("=")[1])
+                    tx = float(parts[3].split("=")[1])
+                    val = rx + tx
+                    total += 1
+                    for i, (lo, hi, _) in enumerate(buckets):
+                        if hi is None or val < hi:
+                            counts[i] += 1
+                            break
+                except:
+                    pass
+    except:
+        return None
+    if total == 0:
+        return None
+    return {"buckets": buckets, "counts": counts, "total": total}
+
+def fmt_histogram(hist: dict) -> list[str]:
+    """Форматирует гистограмму для вывода в Telegram"""
+    lines = ["\n📊 Распределение нагрузки (мин/сут, RX+TX):"]
+    buckets = hist["buckets"]
+    counts  = hist["counts"]
+    total   = hist["total"]
+    bar_max = 12  # максимальная длина полоски
+
+    for i, (lo, hi, label) in enumerate(buckets):
+        cnt  = counts[i]
+        if cnt == 0:
+            continue
+        pct  = cnt / total * 100
+        mins_per_day = cnt / max(total / 1440, 1)  # приводим к минутам в сутки
+        bar_len = max(1, round(pct / 100 * bar_max)) if pct > 0 else 0
+        bar  = "█" * bar_len
+
+        # Цветовой маркер по диапазону
+        if lo >= 500:   icon = "🔴"
+        elif lo >= 300: icon = "🟠"
+        elif lo >= 200: icon = "🟡"
+        elif lo >= 100: icon = "🟢"
+        else:           icon = "⚪"
+
+        lines.append(
+            f"{icon} {label:>8} Mbit/s  {bar:<{bar_max}}  "
+            f"{pct:4.1f}%  ~{mins_per_day:.0f} мин/сут"
+        )
+    lines.append(f"   Всего замеров: {total} (~{total//1440} сут данных)")
+    return lines
+
+def get_bw_histogram_for(lines_data: list[str]) -> dict | None:
+    """Строит гистограмму из переданных строк лога"""
+    buckets = [
+        (0,   50,  "0–50  "),
+        (50,  100, "50–100"),
+        (100, 150, "100–150"),
+        (150, 200, "150–200"),
+        (200, 300, "200–300"),
+        (300, 400, "300–400"),
+        (400, 500, "400–500"),
+        (500, None,"500+  "),
+    ]
+    counts = [0] * len(buckets)
+    total  = 0
+    for line in lines_data:
+        parts = line.strip().split()
+        if len(parts) == 4:
+            try:
+                rx  = float(parts[2].split("=")[1])
+                tx  = float(parts[3].split("=")[1])
+                val = rx + tx
+                total += 1
+                for i, (lo, hi, _) in enumerate(buckets):
+                    if hi is None or val < hi:
+                        counts[i] += 1
+                        break
+            except:
+                pass
+    if total == 0:
+        return None
+    return {"buckets": buckets, "counts": counts, "total": total}
+
+def get_bw_histogram(period_days: int = 0) -> dict | None:
+    """period_days=0 — всё время, иначе последние N дней"""
+    try:
+        all_lines = open(BW_LOG_FILE).readlines()
+    except:
+        return None
+    if period_days > 0:
+        cutoff = time.strftime(
+            "%Y-%m-%d",
+            time.localtime(time.time() - period_days * 86400)
+        )
+        all_lines = [l for l in all_lines if l[:10] >= cutoff]
+    return get_bw_histogram_for(all_lines)
+
+def get_log_days() -> list[str]:
+    """Возвращает отсортированный список уникальных дат в логе"""
+    days = set()
+    try:
+        for line in open(BW_LOG_FILE).readlines():
+            parts = line.strip().split()
+            if len(parts) == 4:
+                days.add(parts[0])
+    except:
+        pass
+    return sorted(days)
+
+def get_bw_histogram_day(date_str: str) -> dict | None:
+    """Гистограмма за конкретный день (YYYY-MM-DD)"""
+    try:
+        lines = [l for l in open(BW_LOG_FILE).readlines()
+                 if l.startswith(date_str)]
+    except:
+        return None
+    return get_bw_histogram_for(lines)
+
+def fmt_histogram(hist: dict, period_label: str = "") -> list[str]:
+    """Форматирует гистограмму для вывода в Telegram"""
+    header = f"\n📊 Распределение нагрузки"
+    if period_label:
+        header += f" ({period_label})"
+    header += ":"
+    lines  = [header]
+    bar_max = 10
+    for i, (lo, hi, label) in enumerate(hist["buckets"]):
+        cnt = hist["counts"][i]
+        if cnt == 0:
+            continue
+        pct  = cnt / hist["total"] * 100
+        mins = cnt  # каждая запись = 1 минута
+        bar  = "█" * max(1, round(pct / 100 * bar_max))
+        if lo >= 500:   icon = "🔴"
+        elif lo >= 300: icon = "🟠"
+        elif lo >= 200: icon = "🟡"
+        elif lo >= 100: icon = "🟢"
+        else:           icon = "⚪"
+        lines.append(f"{icon} {label} {bar:<{bar_max}}  {pct:4.1f}%  {mins} мин")
+    lines.append(f"   Записей: {hist['total']}")
+    return lines
+
+async def show_bandwidth(query, period_days: int = 0):
     """Экран статистики трафика для админа"""
     iface = _get_host_iface()
     peak  = load_bw_peak()
@@ -491,7 +655,6 @@ async def show_bandwidth(query):
     allp  = peak.get("all", {})
     top   = get_bw_top_fixed(5)
 
-    # Текущая скорость — быстрый замер за 1 сек
     r1, t1 = _read_iface_bytes(iface)
     time.sleep(1)
     r2, t2 = _read_iface_bytes(iface)
@@ -503,23 +666,18 @@ async def show_bandwidth(query):
         f"🌐 Интерфейс: {iface}",
         f"⚡ Сейчас: ↓{cur_rx} ↑{cur_tx} Mbit/s",
     ]
-
     if last:
         last_time = time.strftime("%H:%M", time.localtime(last.get("ts", 0)))
         lines.append(f"🕐 Замер {last_time}: ↓{last.get('rx', 0)} ↑{last.get('tx', 0)} Mbit/s")
 
-    # ── Месячный трафик из vnstat ──────────────────────────────────────────────
     monthly = get_vnstat_monthly()
     if monthly:
         lines.append(f"\n📦 Трафик по месяцам (↓вх + ↑исх = итого):")
         for m in monthly:
             lines.append(f"   {m['label']}  ↓{m['rx_gb']} + ↑{m['tx_gb']} = {m['total_gb']} GB")
-        # Текущий месяц отдельно с прогресс-баром
         cur = monthly[-1]
-        cur_label = time.strftime("%Y-%m")
-        if cur["label"] == cur_label:
+        if cur["label"] == time.strftime("%Y-%m"):
             total = cur["total_gb"]
-            # Типичные лимиты хостеров: подсказка если > 1 TB
             warn = ""
             if total >= 4000:   warn = "  🔴 >4 TB!"
             elif total >= 3000: warn = "  🟠 >3 TB"
@@ -527,30 +685,105 @@ async def show_bandwidth(query):
             elif total >= 1000: warn = "  🟢 >1 TB"
             lines.append(f"\n📅 Текущий месяц: {total} GB{warn}")
     else:
-        lines.append("\n📦 Месячный трафик: vnstat ещё собирает данные,\n   вернитесь через час.")
+        lines.append("\n📦 Месячный трафик: vnstat ещё собирает данные.")
 
-    # ── Пики скорости ──────────────────────────────────────────────────────────
     if day:
         lines.append(f"\n📅 Пик сегодня ({day.get('date', '—')}):")
         lines.append(f"   ↓{day.get('rx', 0)} ↑{day.get('tx', 0)} Mbit/s")
-
     if allp:
         lines.append(f"\n🏆 Абс. пик скорости:")
         lines.append(f"   ↓{allp.get('rx', 0)} ↑{allp.get('tx', 0)} Mbit/s")
-
     if top:
         lines.append(f"\n🔝 Топ-5 минут по нагрузке:")
         for dt, rx, tx in top:
             lines.append(f"   {dt}  ↓{rx} ↑{tx}")
-    elif not peak:
-        lines.append("\n⏳ Замеры скорости идут каждую минуту.")
+
+    period_label = {0: "всё время", 7: "7 дней", 30: "30 дней"}.get(period_days, f"{period_days} дней")
+    hist = get_bw_histogram(period_days)
+    if hist:
+        lines += fmt_histogram(hist, period_label)
+    else:
+        lines.append("\n📊 Гистограмма: данных пока нет, накапливается...")
+
+    # Кнопки периода — подсвечиваем активный
+    def p(label, days):
+        mark = "✅ " if days == period_days else ""
+        return InlineKeyboardButton(f"{mark}{label}", callback_data=f"bw_period_{days}")
 
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔄 Обновить", callback_data="bandwidth")],
-        [InlineKeyboardButton("◀️ Статус",   callback_data="status")],
-        [InlineKeyboardButton("◀️ В меню",   callback_data="back")],
+        [p("Всё время", 0), p("30 дней", 30), p("7 дней", 7)],
+        [InlineKeyboardButton("📅 По дням",      callback_data="bw_days_0")],
+        [InlineKeyboardButton("🗑 Сбросить пики", callback_data="bw_reset_ask")],
+        [InlineKeyboardButton("🔄 Обновить",      callback_data=f"bw_period_{period_days}")],
+        [InlineKeyboardButton("◀️ Статус",        callback_data="status")],
+        [InlineKeyboardButton("◀️ В меню",        callback_data="back")],
     ])
     await query.edit_message_text("\n".join(lines), reply_markup=kb)
+
+async def show_bw_days(query, page: int = 0):
+    """Гистограмма по конкретному дню с листалкой"""
+    days = get_log_days()
+    if not days:
+        await query.edit_message_text(
+            "📊 Данных по дням пока нет.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("◀️ Назад", callback_data="bandwidth")
+            ]])
+        )
+        return
+
+    # page=0 — последний день, листаем назад
+    total_days = len(days)
+    idx = total_days - 1 - page
+    idx = max(0, min(idx, total_days - 1))
+    date_str = days[idx]
+
+    hist = get_bw_histogram_day(date_str)
+    lines = [f"📅 Статистика за {date_str}"]
+    if hist:
+        lines += fmt_histogram(hist)
+    else:
+        lines.append("Нет данных за этот день.")
+
+    has_prev = idx > 0            # есть более ранние дни
+    has_next = idx < total_days - 1  # есть более поздние дни
+
+    nav = []
+    if has_prev:
+        nav.append(InlineKeyboardButton("◀️ Раньше", callback_data=f"bw_days_{page + 1}"))
+    nav.append(InlineKeyboardButton(f"{idx + 1}/{total_days}", callback_data="noop"))
+    if has_next:
+        nav.append(InlineKeyboardButton("Позже ▶️", callback_data=f"bw_days_{page - 1}"))
+
+    kb = InlineKeyboardMarkup([
+        nav,
+        [InlineKeyboardButton("◀️ Назад", callback_data="bandwidth")],
+    ])
+    await query.edit_message_text("\n".join(lines), reply_markup=kb)
+
+async def show_bw_reset_ask(query):
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Да, сбросить",  callback_data="bw_reset_confirm")],
+        [InlineKeyboardButton("❌ Отмена",         callback_data="bandwidth")],
+    ])
+    await query.edit_message_text(
+        "🗑 Сброс пиков скорости\n\n"
+        "Будут обнулены:\n"
+        "• Абсолютный пик скорости\n"
+        "• Пик сегодняшнего дня\n\n"
+        "Лог и месячная статистика vnstat не затрагиваются.",
+        reply_markup=kb
+    )
+
+async def do_bw_reset(query):
+    peak = load_bw_peak()
+    peak["all"] = {"rx": 0, "tx": 0}
+    peak["day"]  = {}
+    save_bw_peak(peak)
+    await query.answer("✅ Пики сброшены", show_alert=False)
+    await show_bandwidth(query)
+
+
 
 # ── Бэкап ──────────────────────────────────────────────────────────────────────
 async def do_backup(query):
@@ -812,6 +1045,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         subprocess.Popen(["systemctl", "restart", f"awg-quick@{AWG_IFACE}"])
     elif data == "bandwidth" and is_admin:
         await show_bandwidth(query)
+    elif data.startswith("bw_period_") and is_admin:
+        await show_bandwidth(query, int(data.split("_")[2]))
+    elif data.startswith("bw_days_") and is_admin:
+        await show_bw_days(query, int(data.split("_")[2]))
+    elif data == "bw_reset_ask" and is_admin:
+        await show_bw_reset_ask(query)
+    elif data == "bw_reset_confirm" and is_admin:
+        await do_bw_reset(query)
+    elif data == "noop":
+        await query.answer()
     elif data == "cleanup" and is_admin:
         await do_cleanup(query)
     elif data == "backup" and is_admin:
@@ -1553,8 +1796,8 @@ def main():
 
     # Проверка напоминания о техобслуживании — раз в сутки
     app.job_queue.run_repeating(maintenance_reminder, interval=86400, first=60)
-    # Мониторинг трафика — раз в минуту
-    app.job_queue.run_repeating(bw_monitor_job, interval=60, first=10)
+    # Мониторинг трафика — каждые 5 секунд (пики), в лог раз в минуту
+    app.job_queue.run_repeating(bw_monitor_job, interval=5, first=10)
 
     logger.info(f"Бот запущен. Admin ID: {ADMIN_ID}")
     print(f"\n\033[0;32m✓ Бот запущен! Admin ID: {ADMIN_ID}\033[0m\n")
