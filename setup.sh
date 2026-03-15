@@ -3,7 +3,7 @@
 # AmneziaWG + Telegram Bot — Установщик
 # Использование: bash <(curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/setup.sh)
 # =============================================================================
-# Version: 1.6
+# Version: 1.7
 
 set -e
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
@@ -615,9 +615,20 @@ else
     err "Не удалось установить python-telegram-bot."
 fi
 
+# ── Шаг 10.5: Мониторинг трафика ─────────────────────────────────────────────
+log "Установка vnstat (статистика трафика)..."
+apt-get install -y -qq vnstat
+systemctl enable vnstat --now 2>/dev/null || true
+# Регистрируем основной интерфейс в vnstat если ещё не добавлен
+HOST_IFACE=$(ip route get 8.8.8.8 2>/dev/null | awk '/dev/{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -1)
+HOST_IFACE=${HOST_IFACE:-eth0}
+vnstat -i "$HOST_IFACE" --add 2>/dev/null || true
+# Создаём лог-файл для поминутных замеров бота
+touch /var/log/awg-bw.log
+chmod 644 /var/log/awg-bw.log
+info "Мониторинг трафика настроен (интерфейс: ${HOST_IFACE})"
+
 # ── Шаг 11: Настройка бота ───────────────────────────────────────────────────
-echo ""
-echo -e "${CYAN}${BOLD}Настройка Telegram бота${NC}"
 echo ""
 echo -e "  1. Найдите ${YELLOW}@BotFather${NC} в Telegram"
 echo -e "  2. Напишите ${YELLOW}/newbot${NC} и следуйте инструкциям"
