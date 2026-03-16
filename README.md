@@ -73,9 +73,9 @@ bash /root/vpn.sh
 
 **Управление сервисами:**
 ```bash
-systemctl status awg-bot       # статус бота
-systemctl restart awg-bot      # перезапуск бота
-journalctl -u awg-bot -f       # логи бота в реальном времени
+systemctl status awg-bot          # статус бота
+systemctl restart awg-bot         # перезапуск бота
+journalctl -u awg-bot -f          # логи бота в реальном времени
 systemctl status awg-quick@awg0   # статус AWG интерфейса
 ```
 
@@ -168,3 +168,29 @@ bash /root/update.sh          # обновить вручную прямо се�
 5. Нажать **Commit changes**
 
 </details>
+
+---
+
+## Дополнение — прокси для Telegram и WhatsApp
+
+Если нужны прокси для обхода блокировок Telegram и WhatsApp (MTProxy, SOCKS5, WhatsApp прокси) — смотри связанный репозиторий:
+
+**[Proxy-Telegram-Whatsapp](https://github.com/yntoolsmail-prog/Proxy-Telegram-Whatsapp)** — устанавливается отдельно и может встраиваться в этого бота как аддон (кнопка 📡 Прокси появится в меню администратора).
+
+```bash
+bash <(curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Proxy-Telegram-Whatsapp/main/setup_proxy.sh)
+```
+
+---
+
+## Благодарности
+
+Проект построен на следующих открытых решениях:
+
+- [AmneziaWG](https://github.com/amnezia-vpn/amneziawg-linux-kernel-module) — форк WireGuard с обфускацией трафика
+- [Amnezia VPN](https://github.com/amnezia-vpn/amnezia-client) — клиентское приложение с поддержкой AmneziaWG
+- [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot) — библиотека для Telegram Bot API (LGPLv3)
+- [vnstat](https://humdi.net/vnstat/) — мониторинг сетевого трафика (GPLv2)
+- [qrencode](https://fukuchi.org/works/qrencode/) — генерация QR-кодов (LGPLv2.1)
+
+Код в этом репозитории распространяется под лицензией [MIT](LICENSE).
