@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Version: 1.9
-import os, subprocess, logging, json, zlib, base64, struct, time, tarfile, tempfile
+import os, subprocess, logging, json, zlib, base64, struct, time, tarfile, tempfile, shutil
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
@@ -1106,10 +1106,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await do_cleanup(query)
     elif data == "backup" and is_admin:
         await do_backup(query)
-    elif data == "restore" and is_admin:
-        await start_restore(query)
-    elif data == "restore_cancel" and is_admin:
-        await query.edit_message_text("❌ Восстановление отменено.", reply_markup=back_kb())
     elif data == "maintenance" and is_admin:
         await show_maintenance(query)
     elif data == "maint_upgrade" and is_admin:
@@ -1465,8 +1461,10 @@ async def do_cleanup(query):
 # ВОССТАНОВЛЕНИЕ ИЗ БЭКАПА
 # ══════════════════════════════════════════════════════════════════════════════
 
-async def start_restore(query):
+async def start_restore(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Шаг 1 — предупреждение и запрос файла"""
+    query = update.callback_query
+    await query.answer()
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("❌ Отмена", callback_data="restore_cancel")],
     ])
@@ -1480,6 +1478,18 @@ async def start_restore(query):
         reply_markup=kb,
         parse_mode="Markdown"
     )
+    return WAITING_RESTORE_FILE
+
+
+async def cancel_restore(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отмена восстановления через кнопку"""
+    query = update.callback_query
+    await query.answer()
+    tmp_path = context.user_data.pop("restore_path", None)
+    if tmp_path and os.path.exists(tmp_path):
+        os.remove(tmp_path)
+    await query.edit_message_text("❌ Восстановление отменено.", reply_markup=back_kb())
+    return ConversationHandler.END
 
 async def receive_restore_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Шаг 2 — получаем файл, показываем что внутри и просим подтверждение"""
@@ -1579,7 +1589,15 @@ async def confirm_restore(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.message.reply_text("⏳ Восстанавливаю конфиги...")
 
-    # Распаковываем бэкап
+    # 1. Останавливаем AWG — PostDown почистит iptables по живому конфигу
+    subprocess.run(["systemctl", "stop", f"awg-quick@{AWG_IFACE}"])
+
+    # 2. Чистим clients/ чтобы не осталось мусора от старых клиентов
+    if os.path.exists(CLIENTS_DIR):
+        shutil.rmtree(CLIENTS_DIR)
+    os.makedirs(CLIENTS_DIR)
+
+    # 3. Распаковываем бэкап
     try:
         with tarfile.open(tmp_path, "r:gz") as tar:
             tar.extractall("/etc/amnezia/amneziawg/")
@@ -1598,10 +1616,10 @@ async def confirm_restore(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
-    # Перезапускаем AWG и бота
+    # 4. Поднимаем AWG с новым конфигом, перезапускаем бота
     subprocess.Popen(
         ["bash", "-c",
-         f"sleep 2 && systemctl restart awg-quick@{AWG_IFACE} && systemctl restart awg-bot"],
+         f"sleep 2 && systemctl start awg-quick@{AWG_IFACE} && systemctl restart awg-bot"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
     return ConversationHandler.END
@@ -1896,9 +1914,13 @@ def main():
             WAITING_RESTORE_FILE: [
                 MessageHandler(filters.Document.ALL, receive_restore_file),
                 CallbackQueryHandler(confirm_restore, pattern="^restore_confirm$"),
+                CallbackQueryHandler(cancel_restore, pattern="^restore_cancel$"),
             ],
         },
-        fallbacks=[CommandHandler("cancel", cancel)],
+        fallbacks=[
+            CommandHandler("cancel", cancel),
+            CallbackQueryHandler(cancel_restore, pattern="^restore_cancel$"),
+        ],
         per_chat=True,
         per_message=False,
         allow_reentry=True,
