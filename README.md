@@ -23,9 +23,20 @@ AmneziaWG нативно в kernelspace (300+ мбит) с управление�
 
 ## Установка
 
+> **⚠️ Тестовая ветка** — установка идёт с ветки `claude/review-project-files-v3BE8`:
+
+```bash
+bash <(curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/claude/review-project-files-v3BE8/setup.sh)
+```
+
+<details>
+<summary>Установка со стабильной ветки main</summary>
+
 ```bash
 bash <(curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/setup.sh)
 ```
+
+</details>
 
 Установщик автоматически:
 1. Проверит и при необходимости обновит ядро
@@ -35,6 +46,37 @@ bash <(curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/s
 5. Установит vnstat для мониторинга трафика
 6. Установит Telegram бота и настроит автозапуск
 7. Настроит автообновление через cron
+
+---
+
+## Переключение существующей установки на тестовую ветку
+
+Если сервер уже установлен с ветки `main` — выполни одну команду чтобы переориентировать его на тестовую ветку:
+
+```bash
+BRANCH="claude/review-project-files-v3BE8"
+RAW="https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/${BRANCH}"
+curl -s "${RAW}/bot.py"  -o /root/bot.py
+curl -s "${RAW}/vpn.sh" -o /root/vpn.sh && chmod +x /root/vpn.sh
+sed -i "s|/Vpn_AWG/main|/Vpn_AWG/${BRANCH}|g; s|commits/main|commits/${BRANCH}|g" /root/update.sh
+systemctl restart awg-bot && echo "Готово — ветка переключена на ${BRANCH}"
+```
+
+Что делает команда:
+1. Скачивает `bot.py` и `vpn.sh` с тестовой ветки
+2. Обновляет `/root/update.sh` — автообновление теперь тоже тянет с тестовой ветки
+3. Перезапускает бота
+
+**Вернуться обратно на main:**
+```bash
+BRANCH="main"
+RAW="https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/${BRANCH}"
+OLD="claude/review-project-files-v3BE8"
+curl -s "${RAW}/bot.py"  -o /root/bot.py
+curl -s "${RAW}/vpn.sh" -o /root/vpn.sh && chmod +x /root/vpn.sh
+sed -i "s|/Vpn_AWG/${OLD}|/Vpn_AWG/${BRANCH}|g; s|commits/${OLD}|commits/${BRANCH}|g" /root/update.sh
+systemctl restart awg-bot && echo "Готово — ветка переключена на main"
+```
 
 ---
 
