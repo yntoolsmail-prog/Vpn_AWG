@@ -80,16 +80,29 @@ WAITING_DEVICE_NAME   = 11
 WAITING_RESTORE_FILE  = 12
 
 # ── Пользователи ───────────────────────────────────────────────────────────────
+_users_cache: dict | None = None
+_users_cache_ts: float = 0.0
+_USERS_CACHE_TTL: float = 5.0  # секунд
+
 def load_users() -> dict:
+    global _users_cache, _users_cache_ts
+    now = time.monotonic()
+    if _users_cache is not None and (now - _users_cache_ts) < _USERS_CACHE_TTL:
+        return _users_cache
     try:
         with open(USERS_FILE) as f:
-            return json.load(f)
+            _users_cache = json.load(f)
     except:
-        return {"approved": {}, "pending": {}}
+        _users_cache = {"approved": {}, "pending": {}}
+    _users_cache_ts = now
+    return _users_cache
 
 def save_users(data: dict):
+    global _users_cache, _users_cache_ts
     with open(USERS_FILE, "w") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
+    _users_cache = data
+    _users_cache_ts = time.monotonic()
 
 def is_approved(user_id: int) -> bool:
     if user_id == ADMIN_ID:
