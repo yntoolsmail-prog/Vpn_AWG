@@ -63,6 +63,9 @@ AWG_CONF      = f"/etc/amnezia/amneziawg/{AWG_IFACE}.conf"
 PRIMARY_DNS   = srv.get("PRIMARY_DNS", "1.1.1.1")
 SECONDARY_DNS = srv.get("SECONDARY_DNS", "1.0.0.1")
 TZ            = srv.get("TIMEZONE", "UTC")
+# Эндпоинты: если домен не задан — используем IP
+SERVER_ENDPOINT        = srv.get("SERVER_ENDPOINT", "") or SERVER_IP
+SERVER_ENDPOINT_BACKUP = srv.get("SERVER_ENDPOINT_BACKUP", "")
 
 # Применяем часовой пояс для всего процесса
 os.environ["TZ"] = TZ
@@ -390,7 +393,8 @@ def gen_obfs() -> dict:
         "H4":   srv.get("H4",   "4"),
     }
 
-def make_wg_conf(priv, ip, psk, obfs) -> str:
+def make_wg_conf(priv, ip, psk, obfs, endpoint: str = None, allowed_ips: str = "0.0.0.0/0") -> str:
+    ep = endpoint or SERVER_ENDPOINT
     return "\n".join([
         "[Interface]",
         f"PrivateKey = {priv}", f"Address = {ip}/32",
@@ -399,7 +403,7 @@ def make_wg_conf(priv, ip, psk, obfs) -> str:
         f"S1 = {obfs['S1']}", f"S2 = {obfs['S2']}",
         f"H1 = {obfs['H1']}", f"H2 = {obfs['H2']}", f"H3 = {obfs['H3']}", f"H4 = {obfs['H4']}",
         "", "[Peer]", f"PublicKey = {SERVER_PUBLIC}", f"PresharedKey = {psk}",
-        f"Endpoint = {SERVER_IP}:{SERVER_PORT}", "AllowedIPs = 0.0.0.0/0", "PersistentKeepalive = 25",
+        f"Endpoint = {ep}:{SERVER_PORT}", f"AllowedIPs = {allowed_ips}", "PersistentKeepalive = 25",
     ]) + "\n"
 
 def make_vpn_link(priv, pub, ip, psk, obfs, name) -> str:
@@ -454,29 +458,40 @@ async def create_client(name: str, app, notify_chat_id: int = None):
         f.write(make_vpn_link(priv, pub, ip, psk, obfs, name))
 
     if notify_chat_id:
+        short = name.split(".", 1)[1] if "." in name else name
+        # Основной конфиг
         with open(conf_path, "rb") as fh:
             await app.bot.send_document(
                 chat_id=notify_chat_id,
                 document=fh,
-                filename=f"{name}.conf",
+                filename=f"{short}.conf",
                 caption=(
-                    f"✅ Устройство *{name}* добавлено\n🌐 IP: `{ip}`\n\n"
-                    f"💡 В карточке устройства можно настроить исключения — "
-                    f"сайты, которые будут работать без VPN."
+                    f"✅ Устройство *{short}* добавлено\n"
+                    f"🌐 Endpoint: `{SERVER_ENDPOINT}`\n\n"
+                    f"💡 QR-код и исключения сайтов — в карточке устройства."
                 ),
                 parse_mode="Markdown"
             )
-        qr_path = f"/tmp/{name}_qr.png"
-        try:
-            subprocess.run(["qrencode", "-o", qr_path, "-r", conf_path], check=True)
-            await app.bot.send_photo(
+        # Резервный конфиг — только если backup endpoint задан
+        if SERVER_ENDPOINT_BACKUP:
+            backup_content = re.sub(
+                r"^Endpoint = .+$",
+                f"Endpoint = {SERVER_ENDPOINT_BACKUP}:{SERVER_PORT}",
+                open(conf_path).read(),
+                flags=re.MULTILINE
+            ).encode()
+            await app.bot.send_document(
                 chat_id=notify_chat_id,
-                photo=open(qr_path, "rb"),
-                caption=f"📱 QR для AmneziaWG — {name}"
+                document=backup_content,
+                filename=f"{short}-backup.conf",
+                caption=(
+                    f"🔄 Резервный конфиг — *{short}*\n"
+                    f"🌐 Endpoint: `{SERVER_ENDPOINT_BACKUP}`\n\n"
+                    f"Импортируйте оба профиля в AmneziaWG. "
+                    f"Если основной не работает — переключитесь на резервный."
+                ),
+                parse_mode="Markdown"
             )
-        finally:
-            if os.path.exists(qr_path):
-                os.remove(qr_path)
 
 # ── Мониторинг трафика ─────────────────────────────────────────────────────────
 def _read_iface_bytes(iface: str) -> tuple[int, int]:
@@ -1147,9 +1162,12 @@ async def main_menu(msg, user_id: int, edit=False):
             [InlineKeyboardButton("🔧 Техобслуживание",      callback_data="maintenance")],
             [InlineKeyboardButton("📖 Инструкция",           callback_data="help")],
         ]
+        endpoint_line = f"🌐 {SERVER_ENDPOINT}:{SERVER_PORT}"
+        if SERVER_ENDPOINT_BACKUP:
+            endpoint_line += f"\n🔄 Резерв: {SERVER_ENDPOINT_BACKUP}:{SERVER_PORT}"
         text = (
             f"🔐 AmneziaWG — Панель администратора\n\n"
-            f"🖥 Сервер: {SERVER_IP}:{SERVER_PORT}\n"
+            f"{endpoint_line}\n"
             f"📱 Всего клиентов: {clients_count}\n"
             f"👥 Пользователей: {len(users['approved'])}"
             + (f"\n🔴 Ожидают одобрения: {pending_count}" if pending_count else "")
@@ -1282,6 +1300,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_help(query)
     elif data.startswith("device_"):
         await show_device(query, data[7:], user_id)
+    elif data.startswith("conf_backup_"):
+        await send_conf_backup(query, data[12:])
+    elif data.startswith("qr_backup_"):
+        await send_qr_backup(query, data[10:])
     elif data.startswith("conf_"):
         await send_conf(query, data[5:])
     elif data.startswith("qr_"):
@@ -1364,6 +1386,11 @@ async def show_device(query, name: str, user_id: int):
     kb = [
         [InlineKeyboardButton("📄 Скачать .conf",      callback_data=f"conf_{name}")],
         [InlineKeyboardButton("📱 QR-код",              callback_data=f"qr_{name}")],
+    ]
+    if SERVER_ENDPOINT_BACKUP:
+        kb.append([InlineKeyboardButton("📄 Резервный .conf", callback_data=f"conf_backup_{name}")])
+        kb.append([InlineKeyboardButton("📱 Резервный QR",    callback_data=f"qr_backup_{name}")])
+    kb += [
         [InlineKeyboardButton("📤 Поделиться кодом",   callback_data=f"share_{name}")],
         [InlineKeyboardButton("🌐 Исключения сайтов",  callback_data=f"sites_{name}")],
         [InlineKeyboardButton("🗑 Удалить",             callback_data=f"del_{name}")],
@@ -1505,6 +1532,49 @@ async def send_qr(query, name: str):
     finally:
         if os.path.exists(qr_path):
             os.remove(qr_path)
+
+async def send_conf_backup(query, name: str):
+    conf_path = f"{CLIENTS_DIR}/{name}.conf"
+    short = name.split(".", 1)[1] if "." in name else name
+    backup_content = re.sub(
+        r"^Endpoint = .+$",
+        f"Endpoint = {SERVER_ENDPOINT_BACKUP}:{SERVER_PORT}",
+        open(conf_path).read(),
+        flags=re.MULTILINE
+    ).encode()
+    await query.message.reply_document(
+        document=backup_content,
+        filename=f"{short}-backup.conf",
+        caption=f"📄 Резервный конфиг — *{short}*\n🌐 `{SERVER_ENDPOINT_BACKUP}`",
+        parse_mode="Markdown"
+    )
+
+async def send_qr_backup(query, name: str):
+    conf_path = f"{CLIENTS_DIR}/{name}.conf"
+    short     = name.split(".", 1)[1] if "." in name else name
+    qr_path   = f"/tmp/{name}_backup_qr.png"
+    try:
+        backup_content = re.sub(
+            r"^Endpoint = .+$",
+            f"Endpoint = {SERVER_ENDPOINT_BACKUP}:{SERVER_PORT}",
+            open(conf_path).read(),
+            flags=re.MULTILINE
+        )
+        tmp_conf = f"/tmp/{name}_backup.conf"
+        with open(tmp_conf, "w") as f:
+            f.write(backup_content)
+        subprocess.run(["qrencode", "-o", qr_path, "-r", tmp_conf], check=True)
+        await query.message.reply_photo(
+            photo=open(qr_path, "rb"),
+            caption=f"📱 Резервный QR — *{short}*\n🌐 `{SERVER_ENDPOINT_BACKUP}`",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        await query.message.reply_text(f"❌ Ошибка QR: {e}")
+    finally:
+        for p in [qr_path, f"/tmp/{name}_backup.conf"]:
+            if os.path.exists(p):
+                os.remove(p)
 
 async def send_share(query, name: str):
     vpn_path = f"{CLIENTS_DIR}/{name}.vpn"

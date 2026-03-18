@@ -496,6 +496,64 @@ info "Интерфейс:  $IFACE"
 info "AWG интерфейс: ${VPN_IFACE}  |  Подсеть: ${VPN_SUBNET}.x"
 echo ""
 
+# ── Домены / эндпоинты ────────────────────────────────────────────────────────
+validate_endpoint() {
+    local domain="$1"
+    # Если это IP — принимаем без проверки DNS
+    if [[ "$domain" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+        return 0
+    fi
+    # Домен — проверяем что резолвится в SERVER_IP
+    local resolved
+    resolved=$(getent hosts "$domain" 2>/dev/null | awk '{print $1}' | head -1)
+    if [[ -z "$resolved" ]]; then
+        warn "Домен $domain не резолвится. Проверьте DNS-запись."
+        return 1
+    fi
+    if [[ "$resolved" != "$SERVER_IP" ]]; then
+        warn "Домен $domain резолвится в $resolved, а не в $SERVER_IP."
+        warn "Убедитесь что A-запись домена указывает на этот сервер."
+        read -p "  Всё равно использовать этот домен? [y/N]: " force
+        [[ "$force" =~ ^[Yy]$ ]] && return 0 || return 1
+    fi
+    info "Домен $domain → $resolved ✓"
+    return 0
+}
+
+echo "  Укажите домен или оставьте пустым чтобы использовать IP ($SERVER_IP)."
+echo "  Домен должен быть настроен заранее (A-запись → $SERVER_IP)."
+echo ""
+SERVER_ENDPOINT=""
+while true; do
+    read -p "  Основной endpoint (домен или Enter для IP): " input_ep
+    input_ep="${input_ep// /}"
+    if [[ -z "$input_ep" ]]; then
+        SERVER_ENDPOINT="$SERVER_IP"
+        info "Основной endpoint: $SERVER_ENDPOINT (IP)"
+        break
+    fi
+    if validate_endpoint "$input_ep"; then
+        SERVER_ENDPOINT="$input_ep"
+        info "Основной endpoint: $SERVER_ENDPOINT"
+        break
+    fi
+done
+
+SERVER_ENDPOINT_BACKUP=""
+echo ""
+echo "  Резервный endpoint — опционально. Пользователи получат второй конфиг."
+read -p "  Резервный endpoint (домен или Enter чтобы пропустить): " input_backup
+input_backup="${input_backup// /}"
+if [[ -n "$input_backup" ]]; then
+    if validate_endpoint "$input_backup"; then
+        SERVER_ENDPOINT_BACKUP="$input_backup"
+        info "Резервный endpoint: $SERVER_ENDPOINT_BACKUP"
+    else
+        warn "Резервный endpoint пропущен."
+    fi
+fi
+echo ""
+
 # Показываем занятые порты при вводе, если есть
 if [[ ${#EXISTING_PORTS[@]} -gt 0 ]]; then
     warn "Уже занятые порты: ${EXISTING_PORTS[*]} — выберите другой!"
@@ -623,6 +681,9 @@ info "Часовой пояс: ${TIMEZONE}"
 printf "SERVER_IP=%s\nSERVER_PORT=%s\nSERVER_PUBLIC=%s\nVPN_IFACE=%s\nVPN_SUBNET=%s\n" \
     "$SERVER_IP" "$AWG_PORT" "$SERVER_PUBLIC" "$VPN_IFACE" "$VPN_SUBNET" \
     > /etc/amnezia/amneziawg/server.env
+printf "SERVER_ENDPOINT=%s\nSERVER_ENDPOINT_BACKUP=%s\n" \
+    "$SERVER_ENDPOINT" "$SERVER_ENDPOINT_BACKUP" \
+    >> /etc/amnezia/amneziawg/server.env
 printf "JC=%s\nJMIN=%s\nJMAX=%s\nS1=%s\nS2=%s\nH1=%s\nH2=%s\nH3=%s\nH4=%s\n" \
     "$JC" "$JMIN" "$JMAX" "$S1" "$S2" "$H1" "$H2" "$H3" "$H4" \
     >> /etc/amnezia/amneziawg/server.env
