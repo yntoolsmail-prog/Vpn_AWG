@@ -712,48 +712,6 @@ systemctl daemon-reload
 systemctl enable awg-bot
 systemctl start awg-bot
 
-# ── Шаг 14: Автообновление ───────────────────────────────────────────────────
-log "Настройка автообновления..."
-cat > /root/update.sh << 'EOF'
-#!/bin/bash
-RAW="https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main"
-CURRENT=$(cat /root/.bot_version 2>/dev/null || echo "none")
-LATEST=$(curl -s "https://api.github.com/repos/yntoolsmail-prog/Vpn_AWG/commits/main" | python3 -c "import sys,json; print(json.load(sys.stdin)['sha'][:7])")
-if [ "$CURRENT" != "$LATEST" ]; then
-    curl -s $RAW/bot.py -o /root/bot.py
-    curl -s $RAW/vpn.sh -o /root/vpn.sh
-    echo $LATEST > /root/.bot_version
-    systemctl restart awg-bot
-    echo "$(date) — обновлено до $LATEST" >> /var/log/awg-update.log
-fi
-EOF
-chmod +x /root/update.sh
-
-# ── Автообновление: спрашиваем пользователя ───────────────────────────────────
-echo ""
-echo -e "${CYAN}${BOLD}Автообновление bot.py и vpn.sh${NC}"
-echo ""
-echo -e "  Скрипт /root/update.sh проверяет репозиторий каждые 5 минут"
-echo -e "  и при появлении новой версии обновляет бота автоматически."
-echo -e "  Конфиги, ключи и данные клиентов ${GREEN}не затрагиваются${NC}."
-echo ""
-echo -e "  ${CYAN}1)${NC} Включить автообновление ${GREEN}(рекомендуется)${NC}"
-echo -e "  ${CYAN}2)${NC} Не включать — обновлять вручную"
-echo ""
-while true; do
-    read -p "  Ваш выбор [1]: " AU_CHOICE
-    AU_CHOICE=${AU_CHOICE:-1}
-    [[ "$AU_CHOICE" == "1" || "$AU_CHOICE" == "2" ]] && break
-    warn "Введите 1 или 2."
-done
-
-if [[ "$AU_CHOICE" == "1" ]]; then
-    (crontab -l 2>/dev/null; echo "*/5 * * * * /root/update.sh") | crontab -
-    AU_STATUS="${GREEN}активно (каждые 5 минут)${NC}"
-else
-    AU_STATUS="${YELLOW}отключено — включить: (crontab -l 2>/dev/null; echo \"*/5 * * * * /root/update.sh\") | crontab -${NC}"
-fi
-
 # ── Готово ────────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}${BOLD}══════════════════════════════════════════${NC}"
@@ -762,11 +720,19 @@ echo -e "${GREEN}${BOLD}══════════════════�
 echo ""
 info "AWG интерфейс: ${VPN_IFACE}  |  Подсеть: ${VPN_SUBNET}.x  |  Порт: ${AWG_PORT}/UDP"
 info "AWG запущен с параметрами: Jc=$JC Jmin=$JMIN Jmax=$JMAX"
-info "DNS: 1.1.1.1, 1.0.0.1 (можно изменить, см. README)"
+info "DNS: 1.1.1.1, 1.0.0.1 (можно изменить в /etc/amnezia/amneziawg/server.env)"
 info "Бот: systemctl status awg-bot"
-echo -e "${CYAN}[i]${NC} Автообновление: ${AU_STATUS}"
 echo ""
 echo -e "  Терминал: ${CYAN}bash /root/vpn.sh${NC}"
 echo -e "  Telegram: ${CYAN}напишите /start вашему боту${NC}"
 echo -e "  Логи:     ${YELLOW}journalctl -u awg-bot -f${NC}"
+echo ""
+echo -e "${CYAN}${BOLD}  Обновление бота вручную:${NC}"
+echo -e "  curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/bot.py -o /root/bot.py"
+echo -e "  curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/vpn.sh -o /root/vpn.sh"
+echo -e "  systemctl restart awg-bot"
+echo ""
+echo -e "${CYAN}${BOLD}  Обновление системы:${NC}"
+echo -e "  apt-get update && apt-get upgrade -y"
+echo -e "  systemctl restart awg-bot"
 echo ""
