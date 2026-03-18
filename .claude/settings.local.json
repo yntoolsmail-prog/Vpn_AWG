@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/tmp/plink.exe -ssh root@195.133.9.201 -pw 'R2xKUJFcxyaJ8' -hostkey \"SHA256:ESzc5dZtY4e2fBoC96OphV6ZLHg3OLdiXk0s7wTS5tc\" -batch \"ufw status verbose 2>/dev/null; iptables -L INPUT -n --line-numbers 2>/dev/null | head -30\")",
+      "Bash(/tmp/plink.exe -ssh root@195.133.9.201 -pw 'R2xKUJFcxyaJ8' -hostkey \"SHA256:ESzc5dZtY4e2fBoC96OphV6ZLHg3OLdiXk0s7wTS5tc\" -batch \"grep ''Failed password'' /var/log/auth.log 2>/dev/null | wc -l && echo ''failed attempts total'' && grep ''Failed password'' /var/log/auth.log 2>/dev/null | grep -oE ''[0-9]+\\\\.[0-9]+\\\\.[0-9]+\\\\.[0-9]+'' | sort | uniq -c | sort -rn | head -10\")",
+      "Bash(/tmp/plink.exe -ssh root@195.133.9.201 -pw 'R2xKUJFcxyaJ8' -hostkey \"SHA256:ESzc5dZtY4e2fBoC96OphV6ZLHg3OLdiXk0s7wTS5tc\" -batch \"awg showconf awg0 2>/dev/null\")",
+      "Bash(/tmp/plink.exe -ssh root@195.133.9.201 -pw 'R2xKUJFcxyaJ8' -hostkey \"SHA256:ESzc5dZtY4e2fBoC96OphV6ZLHg3OLdiXk0s7wTS5tc\" -batch \"ip link show awg0 && ip addr show awg0 && ip route show && ip rule show\")",
+      "Bash(/tmp/plink.exe -ssh root@195.133.9.201 -pw 'R2xKUJFcxyaJ8' -hostkey \"SHA256:ESzc5dZtY4e2fBoC96OphV6ZLHg3OLdiXk0s7wTS5tc\" -batch \"cat /proc/sys/net/ipv4/ip_forward && sysctl net.core.rmem_max net.core.wmem_max net.core.rmem_default net.core.wmem_default net.ipv4.tcp_rmem net.ipv4.tcp_wmem net.core.netdev_max_backlog net.ipv4.udp_mem 2>/dev/null\")",
+      "Bash(/tmp/plink.exe -ssh root@195.133.9.201 -pw 'R2xKUJFcxyaJ8' -hostkey \"SHA256:ESzc5dZtY4e2fBoC96OphV6ZLHg3OLdiXk0s7wTS5tc\" -batch \"iptables -t nat -L POSTROUTING -n -v && iptables -L FORWARD -n -v\")",
+      "Bash(/tmp/plink.exe -ssh root@195.133.9.201 -pw 'R2xKUJFcxyaJ8' -hostkey \"SHA256:ESzc5dZtY4e2fBoC96OphV6ZLHg3OLdiXk0s7wTS5tc\" -batch \"cat /root/vpn.sh\")"
+    ]
+  }
+}
