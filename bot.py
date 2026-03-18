@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Version: 1.9
-import os, subprocess, logging, json, zlib, base64, struct, time, tarfile, tempfile, shutil
+import os, subprocess, logging, json, zlib, base64, struct, time, tarfile, tempfile, shutil, socket, ipaddress, re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
@@ -78,6 +78,162 @@ logger = logging.getLogger(__name__)
 WAITING_REGISTER_NAME = 10
 WAITING_DEVICE_NAME   = 11
 WAITING_RESTORE_FILE  = 12
+
+# ── Split tunneling: база сайтов ───────────────────────────────────────────────
+SITES = {
+    "local": {
+        "name": "Локальная сеть (роутер, NAS...)", "emoji": "🏠",
+        "domains": [], "subnets": ["192.168.0.0/16"],
+    },
+    "sber": {
+        "name": "Сбербанк", "emoji": "💚",
+        "domains": ["sber.ru", "sberbank.ru", "online.sberbank.ru", "sberbank.com", "sbrf.ru"],
+    },
+    "tbank": {
+        "name": "Т-Банк (Тинькофф)", "emoji": "🟡",
+        "domains": ["tbank.ru", "tinkoff.ru", "acdn.tinkoff.ru"],
+    },
+    "alfa": {
+        "name": "Альфа-Банк", "emoji": "🔴",
+        "domains": ["alfabank.ru", "click.alfabank.ru"],
+    },
+    "vtb": {
+        "name": "ВТБ", "emoji": "🔵",
+        "domains": ["vtb.ru", "online.vtb.ru", "mb.vtb.ru"],
+    },
+    "raiffeisen": {
+        "name": "Райффайзен", "emoji": "🟠",
+        "domains": ["raiffeisen.ru", "ecom.raiffeisen.ru"],
+    },
+    "sbp": {
+        "name": "СБП / НСПК", "emoji": "⚡",
+        "domains": ["sbp.nspk.ru", "nspk.ru", "qr.nspk.ru"],
+    },
+    "ozon": {
+        "name": "Ozon", "emoji": "🔵",
+        "domains": ["ozon.ru", "static.ozon.ru", "cdn1.ozone.ru"],
+    },
+    "wildberries": {
+        "name": "Wildberries", "emoji": "🟣",
+        "domains": ["wildberries.ru", "wbstatic.net", "wbbasket.ru", "wbx-static.com"],
+    },
+    "avito": {
+        "name": "Авито", "emoji": "🟢",
+        "domains": ["avito.ru", "cdn.avito.ru", "m.avito.ru"],
+    },
+    "yandex": {
+        "name": "Яндекс (все сервисы)", "emoji": "🔴",
+        "domains": [
+            "yandex.ru", "ya.ru", "yandex.com", "yandex.net",
+            "maps.yandex.ru", "taxi.yandex.ru", "go.yandex.ru",
+            "music.yandex.ru", "storage.mds.yandex.net",
+            "market.yandex.ru", "yastatic.net", "avatars.mds.yandex.net",
+        ],
+    },
+    "kinopoisk": {
+        "name": "Кинопоиск", "emoji": "🎬",
+        "domains": ["kinopoisk.ru", "www.kinopoisk.ru"],
+    },
+    "rzd": {
+        "name": "РЖД", "emoji": "🚂",
+        "domains": ["rzd.ru", "www.rzd.ru", "pass.rzd.ru", "ticket.rzd.ru"],
+    },
+    "pochta": {
+        "name": "Почта России", "emoji": "📬",
+        "domains": ["pochta.ru", "www.pochta.ru", "tracking.pochta.ru"],
+    },
+    "delivery": {
+        "name": "Яндекс Еда / Самокат", "emoji": "🍔",
+        "domains": ["eda.yandex.ru", "eats.yandex.ru", "samokat.ru", "delivery-club.ru"],
+    },
+    "zhkh": {
+        "name": "ЖКХ / Энергосбыт", "emoji": "🏘",
+        "domains": ["mosenergosbyt.ru", "lkk.mosenergosbyt.ru", "eirc-mo.ru", "dom.gosuslugi.ru"],
+    },
+    "vk": {
+        "name": "ВКонтакте", "emoji": "💙",
+        "domains": ["vk.com", "vk.me", "userapi.com", "vkuseraudio.net", "vk-cdn.net"],
+    },
+    "ok": {
+        "name": "Одноклассники", "emoji": "🟠",
+        "domains": ["ok.ru", "www.ok.ru", "udn.odnoklassniki.ru"],
+    },
+    "hh": {
+        "name": "HeadHunter (hh.ru)", "emoji": "💼",
+        "domains": ["hh.ru", "api.hh.ru", "hhcdn.ru"],
+    },
+    "2gis": {
+        "name": "2ГИС", "emoji": "🗺",
+        "domains": ["2gis.ru", "2gis.com"],
+    },
+}
+
+CATEGORIES = {
+    "🏠 Локальная сеть":       ["local"],
+    "🏦 Банки и платежи":      ["sber", "tbank", "alfa", "vtb", "raiffeisen", "sbp"],
+    "🛒 Маркетплейсы":         ["ozon", "wildberries", "avito"],
+    "🔴 Яндекс":               ["yandex", "kinopoisk"],
+    "🚂 Транспорт и доставка": ["rzd", "pochta", "delivery"],
+    "🏘 ЖКХ":                  ["zhkh"],
+    "💬 Соцсети":              ["vk", "ok"],
+    "📦 Прочее":               ["hh", "2gis"],
+}
+
+# Всегда включены — пользователь снять не может
+DEFAULT_SELECTED = {"local"}
+
+
+def build_allowed_ips(selected_keys) -> str:
+    """Резолвит домены, вычитает IP из 0.0.0.0/0, возвращает строку AllowedIPs."""
+    excluded: set[str] = set()
+    for key in selected_keys:
+        site = SITES.get(key, {})
+        for subnet in site.get("subnets", []):
+            excluded.add(subnet)
+        for domain in site.get("domains", []):
+            try:
+                results = socket.getaddrinfo(domain, None, socket.AF_INET)
+                for r in results:
+                    excluded.add(f"{r[4][0]}/32")
+            except Exception:
+                pass
+
+    if not excluded:
+        return "0.0.0.0/0"
+
+    allowed = [ipaddress.ip_network("0.0.0.0/0")]
+    for net_str in excluded:
+        target = ipaddress.ip_network(net_str, strict=False)
+        new_allowed = []
+        for net in allowed:
+            if target.overlaps(net):
+                new_allowed.extend(net.address_exclude(target))
+            else:
+                new_allowed.append(net)
+        allowed = new_allowed
+
+    return ", ".join(
+        str(n) for n in sorted(allowed, key=lambda n: (n.network_address, n.prefixlen))
+    )
+
+
+def sites_keyboard(selected: set, device_name: str) -> InlineKeyboardMarkup:
+    rows = []
+    for cat_name, keys in CATEGORIES.items():
+        rows.append([InlineKeyboardButton(f"── {cat_name} ──", callback_data="noop")])
+        for key in keys:
+            site = SITES[key]
+            locked = key in DEFAULT_SELECTED
+            is_on  = key in selected
+            mark   = "✅" if locked else ("☑" if is_on else "☐")
+            label  = f"{mark} {site['emoji']} {site['name']}"
+            cb     = "noop" if locked else f"ts_{key}"
+            rows.append([InlineKeyboardButton(label, callback_data=cb)])
+    rows.append([
+        InlineKeyboardButton("✅ Готово",  callback_data="sites_done"),
+        InlineKeyboardButton("❌ Отмена", callback_data=f"device_{device_name}"),
+    ])
+    return InlineKeyboardMarkup(rows)
 
 # ── Пользователи ───────────────────────────────────────────────────────────────
 _users_cache: dict | None = None
@@ -303,7 +459,11 @@ async def create_client(name: str, app, notify_chat_id: int = None):
                 chat_id=notify_chat_id,
                 document=fh,
                 filename=f"{name}.conf",
-                caption=f"✅ Устройство *{name}* добавлено\n🌐 IP: `{ip}`",
+                caption=(
+                    f"✅ Устройство *{name}* добавлено\n🌐 IP: `{ip}`\n\n"
+                    f"💡 В карточке устройства можно настроить исключения — "
+                    f"сайты, которые будут работать без VPN."
+                ),
                 parse_mode="Markdown"
             )
         qr_path = f"/tmp/{name}_qr.png"
@@ -1136,6 +1296,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await do_kick_user(query, int(data[10:]))
     elif data.startswith("confirm_kick_") and is_admin:
         await confirm_kick_user(query, int(data[13:]))
+    elif data == "sites_done":
+        await apply_sites(query, user_id, context)
+    elif data.startswith("ts_"):
+        await toggle_site_handler(query, data[3:], user_id, context)
+    elif data.startswith("sites_"):
+        await show_sites_menu(query, data[6:], user_id, context)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # МОИ УСТРОЙСТВА
@@ -1196,11 +1362,12 @@ async def show_device(query, name: str, user_id: int):
     )
     back_target = "my_devices" if user_id != ADMIN_ID else "all_clients"
     kb = [
-        [InlineKeyboardButton("📄 Скачать .conf",    callback_data=f"conf_{name}")],
-        [InlineKeyboardButton("📱 QR-код",            callback_data=f"qr_{name}")],
-        [InlineKeyboardButton("📤 Поделиться кодом", callback_data=f"share_{name}")],
-        [InlineKeyboardButton("🗑 Удалить",           callback_data=f"del_{name}")],
-        [InlineKeyboardButton("◀️ Назад",             callback_data=back_target)],
+        [InlineKeyboardButton("📄 Скачать .conf",      callback_data=f"conf_{name}")],
+        [InlineKeyboardButton("📱 QR-код",              callback_data=f"qr_{name}")],
+        [InlineKeyboardButton("📤 Поделиться кодом",   callback_data=f"share_{name}")],
+        [InlineKeyboardButton("🌐 Исключения сайтов",  callback_data=f"sites_{name}")],
+        [InlineKeyboardButton("🗑 Удалить",             callback_data=f"del_{name}")],
+        [InlineKeyboardButton("◀️ Назад",               callback_data=back_target)],
     ]
     await query.edit_message_text(info, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
@@ -1822,6 +1989,108 @@ async def show_help(query):
         "• AmneziaVPN — если нужно раздельное туннелирование"
     )
     await query.edit_message_text(text, reply_markup=back_kb(), parse_mode="Markdown")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ИСКЛЮЧЕНИЯ САЙТОВ (split tunneling)
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def show_sites_menu(query, name: str, user_id: int, context):
+    user_prefix = get_user_name(user_id) + "."
+    if user_id != ADMIN_ID and not name.startswith(user_prefix):
+        await query.answer("⛔ Это не ваше устройство.", show_alert=True)
+        return
+
+    context.user_data["sites_device"]   = name
+    context.user_data["sites_selected"] = set(DEFAULT_SELECTED)
+
+    short = name.split(".", 1)[1] if "." in name else name
+    await query.edit_message_text(
+        f"🌐 Исключения сайтов для *{short}*\n\n"
+        f"Отмеченные сайты будут работать *без VPN*.\n"
+        f"🏠 Локальная сеть включена всегда.",
+        reply_markup=sites_keyboard(context.user_data["sites_selected"], name),
+        parse_mode="Markdown",
+    )
+
+
+async def toggle_site_handler(query, key: str, user_id: int, context):
+    name = context.user_data.get("sites_device")
+    if not name:
+        await query.answer("Сессия устарела, откройте меню заново.", show_alert=True)
+        return
+
+    user_prefix = get_user_name(user_id) + "."
+    if user_id != ADMIN_ID and not name.startswith(user_prefix):
+        await query.answer("⛔ Это не ваше устройство.", show_alert=True)
+        return
+
+    if key in DEFAULT_SELECTED:
+        await query.answer()
+        return
+
+    selected = context.user_data.get("sites_selected", set(DEFAULT_SELECTED))
+    if key in selected:
+        selected.discard(key)
+    else:
+        selected.add(key)
+    context.user_data["sites_selected"] = selected
+
+    short = name.split(".", 1)[1] if "." in name else name
+    await query.edit_message_text(
+        f"🌐 Исключения сайтов для *{short}*\n\n"
+        f"Отмеченные сайты будут работать *без VPN*.\n"
+        f"🏠 Локальная сеть включена всегда.",
+        reply_markup=sites_keyboard(selected, name),
+        parse_mode="Markdown",
+    )
+
+
+async def apply_sites(query, user_id: int, context):
+    name = context.user_data.get("sites_device")
+    if not name:
+        await query.answer("Сессия устарела, откройте меню заново.", show_alert=True)
+        return
+
+    user_prefix = get_user_name(user_id) + "."
+    if user_id != ADMIN_ID and not name.startswith(user_prefix):
+        await query.answer("⛔ Это не ваше устройство.", show_alert=True)
+        return
+
+    selected = context.user_data.get("sites_selected", set(DEFAULT_SELECTED))
+    conf_path = f"{CLIENTS_DIR}/{name}.conf"
+    if not os.path.exists(conf_path):
+        await query.edit_message_text("❌ Файл конфига не найден.", reply_markup=back_kb())
+        return
+
+    await query.edit_message_text("⏳ Резолвлю IP-адреса, подождите...")
+
+    allowed_ips = build_allowed_ips(selected)
+
+    with open(conf_path, "r") as f:
+        content = f.read()
+    content = re.sub(r"AllowedIPs = .+", f"AllowedIPs = {allowed_ips}", content)
+    with open(conf_path, "w") as f:
+        f.write(content)
+
+    short = name.split(".", 1)[1] if "." in name else name
+    excl_count = len(selected - DEFAULT_SELECTED)
+    with open(conf_path, "rb") as fh:
+        await query.message.reply_document(
+            document=fh,
+            filename=f"{name}.conf",
+            caption=(
+                f"✅ Исключения обновлены для *{short}*\n"
+                f"Исключено сайтов: {excl_count} (+ локальная сеть)\n\n"
+                f"⚠️ Удалите старый профиль в AmneziaWG и добавьте этот файл заново."
+            ),
+            parse_mode="Markdown",
+        )
+
+    context.user_data.pop("sites_device", None)
+    context.user_data.pop("sites_selected", None)
+
+    await show_device(query, name, user_id)
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ДОБАВЛЕНИЕ УСТРОЙСТВА (ConversationHandler)
