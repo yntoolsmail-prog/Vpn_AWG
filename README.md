@@ -121,26 +121,32 @@ systemctl restart awg-bot
 
 ## Обновление
 
-**Обновить бота и vpn.sh:**
+**Обновить все файлы бота из репозитория:**
 ```bash
-curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/bot.py -o /root/bot.py
-curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/vpn.sh -o /root/vpn.sh
-systemctl restart awg-bot
+git clone --depth=1 https://github.com/yntoolsmail-prog/Vpn_AWG.git /tmp/vpn-update \
+  && cp /tmp/vpn-update/bot.py /root/bot.py \
+  && cp /tmp/vpn-update/vpn.sh /root/vpn.sh && chmod +x /root/vpn.sh \
+  && rm -rf /tmp/vpn-update \
+  && systemctl restart awg-bot \
+  && echo "✅ Обновление завершено"
+```
+
+Конфиги, ключи и данные клиентов не затрагиваются.
+
+**Проверить текущую версию (последний коммит):**
+```bash
+git ls-remote https://github.com/yntoolsmail-prog/Vpn_AWG.git HEAD
 ```
 
 **Обновить систему:**
 ```bash
-apt-get update && apt-get upgrade -y
-systemctl restart awg-bot
+apt-get update && apt-get upgrade -y && systemctl restart awg-bot
 ```
 
 **Обновить python-telegram-bot:**
 ```bash
-pip install -U python-telegram-bot
-systemctl restart awg-bot
+pip install -U python-telegram-bot && systemctl restart awg-bot
 ```
-
-Конфиги, ключи и данные клиентов при обновлении не затрагиваются.
 
 ---
 
