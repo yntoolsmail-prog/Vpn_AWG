@@ -3,7 +3,7 @@
 # AmneziaWG + Telegram Bot — Установщик
 # Использование: bash <(curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/setup.sh)
 # =============================================================================
-# Version: 1.8
+# Version: 1.9
 
 set -e
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
@@ -723,6 +723,8 @@ vnstat -i "$HOST_IFACE" --add 2>/dev/null || true
 # Создаём лог-файл для поминутных замеров бота
 touch /var/log/awg-bw.log
 chmod 644 /var/log/awg-bw.log
+# Создаём папку для диагностических отчётов
+mkdir -p /etc/amnezia/amneziawg/diagnostics
 info "Мониторинг трафика настроен (интерфейс: ${HOST_IFACE})"
 
 # ── Шаг 12: Настройка бота ───────────────────────────────────────────────────
