@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Version: 2.0
+# Version: 2.1
 import os, subprocess, logging, json, zlib, base64, struct, time, tarfile, tempfile, shutil, socket, ipaddress, re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -78,9 +78,13 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 # Состояния ConversationHandler
-WAITING_REGISTER_NAME = 10
-WAITING_DEVICE_NAME   = 11
-WAITING_RESTORE_FILE  = 12
+WAITING_REGISTER_NAME  = 10
+WAITING_DEVICE_NAME    = 11
+WAITING_RESTORE_FILE   = 12
+WAITING_EXCL_ALLOWED   = 13   # ждём строку AllowedIPs от пользователя
+WAITING_EXCL_DOMAIN    = 14   # ждём домен для исключения
+
+IMG_BASE = "https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/.images"
 
 # ── Split tunneling: база сайтов ───────────────────────────────────────────────
 SITES = {
@@ -1302,6 +1306,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_help(query)
     elif data == "add_cancel":
         await main_menu(query, user_id, edit=True)
+    elif data == "excl_calc_cancel":
+        context.user_data.pop("excl_allowed_ips", None)
+        await query.edit_message_caption(caption="❌ Отменено.", reply_markup=None)
+    elif data == "my_devices_back":
+        await show_my_devices(query, user_id)
     elif data.startswith("device_"):
         await show_device(query, data[7:], user_id)
     # ── .conf: выбор эндпоинта ──
@@ -1389,6 +1398,7 @@ async def show_my_devices(query, user_id: int):
 
     kb = [[InlineKeyboardButton(f"📋 {name.split('.', 1)[1] if '.' in name else name}",
            callback_data=f"device_{name}")] for name in clients]
+    kb.append([InlineKeyboardButton("➕ Добавить сайт в исключения", callback_data="excl_calc")])
     kb.append([InlineKeyboardButton("◀️ В меню", callback_data="back")])
     await query.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(kb))
 
@@ -2300,6 +2310,170 @@ async def apply_sites(query, user_id: int, context):
     await do_send_conf(query, name, ep_key, allowed_ips)
 
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# КАЛЬКУЛЯТОР ИСКЛЮЧЕНИЙ САЙТОВ
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def excl_calc_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Шаг 1 — инструкция с картинками, просим вставить AllowedIPs"""
+    query = update.callback_query
+    await query.answer()
+
+    # Шаг 1 — выбрать туннель
+    await query.message.reply_photo(
+        photo=f"{IMG_BASE}/111.jpg",
+        caption=(
+            "➕ *Добавить сайт в исключения*\n\n"
+            "*Шаг 1.* Откройте AmneziaWG на своём устройстве и выберите туннель, "
+            "в который хотите внести изменения."
+        ),
+        parse_mode="Markdown"
+    )
+    # Шаг 2 — нажать редактировать
+    await query.message.reply_photo(
+        photo=f"{IMG_BASE}/222.jpg",
+        caption="*Шаг 2.* Нажмите кнопку *Редактировать* (значок карандаша).",
+        parse_mode="Markdown"
+    )
+    # Шаг 3 — скопировать AllowedIPs
+    await query.message.reply_photo(
+        photo=f"{IMG_BASE}/333.jpg",
+        caption=(
+            "*Шаг 3.* Найдите поле *AllowedIPs*, выделите и скопируйте всё его содержимое.\n\n"
+            "📋 Вставьте скопированную строку в следующем сообщении."
+        ),
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("❌ Отмена", callback_data="excl_calc_cancel")]
+        ])
+    )
+    return WAITING_EXCL_ALLOWED
+
+
+async def excl_calc_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отмена через кнопку"""
+    query = update.callback_query
+    await query.answer()
+    context.user_data.pop("excl_allowed_ips", None)
+    await query.edit_message_caption(
+        caption="❌ Отменено.",
+        reply_markup=None
+    )
+    return ConversationHandler.END
+
+
+async def excl_receive_allowed(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Шаг 2 — получаем строку AllowedIPs, просим домен"""
+    text = update.message.text.strip()
+
+    # Базовая валидация — должны быть цифры, точки, слэши, запятые
+    if not any(c.isdigit() for c in text) or "/" not in text:
+        await update.message.reply_text(
+            "❌ Это не похоже на строку AllowedIPs.\n\n"
+            "Она должна содержать IP-адреса вида `10.0.0.0/8, 172.16.0.0/12`\n\n"
+            "Попробуйте скопировать ещё раз или нажмите /cancel для отмены.",
+            parse_mode="Markdown"
+        )
+        return WAITING_EXCL_ALLOWED
+
+    context.user_data["excl_allowed_ips"] = text
+
+    await update.message.reply_text(
+        "✅ Строка получена!\n\n"
+        "*Шаг 4.* Теперь введите домен сайта который хотите исключить из VPN трафика.\n\n"
+        "Примеры:\n"
+        "`sberbank.ru`\n"
+        "`gosuslugi.ru`\n"
+        "`tbank.ru`\n\n"
+        "Просто введите домен без `http://` и без `www`.",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("❌ Отмена", callback_data="my_devices_back")]
+        ])
+    )
+    return WAITING_EXCL_DOMAIN
+
+
+async def excl_receive_domain(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Шаг 3 — получаем домен, резолвим, вычисляем новую строку"""
+    domain = update.message.text.strip().lower()
+    domain = domain.replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0]
+
+    if "." not in domain or len(domain) < 4:
+        await update.message.reply_text(
+            "❌ Неверный формат домена. Введите например: `sberbank.ru`",
+            parse_mode="Markdown"
+        )
+        return WAITING_EXCL_DOMAIN
+
+    allowed_str = context.user_data.get("excl_allowed_ips", "")
+    if not allowed_str:
+        await update.message.reply_text("❌ Сессия устарела. Начните заново.")
+        return ConversationHandler.END
+
+    await update.message.reply_text(f"⏳ Резолвлю `{domain}`...", parse_mode="Markdown")
+
+    # Резолвим домен в IP
+    try:
+        results = socket.getaddrinfo(domain, None, socket.AF_INET)
+        domain_ips = list({r[4][0] for r in results})
+    except Exception:
+        await update.message.reply_text(
+            f"❌ Не удалось определить IP для домена `{domain}`.\n\n"
+            f"Проверьте правильность написания домена.",
+            parse_mode="Markdown"
+        )
+        return WAITING_EXCL_DOMAIN
+
+    # Парсим текущие AllowedIPs
+    try:
+        allowed_nets = []
+        for part in allowed_str.split(","):
+            part = part.strip()
+            if part:
+                allowed_nets.append(ipaddress.ip_network(part, strict=False))
+    except ValueError as e:
+        await update.message.reply_text(
+            f"❌ Ошибка парсинга строки AllowedIPs: {e}\n\nПопробуйте скопировать строку заново.",
+        )
+        return WAITING_EXCL_ALLOWED
+
+    # Вычитаем IP домена из AllowedIPs
+    for ip_str in domain_ips:
+        target = ipaddress.ip_network(f"{ip_str}/32", strict=False)
+        new_nets = []
+        for net in allowed_nets:
+            if target.overlaps(net):
+                new_nets.extend(net.address_exclude(target))
+            else:
+                new_nets.append(net)
+        allowed_nets = new_nets
+
+    new_allowed = ", ".join(
+        str(n) for n in sorted(allowed_nets, key=lambda n: (n.network_address, n.prefixlen))
+    )
+
+    ip_list = ", ".join(domain_ips)
+    context.user_data.pop("excl_allowed_ips", None)
+
+    await update.message.reply_text(
+        f"✅ Готово!\n\n"
+        f"🌐 Домен `{domain}` → IP: `{ip_list}`\n\n"
+        f"*Скопируйте строку ниже и вставьте её в поле AllowedIPs вместо старого содержимого, "
+        f"затем нажмите Сохранить:*",
+        parse_mode="Markdown"
+    )
+    # Отправляем результат отдельным сообщением — удобнее копировать
+    await update.message.reply_text(
+        f"`{new_allowed}`",
+        parse_mode="Markdown"
+    )
+
+    context.user_data.pop("excl_allowed_ips", None)
+    return ConversationHandler.END
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # ДОБАВЛЕНИЕ УСТРОЙСТВА (ConversationHandler)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2510,9 +2684,28 @@ def main():
         allow_reentry=True,
     )
 
+    excl_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(excl_calc_start, pattern="^excl_calc$")],
+        states={
+            WAITING_EXCL_ALLOWED: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, excl_receive_allowed),
+                CallbackQueryHandler(excl_calc_cancel, pattern="^excl_calc_cancel$"),
+            ],
+            WAITING_EXCL_DOMAIN: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, excl_receive_domain),
+                CallbackQueryHandler(lambda u, c: (show_my_devices(u.callback_query, u.callback_query.from_user.id), ConversationHandler.END)[1], pattern="^my_devices_back$"),
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+        per_chat=True,
+        per_message=False,
+        allow_reentry=True,
+    )
+
     app.add_handler(reg_conv)
     app.add_handler(add_conv)
     app.add_handler(restore_conv)
+    app.add_handler(excl_conv)
     app.add_handler(CallbackQueryHandler(button_handler))
 
     # Проверка напоминания о техобслуживании — раз в сутки
