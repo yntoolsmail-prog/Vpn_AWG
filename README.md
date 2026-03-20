@@ -1,6 +1,7 @@
 <p align="center">
  <img src="https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/.images/Logo.png" width="30%">
 </p>
+
 # Vpn_AWG — AmneziaWG + Telegram Bot
 AmneziaWG нативно в kernelspace (300+ мбит) с управлением через Telegram бота и терминальное меню.
 <p align="center">
