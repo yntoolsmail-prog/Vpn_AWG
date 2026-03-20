@@ -1,5 +1,5 @@
 <p align="center">
- <img src="https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/.images/Logo.png" width="30%">
+ <img src="https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/.images/Logo.png" width="60%">
 </p>
 
 # Vpn_AWG — AmneziaWG + Telegram Bot
