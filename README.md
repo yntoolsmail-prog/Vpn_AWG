@@ -2,6 +2,12 @@
 
 AmneziaWG нативно в kernelspace (300+ мбит) с управлением через Telegram бота и терминальное меню.
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/.images/111.jpg" width="30%">
+  <img src="https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/.images/222.jpg" width="30%">
+  <img src="https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/.images/333.jpg" width="30%">
+</p>
+
 ## Особенности
 
 - **AWG нативно** — модуль ядра, не userspace/Go, полная скорость
