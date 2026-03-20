@@ -581,6 +581,8 @@ manage_updates() {
             2)
                 echo -e "  ${CYAN}Запускаю apt update && apt upgrade...${NC}"
                 apt-get update && apt-get upgrade -y
+                # Устанавливаем инструменты диагностики сети если нет
+                apt-get install -y mtr-tiny traceroute &>/dev/null || true
                 echo -e "${GREEN}  ✓ Система обновлена. Перезапускаю бота...${NC}"
                 systemctl restart awg-bot
                 press_enter
@@ -653,7 +655,11 @@ run_diagnostics() {
         echo ""
         echo "--- Проверка связности ---"
         echo -n "Ping 8.8.8.8:  "
-        ping -c2 -W2 8.8.8.8 &>/dev/null && echo "✅ OK" || echo "⚠️  НЕДОСТУПЕН"
+        PING_RES=$(ping -c3 -W2 8.8.8.8 2>/dev/null | tail -1)
+        echo "$PING_RES" | grep -q "rtt" && echo "✅ OK  ${PING_RES}" || echo "⚠️  НЕДОСТУПЕН"
+        echo -n "Ping 1.1.1.1:  "
+        PING_RES2=$(ping -c3 -W2 1.1.1.1 2>/dev/null | tail -1)
+        echo "$PING_RES2" | grep -q "rtt" && echo "✅ OK  ${PING_RES2}" || echo "⚠️  НЕДОСТУПЕН"
         if [[ -n "$SERVER_ENDPOINT" && "$SERVER_ENDPOINT" != "$SERVER_IP" ]]; then
             echo -n "Резолв домена ${SERVER_ENDPOINT}: "
             local RESOLVED
@@ -664,6 +670,22 @@ run_diagnostics() {
             else
                 echo "⚠️  НЕ РЕЗОЛВИТСЯ"
             fi
+        fi
+        echo ""
+        echo "--- Traceroute до 8.8.8.8 (маршрут, макс 15 хопов) ---"
+        if command -v traceroute &>/dev/null; then
+            traceroute -n -m 15 -w 2 8.8.8.8 2>/dev/null || echo "  ошибка"
+        elif command -v tracepath &>/dev/null; then
+            tracepath -n -m 15 8.8.8.8 2>/dev/null || echo "  ошибка"
+        else
+            echo "  не установлен — apt install traceroute"
+        fi
+        echo ""
+        echo "--- MTR до 8.8.8.8 (потери пакетов по хопам, 5 циклов) ---"
+        if command -v mtr &>/dev/null; then
+            mtr --report --report-cycles 5 --no-dns 8.8.8.8 2>/dev/null || echo "  ошибка mtr"
+        else
+            echo "  не установлен — apt install mtr-tiny"
         fi
         echo ""
         echo "--- Основной сетевой интерфейс ---"
