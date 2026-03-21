@@ -3,7 +3,7 @@
 # AmneziaWG + Telegram Bot — Установщик
 # Использование: bash <(curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/setup.sh)
 # =============================================================================
-# Version: 1.9
+# Version: 2.0
 
 set -e
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
@@ -649,6 +649,13 @@ echo -e "${CYAN}${BOLD}Часовой пояс${NC}"
 echo ""
 echo -e "  Используется для отображения времени в статистике трафика."
 echo ""
+
+# Читаем текущий системный пояс
+SYS_TZ=$(cat /etc/timezone 2>/dev/null || timedatectl | grep "Time zone" | awk '{print $3}')
+SYS_TZ=${SYS_TZ:-UTC}
+
+echo -e "  Текущий часовой пояс сервера: ${CYAN}${SYS_TZ}${NC}"
+echo ""
 echo -e "  ${CYAN}1)${NC} Europe/Moscow      — Москва (UTC+3)"
 echo -e "  ${CYAN}2)${NC} Asia/Yekaterinburg — Екатеринбург (UTC+5)"
 echo -e "  ${CYAN}3)${NC} Asia/Novosibirsk   — Новосибирск (UTC+7)"
@@ -656,13 +663,15 @@ echo -e "  ${CYAN}4)${NC} Asia/Vladivostok   — Владивосток (UTC+10)
 echo -e "  ${CYAN}5)${NC} Europe/Kiev        — Киев (UTC+2)"
 echo -e "  ${CYAN}6)${NC} Asia/Almaty        — Алматы (UTC+5)"
 echo -e "  ${CYAN}7)${NC} Europe/Berlin      — Берлин (UTC+1/2)"
-echo -e "  ${CYAN}8)${NC} UTC                — UTC (по умолчанию)"
+echo -e "  ${CYAN}8)${NC} UTC"
+echo -e "  ${CYAN}9)${NC} Использовать пояс сервера ${CYAN}(${SYS_TZ})${NC}"
+echo -e "  ${CYAN}0)${NC} Ввести вручную"
 echo ""
 while true; do
-    read -p "  Ваш выбор [1]: " TZ_CHOICE
-    TZ_CHOICE=${TZ_CHOICE:-1}
-    [[ "$TZ_CHOICE" =~ ^[1-8]$ ]] && break
-    warn "Введите число от 1 до 8."
+    read -p "  Ваш выбор [9]: " TZ_CHOICE
+    TZ_CHOICE=${TZ_CHOICE:-9}
+    [[ "$TZ_CHOICE" =~ ^[0-9]$ ]] && break
+    warn "Введите число от 0 до 9."
 done
 case "$TZ_CHOICE" in
     1) TIMEZONE="Europe/Moscow" ;;
@@ -673,6 +682,27 @@ case "$TZ_CHOICE" in
     6) TIMEZONE="Asia/Almaty" ;;
     7) TIMEZONE="Europe/Berlin" ;;
     8) TIMEZONE="UTC" ;;
+    9) TIMEZONE="$SYS_TZ" ;;
+    0)
+        echo ""
+        echo -e "  Примеры: Europe/Moscow, Asia/Tokyo, America/New_York"
+        echo -e "  Полный список: timedatectl list-timezones"
+        echo ""
+        while true; do
+            read -p "  Введите часовой пояс: " TIMEZONE
+            TIMEZONE="${TIMEZONE// /}"
+            if [[ -z "$TIMEZONE" ]]; then
+                warn "Пояс не может быть пустым."
+                continue
+            fi
+            # Проверяем что пояс существует
+            if timedatectl list-timezones 2>/dev/null | grep -qx "$TIMEZONE"; then
+                break
+            else
+                warn "Пояс '${TIMEZONE}' не найден. Проверьте написание."
+            fi
+        done
+        ;;
 esac
 timedatectl set-timezone "$TIMEZONE" 2>/dev/null || true
 info "Часовой пояс: ${TIMEZONE}"
