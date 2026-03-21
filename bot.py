@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Version: 2.4
+# Version: 2.5
 import os, subprocess, logging, json, zlib, base64, struct, time, tarfile, tempfile, shutil, socket, ipaddress, re, asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -1465,6 +1465,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_status(query)
     elif data == "restart_bot":
         await query.edit_message_text("🔄 Перезапускаю бота...\n\nЧерез несколько секунд появится кнопка меню.")
+        # Пишем флаг с chat_id — при старте бот пришлёт меню именно этому пользователю
+        try:
+            with open(RESTART_FLAG_FILE, "w") as _rf:
+                _rf.write(str(query.from_user.id))
+        except Exception:
+            pass
         subprocess.Popen(["systemctl", "restart", "awg-bot"])
     elif data == "restart_awg" and is_admin:
         await query.edit_message_text("⚡ Перезапускаю AWG...\n\nVPN будет недоступен ~5 секунд.")
@@ -2972,16 +2978,33 @@ def get_real_server_ip() -> str | None:
             pass
     return None
 
+RESTART_FLAG_FILE = "/tmp/awg_bot_restart_flag"
+
 async def send_start_hello(context: ContextTypes.DEFAULT_TYPE):
     """Job: запускается через 5 секунд после старта бота.
-    Отправляет сообщение с кнопкой меню — чтобы пользователь понял что бот работает."""
+    Шлёт сообщение ТОЛЬКО если есть флаг-файл с chat_id пользователя который нажал кнопку.
+    При автоматическом рестарте systemd флага нет — молчим, не спамим."""
+    if not os.path.exists(RESTART_FLAG_FILE):
+        return  # автоматический рестарт — не беспокоим
+
+    try:
+        with open(RESTART_FLAG_FILE) as f:
+            chat_id = int(f.read().strip())
+        os.remove(RESTART_FLAG_FILE)
+    except Exception:
+        try:
+            os.remove(RESTART_FLAG_FILE)
+        except Exception:
+            pass
+        return
+
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("📋 Открыть меню", callback_data="back")],
     ])
     try:
         await context.bot.send_message(
-            chat_id=ADMIN_ID,
-            text="✅ Бот запущен и готов к работе.",
+            chat_id=chat_id,
+            text="✅ Бот перезапущен и готов к работе.",
             reply_markup=kb,
         )
     except Exception as e:
