@@ -2,6 +2,15 @@
  <img src="https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/.images/Logo.png" width="60%">
 </p>
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/.images/444.jpg" width="30%">
+  <img src="https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/.images/555.jpg" width="30%">
+  <img src="https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/.images/666.jpg" width="30%">
+  <img src="https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/.images/777.jpg" width="30%">
+  <img src="https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/.images/888.jpg" width="30%">
+  <img src="https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/.images/999.jpg" width="30%">
+</p>
+
 # Vpn_AWG — AmneziaWG + Telegram Bot
 AmneziaWG нативно в kernelspace (300+ мбит) с управлением через Telegram бота и терминальное меню.
 
@@ -11,7 +20,7 @@ AmneziaWG нативно в kernelspace (300+ мбит) с управление�
 - **Обфускация** — не детектируется РКН/DPI
 - **Telegram бот** — полное управление сервером прямо из чата
 - **Многопользовательский** — каждый пользователь работает в своём пространстве имён, устройства изолированы. Администратор одобряет доступ и видит всех
-- **Исключения сайтов** — раздельное туннелирование: выбор из 29 сервисов (банки, госуслуги, маркетплейсы, видео и др.) прямо в боте при создании профиля
+- **Исключения сайтов** — раздельное туннелирование: выбор из 29 сервисов (банки, госуслуги, маркетплейсы, видео и др.) прямо в боте при создании профиля, также режим ручного исключения сайтов
 - **Мониторинг трафика** — текущая скорость, пики, месячное потребление через vnstat
 - **Терминальное меню** — полное управление через `vpn.sh` без бота, открывается автоматически при SSH-подключении
 - **Автозапуск** — AWG и бот стартуют при перезагрузке сервера
@@ -62,17 +71,6 @@ bash <(curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/s
 - **💾 Бэкап** — архив конфигов, ключей и данных пользователей
 - **📥 Восстановить из бэкапа** — перенос на новый сервер
 - **🔧 Техобслуживание** — обновление системы, смена IP, смена часового пояса (список или ручной ввод), проверка версии библиотеки, напоминание раз в 6 месяцев
-
-### Исключения сайтов
-
-При создании `.conf` файла можно настроить раздельное туннелирование: выбранные сайты будут работать напрямую без VPN, остальной трафик — через VPN. Категории сворачиваются для удобства, доступна кнопка «Выбрать все».
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/.images/sites1.jpg" width="30%">
-  <img src="https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/.images/sites2.jpg" width="30%">
-</p>
-
-Доступные категории: банки и платежи, маркетплейсы, Яндекс, видео и стриминг, транспорт и доставка, ЖКХ, государственные сервисы, соцсети, прочее.
 
 ### Регистрация пользователей
 
