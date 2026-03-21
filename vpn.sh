@@ -1,5 +1,5 @@
 #!/bin/bash
-# Version: 2.0
+# Version: 2.1
 # =============================================================================
 # AmneziaWG — управление сервером
 # Запускать: bash vpn.sh
@@ -61,8 +61,37 @@ press_enter() {
 }
 
 next_ip() {
+    # Собираем занятые IP из ДВУХ источников: awg0.conf + файлы клиентов
     local i=2
-    while grep -q "AllowedIPs = ${VPN_SUBNET}.${i}/32" "$AWG_CONF" 2>/dev/null; do
+    local used_ips=()
+
+    # Источник 1: awg0.conf
+    if [[ -f "$AWG_CONF" ]]; then
+        while IFS= read -r line; do
+            if [[ "$line" =~ AllowedIPs.*${VPN_SUBNET//./\\.}\.([0-9]+)/32 ]]; then
+                used_ips+=("${BASH_REMATCH[1]}")
+            fi
+        done < "$AWG_CONF"
+    fi
+
+    # Источник 2: клиентские конфиги в /clients/
+    if [[ -d "$CLIENTS_DIR" ]]; then
+        for cf in "$CLIENTS_DIR"/*.conf; do
+            [[ -f "$cf" ]] || continue
+            while IFS= read -r line; do
+                if [[ "$line" =~ ^Address.*${VPN_SUBNET//./\\.}\.([0-9]+) ]]; then
+                    used_ips+=("${BASH_REMATCH[1]}")
+                fi
+            done < "$cf"
+        done
+    fi
+
+    while true; do
+        local found=0
+        for n in "${used_ips[@]}"; do
+            [[ "$n" == "$i" ]] && found=1 && break
+        done
+        [[ "$found" == "0" ]] && break
         ((i++))
     done
     echo "$i"
@@ -301,7 +330,8 @@ show_status() {
     echo ""
 
     local AWG_STATUS BOT_STATUS
-    systemctl is-active --quiet "awg-quick@${VPN_IFACE}" \
+    # AWG — oneshot сервис, проверяем по наличию интерфейса
+    ip link show "${VPN_IFACE}" &>/dev/null \
         && AWG_STATUS="${GREEN}● работает${NC}" \
         || AWG_STATUS="${RED}● остановлен${NC}"
     systemctl is-active --quiet awg-bot \
@@ -334,7 +364,7 @@ manage_services() {
         echo ""
 
         local AWG_ST BOT_ST
-        systemctl is-active --quiet "awg-quick@${VPN_IFACE}" \
+        ip link show "${VPN_IFACE}" &>/dev/null \
             && AWG_ST="${GREEN}работает${NC}" || AWG_ST="${RED}остановлен${NC}"
         systemctl is-active --quiet awg-bot \
             && BOT_ST="${GREEN}работает${NC}" || BOT_ST="${RED}остановлен${NC}"
@@ -899,7 +929,7 @@ view_old_diagnostics() {
     echo -e "${BOLD}  Предыдущие диагностики${NC}"
     echo ""
 
-    local FILES=( "$DIAG_DIR"/diag_*.txt )
+    local FILES=( "$DIAG_DIR"/*.txt )
     if [[ ! -f "${FILES[0]}" ]]; then
         echo -e "  ${YELLOW}Предыдущих диагностик нет.${NC}"
         press_enter; return
@@ -1092,7 +1122,7 @@ main_menu() {
         show_header
         local CLIENTS_COUNT AWG_ST BOT_ST
         CLIENTS_COUNT=$(ls "$CLIENTS_DIR"/*.conf 2>/dev/null | wc -l)
-        systemctl is-active --quiet "awg-quick@${VPN_IFACE}" \
+        ip link show "${VPN_IFACE}" &>/dev/null \
             && AWG_ST="${GREEN}●${NC}" || AWG_ST="${RED}●${NC}"
         systemctl is-active --quiet awg-bot \
             && BOT_ST="${GREEN}●${NC}" || BOT_ST="${RED}●${NC}"
