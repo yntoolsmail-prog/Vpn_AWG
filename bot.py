@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# Version: 2.1
-import os, subprocess, logging, json, zlib, base64, struct, time, tarfile, tempfile, shutil, socket, ipaddress, re
+# Version: 2.2
+import os, subprocess, logging, json, zlib, base64, struct, time, tarfile, tempfile, shutil, socket, ipaddress, re, asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
@@ -77,12 +77,16 @@ except AttributeError:
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+# Глобальный lock — один клиент за раз, никаких гонок данных
+_client_lock = asyncio.Lock()
+
 # Состояния ConversationHandler
 WAITING_REGISTER_NAME  = 10
 WAITING_DEVICE_NAME    = 11
 WAITING_RESTORE_FILE   = 12
 WAITING_EXCL_ALLOWED   = 13   # ждём строку AllowedIPs от пользователя
 WAITING_EXCL_DOMAIN    = 14   # ждём домен для исключения
+WAITING_TZ_INPUT       = 15   # ждём ручной ввод часового пояса
 
 IMG_BASE = "https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/.images"
 
@@ -309,10 +313,37 @@ def get_awg_dump() -> dict:
     return peers
 
 def next_ip() -> int:
-    with open(AWG_CONF) as f:
-        content = f.read()
+    """Ищет свободный IP в ОБОИХ источниках: awg0.conf и файлах в /clients/.
+    Это защищает от рассинхрона между конфигом и реальным состоянием."""
+    used: set[str] = set()
+
+    # Источник 1: awg0.conf
+    try:
+        with open(AWG_CONF) as f:
+            for line in f:
+                if "AllowedIPs" in line:
+                    for part in line.split():
+                        if part.startswith(VPN_SUBNET + "."):
+                            used.add(part.split("/")[0])
+    except FileNotFoundError:
+        pass
+
+    # Источник 2: клиентские конфиги в /clients/
+    if os.path.isdir(CLIENTS_DIR):
+        for fname in os.listdir(CLIENTS_DIR):
+            if not fname.endswith(".conf"):
+                continue
+            try:
+                with open(f"{CLIENTS_DIR}/{fname}") as f:
+                    for line in f:
+                        if line.startswith("Address"):
+                            ip = line.split("=", 1)[1].strip().split("/")[0]
+                            used.add(ip)
+            except Exception:
+                pass
+
     i = 2
-    while f"{VPN_SUBNET}.{i}/32" in content:
+    while f"{VPN_SUBNET}.{i}" in used:
         i += 1
     return i
 
@@ -351,6 +382,46 @@ def get_client_pub(name: str) -> str | None:
     except:
         pass
     return None
+
+def get_client_keys(name: str) -> dict | None:
+    """Читает все ключи и параметры из клиентского .conf файла.
+    Возвращает dict с priv, pub, ip, psk, obfs — или None если файл не найден/битый."""
+    conf_path = f"{CLIENTS_DIR}/{name}.conf"
+    if not os.path.exists(conf_path):
+        return None
+    try:
+        data: dict = {}
+        obfs: dict = {}
+        with open(conf_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or line.startswith("["):
+                    continue
+                if "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                k, v = k.strip(), v.strip()
+                if k == "PrivateKey":
+                    data["priv"] = v
+                elif k == "Address":
+                    data["ip"] = v.split("/")[0]
+                elif k == "PresharedKey":
+                    data["psk"] = v
+                elif k in ("Jc", "Jmin", "Jmax", "S1", "S2", "H1", "H2", "H3", "H4"):
+                    obfs[k] = v
+        # Публичный ключ — из .pub файла или вычисляем
+        pub = get_client_pub(name)
+        if not pub:
+            return None
+        data["pub"] = pub
+        if obfs:
+            data["obfs"] = obfs
+        # Обязательные поля
+        if not all(k in data for k in ("priv", "pub", "ip", "psk")):
+            return None
+        return data
+    except Exception:
+        return None
 
 def remove_client_from_awg(name: str):
     """Удалить клиента из AWG и конфига"""
@@ -438,29 +509,85 @@ def make_vpn_link(priv, pub, ip, psk, obfs, name, endpoint: str = None) -> str:
     return "vpn://" + base64.urlsafe_b64encode(p).decode().rstrip("=")
 
 async def create_client(name: str, app=None, notify_chat_id: int = None):
-    """Создаёт клиента AWG. Файлы не отправляет — пользователь идёт в карточку устройства."""
-    priv = subprocess.check_output(["awg", "genkey"], text=True).strip()
-    pub  = subprocess.check_output(["awg", "pubkey"], input=priv, text=True).strip()
-    psk  = subprocess.check_output(["awg", "genpsk"], text=True).strip()
-    ip   = f"{VPN_SUBNET}.{next_ip()}"
-    obfs = gen_obfs()
+    """Создаёт клиента AWG.
+    Защита от гонок: asyncio.Lock() — один клиент за раз.
+    Верификация: после всех шагов проверяем что пир реально появился в awg show.
+    Откат: если верификация провалилась — удаляем всё что успели создать."""
+    async with _client_lock:
+        priv = subprocess.check_output(["awg", "genkey"], text=True).strip()
+        pub  = subprocess.check_output(["awg", "pubkey"], input=priv, text=True).strip()
+        psk  = subprocess.check_output(["awg", "genpsk"], text=True).strip()
+        ip   = f"{VPN_SUBNET}.{next_ip()}"
+        obfs = gen_obfs()
 
-    with open(AWG_CONF, "a") as f:
-        f.write(f"\n# Client: {name}\n[Peer]\nPublicKey = {pub}\nPresharedKey = {psk}\nAllowedIPs = {ip}/32\n")
-    subprocess.run(["awg", "set", AWG_IFACE, "peer", pub,
-                    "preshared-key", "/dev/stdin", "allowed-ips", f"{ip}/32"],
-                   input=psk, text=True)
+        os.makedirs(CLIENTS_DIR, exist_ok=True)
+        conf_path = f"{CLIENTS_DIR}/{name}.conf"
+        pub_path  = f"{CLIENTS_DIR}/{name}.pub"
 
-    os.makedirs(CLIENTS_DIR, exist_ok=True)
-    conf_path = f"{CLIENTS_DIR}/{name}.conf"
-    pub_path  = f"{CLIENTS_DIR}/{name}.pub"
+        # Шаг 1: записываем в awg0.conf
+        with open(AWG_CONF, "a") as f:
+            f.write(f"\n# Client: {name}\n[Peer]\nPublicKey = {pub}\nPresharedKey = {psk}\nAllowedIPs = {ip}/32\n")
 
-    with open(conf_path, "w") as f:
-        f.write(make_wg_conf(priv, ip, psk, obfs))
-    # Сохраняем pubkey сразу — get_client_pub() больше не будет запускать subprocess
-    with open(pub_path, "w") as f:
-        f.write(pub)
-    # .vpn файл НЕ сохраняем — генерируется на лету с нужным эндпоинтом
+        # Шаг 2: применяем в живой интерфейс
+        subprocess.run(["awg", "set", AWG_IFACE, "peer", pub,
+                        "preshared-key", "/dev/stdin", "allowed-ips", f"{ip}/32"],
+                       input=psk, text=True)
+
+        # Шаг 3: создаём файлы клиента
+        with open(conf_path, "w") as f:
+            f.write(make_wg_conf(priv, ip, psk, obfs))
+        with open(pub_path, "w") as f:
+            f.write(pub)
+
+        # Шаг 4: верификация — проверяем что пир реально зарегистрирован в awg
+        dump = get_awg_dump()
+        peer_ok = pub in dump and dump[pub].get("allowed", "").startswith(ip)
+
+        # Шаг 4b: проверяем что запись есть в awg0.conf
+        try:
+            with open(AWG_CONF) as f:
+                conf_content = f.read()
+            conf_ok = pub in conf_content and f"{ip}/32" in conf_content
+        except Exception:
+            conf_ok = False
+
+        # Шаг 4c: проверяем что файлы клиента созданы
+        files_ok = os.path.exists(conf_path) and os.path.exists(pub_path)
+
+        if not peer_ok or not conf_ok or not files_ok:
+            # ОТКАТ: удаляем всё что успели создать
+            logger.error(f"create_client({name}): верификация провалилась "
+                         f"(peer_ok={peer_ok}, conf_ok={conf_ok}, files_ok={files_ok}), откат")
+            try:
+                subprocess.run(["awg", "set", AWG_IFACE, "peer", pub, "remove"])
+            except Exception:
+                pass
+            # Удаляем запись из awg0.conf
+            try:
+                with open(AWG_CONF, encoding="utf-8", errors="replace") as f:
+                    lines = f.read().split("\n")
+                new_lines, skip = [], False
+                for line in lines:
+                    if line.strip() == f"# Client: {name}":
+                        skip = True
+                    elif skip and line.strip().startswith("[") and line.strip() != "[Peer]":
+                        skip = False
+                        new_lines.append(line)
+                    elif not skip:
+                        new_lines.append(line)
+                with open(AWG_CONF, "w") as f:
+                    f.write("\n".join(new_lines))
+            except Exception:
+                pass
+            # Удаляем файлы
+            for ext in [".conf", ".pub"]:
+                p = f"{CLIENTS_DIR}/{name}{ext}"
+                if os.path.exists(p):
+                    os.remove(p)
+            raise RuntimeError(
+                f"Не удалось создать клиента '{name}': верификация провалилась. "
+                f"Попробуйте снова."
+            )
 
 # ── Мониторинг трафика ─────────────────────────────────────────────────────────
 def _read_iface_bytes(iface: str) -> tuple[int, int]:
@@ -1261,6 +1388,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await do_maint_ptb(query)
     elif data == "maint_tz" and is_admin:
         await show_maint_tz(query)
+    elif data == "set_tz_manual" and is_admin:
+        await ask_tz_manual(update, context)
     elif data.startswith("set_tz_") and is_admin:
         await do_set_tz(query, data[7:])
     elif data == "maint_done" and is_admin:
@@ -2097,6 +2226,11 @@ async def show_maint_tz(query):
         ("🇩🇪 Берлин",       "Europe/Berlin"),
         ("🌍 UTC",           "UTC"),
     ]
+    try:
+        sys_tz = subprocess.check_output(["cat", "/etc/timezone"], text=True).strip()
+    except:
+        sys_tz = "неизвестно"
+
     now_local = time.strftime("%H:%M %d.%m.%Y")
     kb_rows = []
     for label, tz in popular_tz:
@@ -2104,16 +2238,67 @@ async def show_maint_tz(query):
         kb_rows.append([InlineKeyboardButton(
             f"{mark}{label}", callback_data=f"set_tz_{tz}"
         )])
+    mark_sys = "✅ " if sys_tz == TZ else ""
+    kb_rows.append([InlineKeyboardButton(
+        f"{mark_sys}🖥 Как у сервера ({sys_tz})", callback_data=f"set_tz_{sys_tz}"
+    )])
+    kb_rows.append([InlineKeyboardButton("⌨️ Ввести вручную", callback_data="set_tz_manual")])
     kb_rows.append([InlineKeyboardButton("◀️ Назад", callback_data="maintenance")])
     await query.edit_message_text(
         f"🕐 Часовой пояс\n\n"
-        f"Текущий: *{TZ}*\n"
-        f"Время бота сейчас: {now_local}\n\n"
-        f"Выберите новый часовой пояс.\n"
+        f"Текущий бота: *{TZ}*\n"
+        f"Системный:    *{sys_tz}*\n"
+        f"Время бота:   {now_local}\n\n"
+        f"Выберите из списка, укажите как у сервера, или введите вручную.\n"
         f"Бот перезапустится автоматически.",
         reply_markup=InlineKeyboardMarkup(kb_rows),
         parse_mode="Markdown"
     )
+
+async def ask_tz_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Просим ввести пояс вручную"""
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(
+        "⌨️ Введите часовой пояс вручную\n\n"
+        "Примеры: `Europe/Moscow`, `Asia/Tokyo`, `America/New_York`, `UTC`\n\n"
+        "Полный список: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones\n\n"
+        "Напишите пояс в ответном сообщении или /cancel для отмены.",
+        parse_mode="Markdown"
+    )
+    return WAITING_TZ_INPUT
+
+async def receive_tz_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получаем ручной ввод пояса и применяем"""
+    tz = update.message.text.strip()
+    try:
+        all_tz = subprocess.check_output(["timedatectl", "list-timezones"], text=True).splitlines()
+    except:
+        all_tz = []
+    if all_tz and tz not in all_tz:
+        await update.message.reply_text(
+            f"❌ Часовой пояс `{tz}` не найден.\n\n"
+            f"Проверьте написание и попробуйте снова, или /cancel для отмены.",
+            parse_mode="Markdown"
+        )
+        return WAITING_TZ_INPUT
+    # Применяем
+    try:
+        env_lines = open(ENV_FILE).readlines()
+        new_lines = [l for l in env_lines if not l.startswith("TIMEZONE=")]
+        new_lines.append(f"TIMEZONE={tz}\n")
+        with open(ENV_FILE, "w") as f:
+            f.writelines(new_lines)
+        subprocess.run(["timedatectl", "set-timezone", tz], check=True)
+        await update.message.reply_text(
+            f"✅ Часовой пояс изменён на *{tz}*\n\nБот перезапускается...",
+            parse_mode="Markdown"
+        )
+        subprocess.Popen(["bash", "-c", "sleep 2 && systemctl restart awg-bot"])
+    except Exception as e:
+        await update.message.reply_text(f"❌ Ошибка: {e}")
+    return ConversationHandler.END
+
 
 async def do_set_tz(query, tz: str):
     """Применяет новый часовой пояс — пишет в server.env и перезапускает бота"""
@@ -2478,6 +2663,14 @@ async def excl_receive_domain(update: Update, context: ContextTypes.DEFAULT_TYPE
 # ДОБАВЛЕНИЕ УСТРОЙСТВА (ConversationHandler)
 # ══════════════════════════════════════════════════════════════════════════════
 
+async def cancel_add_device(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отмена добавления устройства через кнопку Отмена"""
+    query = update.callback_query
+    await query.answer()
+    context.user_data.pop("adding_user_id", None)
+    await main_menu(query, query.from_user.id, edit=True)
+    return ConversationHandler.END
+
 async def add_device_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query   = update.callback_query
     user_id = query.from_user.id
@@ -2530,7 +2723,17 @@ async def receive_device_name(update: Update, context: ContextTypes.DEFAULT_TYPE
         return WAITING_DEVICE_NAME
 
     await update.message.reply_text(f"⏳ Создаю профиль *{device_raw}*...", parse_mode="Markdown")
-    await create_client(full_name)
+    try:
+        await create_client(full_name)
+    except Exception as e:
+        logger.error(f"receive_device_name: create_client failed: {e}")
+        await update.message.reply_text(
+            f"❌ Не удалось создать устройство *{device_raw}*.\n\n"
+            f"`{e}`\n\n"
+            f"Попробуйте ещё раз или обратитесь к администратору.",
+            parse_mode="Markdown"
+        )
+        return ConversationHandler.END
 
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("📋 Перейти к устройству", callback_data=f"device_{full_name}")],
@@ -2657,7 +2860,7 @@ def main():
         states={
             WAITING_DEVICE_NAME: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, receive_device_name),
-                CallbackQueryHandler(lambda u, c: (main_menu(u.callback_query, u.callback_query.from_user.id, edit=True), ConversationHandler.END)[1], pattern="^add_cancel$"),
+                CallbackQueryHandler(cancel_add_device, pattern="^add_cancel$"),
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
@@ -2702,10 +2905,24 @@ def main():
         allow_reentry=True,
     )
 
+    tz_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(ask_tz_manual, pattern="^set_tz_manual$")],
+        states={
+            WAITING_TZ_INPUT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_tz_manual),
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+        per_chat=True,
+        per_message=False,
+        allow_reentry=True,
+    )
+
     app.add_handler(reg_conv)
     app.add_handler(add_conv)
     app.add_handler(restore_conv)
     app.add_handler(excl_conv)
+    app.add_handler(tz_conv)
     app.add_handler(CallbackQueryHandler(button_handler))
 
     # Проверка напоминания о техобслуживании — раз в сутки
