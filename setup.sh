@@ -742,9 +742,11 @@ else
     err "Не удалось установить python-telegram-bot."
 fi
 
-# ── Шаг 11.5: Мониторинг трафика ─────────────────────────────────────────────
+# ── Шаг 11.5: Мониторинг трафика и сетевые инструменты ───────────────────────
 log "Установка vnstat (статистика трафика)..."
 apt-get install -y -qq vnstat
+log "Установка mtr (диагностика сети)..."
+apt-get install -y -qq mtr
 systemctl enable vnstat --now 2>/dev/null || true
 # Регистрируем основной интерфейс в vnstat если ещё не добавлен
 HOST_IFACE=$(ip route get 8.8.8.8 2>/dev/null | awk '/dev/{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -1)
