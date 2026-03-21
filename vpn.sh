@@ -1,5 +1,5 @@
 #!/bin/bash
-# Version: 2.1
+# Version: 2.3
 # =============================================================================
 # AmneziaWG — управление сервером
 # Запускать: bash vpn.sh
@@ -383,7 +383,10 @@ manage_services() {
         echo ""
         read -p "  Выбор: " CHOICE
         case $CHOICE in
-            1) systemctl restart "awg-quick@${VPN_IFACE}" && echo -e "${GREEN}  ✓ AWG перезапущен${NC}" || echo -e "${RED}  ✗ Ошибка${NC}"; sleep 2 ;;
+            1) 
+                awg-quick down "$VPN_IFACE" 2>/dev/null || true
+                systemctl restart "awg-quick@${VPN_IFACE}" && echo -e "${GREEN}  ✓ AWG перезапущен${NC}" || echo -e "${RED}  ✗ Ошибка${NC}"
+                sleep 2 ;;
             2) systemctl stop "awg-quick@${VPN_IFACE}"    && echo -e "${YELLOW}  AWG остановлен${NC}"; sleep 2 ;;
             3) systemctl start "awg-quick@${VPN_IFACE}"   && echo -e "${GREEN}  ✓ AWG запущен${NC}" || echo -e "${RED}  ✗ Ошибка${NC}"; sleep 2 ;;
             4) systemctl restart awg-bot && echo -e "${GREEN}  ✓ Бот перезапущен${NC}" || echo -e "${RED}  ✗ Ошибка${NC}"; sleep 2 ;;
@@ -1148,7 +1151,7 @@ main_menu() {
         echo ""
         echo "  0) Выход"
         echo ""
-        read -p "  Выбор: " CHOICE
+        read -p "  Выбор (Enter — выход): " CHOICE
 
         case $CHOICE in
             1)  add_client ;;
@@ -1162,7 +1165,7 @@ main_menu() {
             9)  run_diagnostics ;;
             10) analyze_configs ;;
             11) view_old_diagnostics ;;
-            0)  echo ""; exit 0 ;;
+            0|"")  echo ""; exit 0 ;;
             *)  echo -e "  ${RED}Неверный выбор${NC}"; sleep 1 ;;
         esac
     done

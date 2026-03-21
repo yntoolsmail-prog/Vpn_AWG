@@ -3,7 +3,7 @@
 # AmneziaWG + Telegram Bot — Установщик
 # Использование: bash <(curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/setup.sh)
 # =============================================================================
-# Version: 2.0
+# Version: 2.2
 
 set -e
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
@@ -804,6 +804,24 @@ EOF
 systemctl daemon-reload
 systemctl enable awg-bot
 systemctl start awg-bot
+
+# ── Шаг 14: SSH автозапуск vpn.sh ────────────────────────────────────────────
+log "Настройка автозапуска панели при SSH-подключении..."
+BASHRC_MARKER="# awg-vpn-autorun"
+if ! grep -q "$BASHRC_MARKER" /root/.bashrc 2>/dev/null; then
+    cat >> /root/.bashrc << 'BASHRCEOF'
+
+# awg-vpn-autorun
+# При SSH-подключении автоматически открывается панель управления AmneziaWG.
+# Просто нажмите Enter чтобы выйти обратно в терминал.
+if [[ -n "$SSH_CONNECTION" && -f /root/vpn.sh ]]; then
+    bash /root/vpn.sh
+fi
+BASHRCEOF
+    info "Автозапуск настроен: при SSH-входе будет открываться vpn.sh"
+else
+    info "Автозапуск уже настроен, пропускаем"
+fi
 
 # ── Готово ────────────────────────────────────────────────────────────────────
 echo ""

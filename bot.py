@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Version: 2.2
+# Version: 2.4
 import os, subprocess, logging, json, zlib, base64, struct, time, tarfile, tempfile, shutil, socket, ipaddress, re, asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -92,10 +92,12 @@ IMG_BASE = "https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/.ima
 
 # ── Split tunneling: база сайтов ───────────────────────────────────────────────
 SITES = {
+    # Локальная сеть
     "local": {
         "name": "Локальная сеть (роутер, NAS...)", "emoji": "🏠",
         "domains": [], "subnets": ["192.168.0.0/16"],
     },
+    # Банки и платежи
     "sber": {
         "name": "Сбербанк", "emoji": "💚",
         "domains": ["sber.ru", "sberbank.ru", "online.sberbank.ru", "sberbank.com", "sbrf.ru"],
@@ -120,6 +122,7 @@ SITES = {
         "name": "СБП / НСПК", "emoji": "⚡",
         "domains": ["sbp.nspk.ru", "nspk.ru", "qr.nspk.ru"],
     },
+    # Маркетплейсы
     "ozon": {
         "name": "Ozon", "emoji": "🔵",
         "domains": ["ozon.ru", "static.ozon.ru", "cdn1.ozone.ru"],
@@ -132,6 +135,7 @@ SITES = {
         "name": "Авито", "emoji": "🟢",
         "domains": ["avito.ru", "cdn.avito.ru", "m.avito.ru"],
     },
+    # Яндекс (одиночный — без заголовка категории)
     "yandex": {
         "name": "Яндекс (все сервисы)", "emoji": "🔴",
         "domains": [
@@ -141,10 +145,32 @@ SITES = {
             "market.yandex.ru", "yastatic.net", "avatars.mds.yandex.net",
         ],
     },
+    # Видео и стриминг
     "kinopoisk": {
         "name": "Кинопоиск", "emoji": "🎬",
         "domains": ["kinopoisk.ru", "www.kinopoisk.ru"],
     },
+    "rutube": {
+        "name": "Rutube", "emoji": "📺",
+        "domains": ["rutube.ru", "pics.rutube.ru", "strm.rutube.ru"],
+    },
+    "vkvideo": {
+        "name": "VK Видео", "emoji": "📱",
+        "domains": ["vkvideo.ru"],
+    },
+    "ivi": {
+        "name": "Иви", "emoji": "🍿",
+        "domains": ["ivi.ru", "cdn.ivi.ru"],
+    },
+    "okko": {
+        "name": "Okko", "emoji": "🎥",
+        "domains": ["okko.tv", "static.okko.tv"],
+    },
+    "trikolor": {
+        "name": "Триколор", "emoji": "📡",
+        "domains": ["trikolor.tv"],
+    },
+    # Транспорт и доставка
     "rzd": {
         "name": "РЖД", "emoji": "🚂",
         "domains": ["rzd.ru", "www.rzd.ru", "pass.rzd.ru", "ticket.rzd.ru"],
@@ -157,10 +183,48 @@ SITES = {
         "name": "Яндекс Еда / Самокат", "emoji": "🍔",
         "domains": ["eda.yandex.ru", "eats.yandex.ru", "samokat.ru", "delivery-club.ru"],
     },
-    "zhkh": {
-        "name": "ЖКХ / Энергосбыт", "emoji": "🏘",
-        "domains": ["mosenergosbyt.ru", "lkk.mosenergosbyt.ru", "eirc-mo.ru", "dom.gosuslugi.ru"],
+    # ЖКХ
+    "zhkh_msk": {
+        "name": "ЖКХ Москва (Мосэнергосбыт, ЕИРЦ)", "emoji": "🏘",
+        "domains": ["mosenergosbyt.ru", "lkk.mosenergosbyt.ru", "eirc-mo.ru"],
     },
+    "zhkh_fed": {
+        "name": "ГИС ЖКХ (федеральный)", "emoji": "🏠",
+        "domains": ["dom.gosuslugi.ru", "lkr.reformagkh.ru"],
+    },
+    # Государственные сервисы
+    "gosuslugi": {
+        "name": "Госуслуги", "emoji": "🏛",
+        "domains": [
+            "gosuslugi.ru", "esia.gosuslugi.ru", "lk.gosuslugi.ru",
+            "beta.gosuslugi.ru", "oplata.gosuslugi.ru",
+        ],
+    },
+    "mos": {
+        "name": "Mos.ru", "emoji": "🏙",
+        "domains": ["mos.ru", "www.mos.ru", "lk.mos.ru"],
+    },
+    "nalog": {
+        "name": "ФНС / Налоги", "emoji": "📋",
+        "domains": ["nalog.gov.ru", "lkfl.nalog.ru", "lkul.nalog.ru", "pb.nalog.ru"],
+    },
+    "emias": {
+        "name": "ЕМИАС / Здоровье", "emoji": "🏥",
+        "domains": ["emias.info", "moscow.emias.info"],
+    },
+    "gibdd": {
+        "name": "ГИБДД / Штрафы", "emoji": "🚗",
+        "domains": ["gibdd.ru", "www.gibdd.ru", "xn--b1aew.xn--p1ai"],
+    },
+    "rosreestr": {
+        "name": "Росреестр", "emoji": "🏦",
+        "domains": ["rosreestr.gov.ru", "lk.rosreestr.gov.ru"],
+    },
+    "fssp": {
+        "name": "ФССП (Приставы)", "emoji": "⚖️",
+        "domains": ["fssprus.ru", "lk.fssprus.ru"],
+    },
+    # Соцсети
     "vk": {
         "name": "ВКонтакте", "emoji": "💙",
         "domains": ["vk.com", "vk.me", "userapi.com", "vkuseraudio.net", "vk-cdn.net"],
@@ -169,6 +233,7 @@ SITES = {
         "name": "Одноклассники", "emoji": "🟠",
         "domains": ["ok.ru", "www.ok.ru", "udn.odnoklassniki.ru"],
     },
+    # Прочее
     "hh": {
         "name": "HeadHunter (hh.ru)", "emoji": "💼",
         "domains": ["hh.ru", "api.hh.ru", "hhcdn.ru"],
@@ -180,18 +245,23 @@ SITES = {
 }
 
 CATEGORIES = {
-    "🏠 Локальная сеть":       ["local"],
-    "🏦 Банки и платежи":      ["sber", "tbank", "alfa", "vtb", "raiffeisen", "sbp"],
-    "🛒 Маркетплейсы":         ["ozon", "wildberries", "avito"],
-    "🔴 Яндекс":               ["yandex", "kinopoisk"],
-    "🚂 Транспорт и доставка": ["rzd", "pochta", "delivery"],
-    "🏘 ЖКХ":                  ["zhkh"],
-    "💬 Соцсети":              ["vk", "ok"],
-    "📦 Прочее":               ["hh", "2gis"],
+    "🏠 Локальная сеть":         ["local"],
+    "🏦 Банки и платежи":        ["sber", "tbank", "alfa", "vtb", "raiffeisen", "sbp"],
+    "🛒 Маркетплейсы":           ["ozon", "wildberries", "avito"],
+    "🔴 Яндекс":                 ["yandex"],
+    "🎬 Видео и стриминг":       ["kinopoisk", "rutube", "vkvideo", "ivi", "okko", "trikolor"],
+    "🚂 Транспорт и доставка":   ["rzd", "pochta", "delivery"],
+    "🏘 ЖКХ":                    ["zhkh_msk", "zhkh_fed"],
+    "🏛 Государственные сервисы":["gosuslugi", "mos", "nalog", "emias", "gibdd", "rosreestr", "fssp"],
+    "💬 Соцсети":                ["vk", "ok"],
+    "📦 Прочее":                 ["hh", "2gis"],
 }
 
 # Всегда включены — пользователь снять не может
 DEFAULT_SELECTED = {"local"}
+
+# Все ключи которые пользователь может включить (без заблокированных)
+ALL_SELECTABLE = {k for k in SITES if k not in DEFAULT_SELECTED}
 
 
 def build_allowed_ips(selected_keys) -> str:
@@ -228,21 +298,58 @@ def build_allowed_ips(selected_keys) -> str:
     )
 
 
-def sites_keyboard(selected: set, device_name: str) -> InlineKeyboardMarkup:
+def sites_keyboard(selected: set, device_name: str, expanded: set | None = None) -> InlineKeyboardMarkup:
+    """Строит клавиатуру исключений сайтов.
+    Категории с 1 пунктом — всегда развёрнуты без заголовка.
+    Категории с 2+ пунктами — сворачиваются/разворачиваются кнопкой заголовка.
+    expanded — множество ключей категорий которые сейчас раскрыты."""
+    if expanded is None:
+        expanded = set()
+
     rows = []
+    all_selected   = ALL_SELECTABLE.issubset(selected)  # для кнопки "выбрать все"
+
     for cat_name, keys in CATEGORIES.items():
-        rows.append([InlineKeyboardButton(f"── {cat_name} ──", callback_data="noop")])
-        for key in keys:
-            site = SITES[key]
+        if len(keys) == 1:
+            # Одиночный пункт — показываем без заголовка категории
+            key    = keys[0]
+            site   = SITES[key]
             locked = key in DEFAULT_SELECTED
             is_on  = key in selected
-            mark   = "✅" if locked else ("☑" if is_on else "☐")
+            mark   = "✅" if locked else ("☑️" if is_on else "☐")
             label  = f"{mark} {site['emoji']} {site['name']}"
             cb     = "noop" if locked else f"ts_{key}"
             rows.append([InlineKeyboardButton(label, callback_data=cb)])
+        else:
+            # Многопунктовая категория — сворачиваемый заголовок
+            is_expanded  = cat_name in expanded
+            arrow        = "🔽" if is_expanded else "▶️"
+            # Считаем сколько пунктов выбрано в категории (для подсказки)
+            cat_on = sum(1 for k in keys if k in selected and k not in DEFAULT_SELECTED)
+            hint   = f" [{cat_on}/{len(keys)}]" if cat_on > 0 else f" [{len(keys)}]"
+            rows.append([InlineKeyboardButton(
+                f"{arrow} {cat_name}{hint}",
+                callback_data=f"cat_toggle_{cat_name}"
+            )])
+            if is_expanded:
+                for key in keys:
+                    site   = SITES[key]
+                    locked = key in DEFAULT_SELECTED
+                    is_on  = key in selected
+                    mark   = "✅" if locked else ("☑️" if is_on else "☐")
+                    label  = f"  {mark} {site['emoji']} {site['name']}"
+                    cb     = "noop" if locked else f"ts_{key}"
+                    rows.append([InlineKeyboardButton(label, callback_data=cb)])
+
+    # Кнопка "Выбрать все" / "Снять все"
+    if all_selected:
+        rows.append([InlineKeyboardButton("☐ Снять все", callback_data="ts_deselect_all")])
+    else:
+        rows.append([InlineKeyboardButton("☑️ Выбрать все", callback_data="ts_select_all")])
+
     rows.append([
-        InlineKeyboardButton("✅ Готово",  callback_data="sites_done"),
-        InlineKeyboardButton("❌ Отмена", callback_data=f"device_{device_name}"),
+        InlineKeyboardButton("✅ Готово",   callback_data="sites_done"),
+        InlineKeyboardButton("❌ Отмена",  callback_data=f"device_{device_name}"),
     ])
     return InlineKeyboardMarkup(rows)
 
@@ -1357,10 +1464,36 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "status":
         await show_status(query)
     elif data == "restart_bot":
-        await query.edit_message_text("🔄 Перезапускаю бота...")
+        await query.edit_message_text("🔄 Перезапускаю бота...\n\nЧерез несколько секунд появится кнопка меню.")
         subprocess.Popen(["systemctl", "restart", "awg-bot"])
     elif data == "restart_awg" and is_admin:
         await query.edit_message_text("⚡ Перезапускаю AWG...\n\nVPN будет недоступен ~5 секунд.")
+        async def _awg_restart_check(ctx: ContextTypes.DEFAULT_TYPE):
+            result = subprocess.run(
+                ["systemctl", "is-active", f"awg-quick@{AWG_IFACE}"],
+                capture_output=True, text=True
+            )
+            st = result.stdout.strip()
+            if st == "active":
+                status_text = "🟢 AWG работает"
+            else:
+                # Интерфейс может быть жив даже если сервис failed
+                iface_up = subprocess.run(
+                    ["ip", "link", "show", AWG_IFACE],
+                    capture_output=True
+                ).returncode == 0
+                status_text = "🟢 AWG работает (интерфейс активен)" if iface_up else "🔴 AWG не запустился — проверьте логи"
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("📋 В меню", callback_data="back")],
+                [InlineKeyboardButton("📊 Статус", callback_data="status")],
+            ])
+            await ctx.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=f"⚡ Перезапуск AWG завершён\n{status_text}",
+                reply_markup=kb,
+            )
+        context.application.job_queue.run_once(_awg_restart_check, when=8)
+        subprocess.Popen(["awg-quick", "down", AWG_IFACE], stderr=subprocess.DEVNULL)
         subprocess.Popen(["systemctl", "restart", f"awg-quick@{AWG_IFACE}"])
     elif data == "bandwidth" and is_admin:
         await show_bandwidth(query)
@@ -1493,6 +1626,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await apply_sites(query, user_id, context)
     elif data.startswith("ts_"):
         await toggle_site_handler(query, data[3:], user_id, context)
+    elif data.startswith("cat_toggle_"):
+        await toggle_category_handler(query, data[11:], context)
     elif data.startswith("sites_"):
         await show_sites_menu(query, data[6:], user_id, context)
 
@@ -2259,12 +2394,18 @@ async def ask_tz_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Просим ввести пояс вручную"""
     query = update.callback_query
     await query.answer()
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("❌ Отмена", callback_data="maint_tz")],
+    ])
     await query.edit_message_text(
-        "⌨️ Введите часовой пояс вручную\n\n"
-        "Примеры: `Europe/Moscow`, `Asia/Tokyo`, `America/New_York`, `UTC`\n\n"
+        "⌨️ *Ввод часового пояса вручную*\n\n"
+        "Напишите код пояса в этот чат, например:\n"
+        "`Europe/Helsinki` `Europe/Moscow` `UTC`\n"
+        "`Asia/Tokyo` `America/New_York`\n\n"
         "Полный список: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones\n\n"
-        "Напишите пояс в ответном сообщении или /cancel для отмены.",
-        parse_mode="Markdown"
+        "Или нажмите *Отмена* для возврата.",
+        parse_mode="Markdown",
+        reply_markup=kb,
     )
     return WAITING_TZ_INPUT
 
@@ -2408,8 +2549,20 @@ async def show_help(query):
 # ИСКЛЮЧЕНИЯ САЙТОВ (split tunneling)
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _sites_text(name: str, ep_key: str) -> str:
+    short = name.split(".", 1)[1] if "." in name else name
+    ep    = _resolve_endpoint(ep_key)
+    return (
+        f"🌐 Исключения сайтов для *{short}*\n"
+        f"🌐 Эндпоинт: `{ep}`\n\n"
+        f"Отмеченные сайты будут работать *без VPN*.\n"
+        f"🏠 Локальная сеть включена всегда.\n"
+        f"Нажмите на категорию чтобы раскрыть её."
+    )
+
+
 async def show_sites_menu(query, name: str, user_id: int, context, ep_key: str = "main"):
-    """Меню исключений. ep_key передаётся из conf_excl_<ep_key>_<name>."""
+    """Меню исключений. ep_key передаётся из conf_excl_<ep_key>_<n>."""
     user_prefix = get_user_name(user_id) + "."
     if user_id != ADMIN_ID and not name.startswith(user_prefix):
         await query.answer("⛔ Это не ваше устройство.", show_alert=True)
@@ -2418,20 +2571,21 @@ async def show_sites_menu(query, name: str, user_id: int, context, ep_key: str =
     context.user_data["sites_device"]   = name
     context.user_data["sites_selected"] = set(DEFAULT_SELECTED)
     context.user_data["sites_ep_key"]   = ep_key
+    context.user_data["sites_expanded"] = set()  # все категории свёрнуты
 
-    short = name.split(".", 1)[1] if "." in name else name
-    ep    = _resolve_endpoint(ep_key)
     await query.edit_message_text(
-        f"🌐 Исключения сайтов для *{short}*\n"
-        f"🌐 Эндпоинт: `{ep}`\n\n"
-        f"Отмеченные сайты будут работать *без VPN*.\n"
-        f"🏠 Локальная сеть включена всегда.",
-        reply_markup=sites_keyboard(context.user_data["sites_selected"], name),
+        _sites_text(name, ep_key),
+        reply_markup=sites_keyboard(
+            context.user_data["sites_selected"],
+            name,
+            context.user_data["sites_expanded"],
+        ),
         parse_mode="Markdown",
     )
 
 
 async def toggle_site_handler(query, key: str, user_id: int, context):
+    """Переключение отдельного сайта, выбрать/снять все."""
     name = context.user_data.get("sites_device")
     if not name:
         await query.answer("Сессия устарела, откройте меню заново.", show_alert=True)
@@ -2442,23 +2596,53 @@ async def toggle_site_handler(query, key: str, user_id: int, context):
         await query.answer("⛔ Это не ваше устройство.", show_alert=True)
         return
 
-    if key in DEFAULT_SELECTED:
+    selected = context.user_data.get("sites_selected", set(DEFAULT_SELECTED))
+    expanded = context.user_data.get("sites_expanded", set())
+    ep_key   = context.user_data.get("sites_ep_key", "main")
+
+    if key == "select_all":
+        selected = set(DEFAULT_SELECTED) | ALL_SELECTABLE
+        context.user_data["sites_selected"] = selected
+    elif key == "deselect_all":
+        selected = set(DEFAULT_SELECTED)
+        context.user_data["sites_selected"] = selected
+    elif key in DEFAULT_SELECTED:
         await query.answer()
+        return
+    else:
+        if key in selected:
+            selected.discard(key)
+        else:
+            selected.add(key)
+        context.user_data["sites_selected"] = selected
+
+    await query.edit_message_text(
+        _sites_text(name, ep_key),
+        reply_markup=sites_keyboard(selected, name, expanded),
+        parse_mode="Markdown",
+    )
+
+
+async def toggle_category_handler(query, cat_name: str, context):
+    """Разворачивает/сворачивает категорию в меню исключений."""
+    name = context.user_data.get("sites_device")
+    if not name:
+        await query.answer("Сессия устарела, откройте меню заново.", show_alert=True)
         return
 
     selected = context.user_data.get("sites_selected", set(DEFAULT_SELECTED))
-    if key in selected:
-        selected.discard(key)
-    else:
-        selected.add(key)
-    context.user_data["sites_selected"] = selected
+    expanded = context.user_data.get("sites_expanded", set())
+    ep_key   = context.user_data.get("sites_ep_key", "main")
 
-    short = name.split(".", 1)[1] if "." in name else name
+    if cat_name in expanded:
+        expanded.discard(cat_name)
+    else:
+        expanded.add(cat_name)
+    context.user_data["sites_expanded"] = expanded
+
     await query.edit_message_text(
-        f"🌐 Исключения сайтов для *{short}*\n\n"
-        f"Отмеченные сайты будут работать *без VPN*.\n"
-        f"🏠 Локальная сеть включена всегда.",
-        reply_markup=sites_keyboard(selected, name),
+        _sites_text(name, ep_key),
+        reply_markup=sites_keyboard(selected, name, expanded),
         parse_mode="Markdown",
     )
 
@@ -2485,14 +2669,14 @@ async def apply_sites(query, user_id: int, context):
     await query.edit_message_text("⏳ Резолвлю IP-адреса, подождите...")
 
     allowed_ips = build_allowed_ips(selected)
-    excl_count  = len(selected - DEFAULT_SELECTED)
 
     context.user_data.pop("sites_device", None)
     context.user_data.pop("sites_selected", None)
     context.user_data.pop("sites_ep_key", None)
+    context.user_data.pop("sites_expanded", None)
 
-    # Отправляем конфиг с исключениями через общий механизм
     await do_send_conf(query, name, ep_key, allowed_ips)
+
 
 
 
@@ -2701,13 +2885,27 @@ async def receive_device_name(update: Update, context: ContextTypes.DEFAULT_TYPE
         return ConversationHandler.END
 
     raw        = update.message.text.strip()
-    # Убираем дефисы — AmneziaWG их не любит в имени файла
+
+    # Проверяем наличие кириллицы / не-ASCII символов ДО фильтрации
+    has_non_ascii = any(not c.isascii() for c in raw)
+
+    # Убираем всё лишнее — AmneziaWG не любит дефисы и спецсимволы
     device_raw = "".join(c for c in raw if c.isascii() and (c.isalnum() or c == "_"))
     device_raw = device_raw.capitalize()
 
     if not device_raw:
         await update.message.reply_text(
             "❌ Введите название *латиницей*, только буквы и цифры. Например: `Phone`",
+            parse_mode="Markdown"
+        )
+        return WAITING_DEVICE_NAME
+
+    # Если была кириллица — не угадываем, просим переввести явно
+    if has_non_ascii:
+        await update.message.reply_text(
+            f"❌ Название содержит кириллицу или недопустимые символы.\n\n"
+            f"Используйте *только латинские буквы и цифры*, например: `Phone`, `PC`, `iPad`, `TV`\n\n"
+            f"Кириллица, пробелы и спецсимволы не поддерживаются.",
             parse_mode="Markdown"
         )
         return WAITING_DEVICE_NAME
@@ -2773,6 +2971,21 @@ def get_real_server_ip() -> str | None:
         except:
             pass
     return None
+
+async def send_start_hello(context: ContextTypes.DEFAULT_TYPE):
+    """Job: запускается через 5 секунд после старта бота.
+    Отправляет сообщение с кнопкой меню — чтобы пользователь понял что бот работает."""
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📋 Открыть меню", callback_data="back")],
+    ])
+    try:
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text="✅ Бот запущен и готов к работе.",
+            reply_markup=kb,
+        )
+    except Exception as e:
+        logger.warning(f"send_start_hello: не удалось отправить сообщение: {e}")
 
 async def check_ip_on_start(context: ContextTypes.DEFAULT_TYPE):
     """Job: запускается один раз через 15 секунд после старта.
@@ -2931,6 +3144,8 @@ def main():
     app.job_queue.run_repeating(bw_monitor_job, interval=5, first=10)
     # Проверка IP сервера — один раз через 15 секунд после старта
     app.job_queue.run_once(check_ip_on_start, when=15)
+    # Уведомление о старте — через 5 секунд после запуска
+    app.job_queue.run_once(send_start_hello, when=5)
 
     logger.info(f"Бот запущен. Admin ID: {ADMIN_ID}")
     print(f"\n\033[0;32m✓ Бот запущен! Admin ID: {ADMIN_ID}\033[0m\n")
