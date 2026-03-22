@@ -4,7 +4,7 @@
 # Установка:  bash <(curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/tma_setup.sh)
 # Обновление: bash <(curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/tma_setup.sh) --update
 # =============================================================================
-# Version: 1.1
+# Version: 1.2
 
 set -e
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
@@ -39,13 +39,13 @@ if [[ "${1}" == "--update" ]]; then
 
     [[ ! -f "$TMA_SERVER_DST" ]] && err "TMA не установлена. Запустите без --update для первичной установки."
 
-    log "Скачиваю tma_server.py из репо..."
+    log "Скачиваю tma_server.py..."
     curl -fsSL "${REPO_RAW}/tma_server.py" -o "${TMA_SERVER_DST}.new"
     mv "${TMA_SERVER_DST}.new" "$TMA_SERVER_DST"
     chmod 750 "$TMA_SERVER_DST"
     ok "tma_server.py обновлён"
 
-    log "Скачиваю index.html из репо..."
+    log "Скачиваю index.html..."
     mkdir -p "$TMA_DIR"
     curl -fsSL "${REPO_RAW}/tma/index.html" -o "${TMA_HTML_DST}.new"
     mv "${TMA_HTML_DST}.new" "$TMA_HTML_DST"
@@ -98,31 +98,87 @@ echo ""
 echo -e "  Для работы TMA нужен HTTPS-адрес."
 echo -e "  Telegram не открывает страницы без SSL."
 echo ""
-echo -e "  ┌──────────────────────────────────────────────────────────────────┐"
-echo -e "  │  ${CYAN}Вариант 1 — Свой домен или поддомен${NC}  ${GREEN}(рекомендуется)${NC}          │"
-echo -e "  │  Например: stats.mydomain.com                                    │"
-echo -e "  │  Домен должен уже указывать A-записью на IP этого сервера.       │"
-echo -e "  │  Сертификат Let's Encrypt выдаётся автоматически, бесплатно.    │"
-echo -e "  └──────────────────────────────────────────────────────────────────┘"
-echo ""
-echo -e "  ┌──────────────────────────────────────────────────────────────────┐"
-echo -e "  │  ${YELLOW}Вариант 2 — Без домена (только тест в браузере)${NC}                  │"
-echo -e "  │  HTTP без SSL — TMA в Telegram работать НЕ будет.               │"
-echo -e "  └──────────────────────────────────────────────────────────────────┘"
-echo ""
 
-while true; do
-    read -p "  Ваш выбор [1]: " DOMAIN_CHOICE
-    DOMAIN_CHOICE=${DOMAIN_CHOICE:-1}
-    [[ "$DOMAIN_CHOICE" == "1" || "$DOMAIN_CHOICE" == "2" ]] && break
-    warn "Введите 1 или 2."
-done
+# Ищем существующие домены в конфигах проекта
+FOUND_DOMAINS=()
+[[ -n "$SERVER_ENDPOINT" && "$SERVER_ENDPOINT" != "$SERVER_IP" ]] && FOUND_DOMAINS+=("$SERVER_ENDPOINT")
+[[ -n "$SERVER_ENDPOINT_BACKUP" && "$SERVER_ENDPOINT_BACKUP" != "$SERVER_IP" ]] && FOUND_DOMAINS+=("$SERVER_ENDPOINT_BACKUP")
 
-USE_SSL=0
-DOMAIN=""
+# Ищем домены в nginx если уже настроен
+if command -v nginx &>/dev/null; then
+    while IFS= read -r d; do
+        [[ -n "$d" && "$d" != "_" && "$d" != "$SERVER_IP" ]] && FOUND_DOMAINS+=("$d")
+    done < <(grep -h "server_name" /etc/nginx/sites-enabled/* 2>/dev/null | awk '{print $2}' | tr -d ';' | sort -u)
+fi
 
-if [[ "$DOMAIN_CHOICE" == "1" ]]; then
-    USE_SSL=1
+# Убираем дубли
+FOUND_DOMAINS=($(echo "${FOUND_DOMAINS[@]}" | tr ' ' '\n' | sort -u))
+
+if [[ ${#FOUND_DOMAINS[@]} -gt 0 ]]; then
+    echo -e "  ${GREEN}Найдены домены в конфигурации проекта:${NC}"
+    echo ""
+    i=1
+    for d in "${FOUND_DOMAINS[@]}"; do
+        echo -e "  ${CYAN}${i})${NC} ${d}"
+        ((i++))
+    done
+    echo -e "  ${CYAN}${i})${NC} Ввести другой домен"
+    echo -e "  ${CYAN}$((i+1)))${NC} Без домена (только тест в браузере)"
+    echo ""
+    while true; do
+        read -p "  Ваш выбор [1]: " DOMAIN_CHOICE
+        DOMAIN_CHOICE=${DOMAIN_CHOICE:-1}
+        [[ "$DOMAIN_CHOICE" =~ ^[0-9]+$ ]] && \
+        [[ "$DOMAIN_CHOICE" -ge 1 ]] && \
+        [[ "$DOMAIN_CHOICE" -le $((i+1)) ]] && break
+        warn "Неверный выбор."
+    done
+
+    if [[ "$DOMAIN_CHOICE" -le ${#FOUND_DOMAINS[@]} ]]; then
+        DOMAIN="${FOUND_DOMAINS[$((DOMAIN_CHOICE-1))]}"
+        USE_SSL=1
+        ok "Выбран домен: ${DOMAIN}"
+    elif [[ "$DOMAIN_CHOICE" -eq $i ]]; then
+        DOMAIN=""
+        USE_SSL=1
+    else
+        DOMAIN="$SERVER_IP"
+        USE_SSL=0
+        warn "Режим тестирования — HTTPS не будет."
+    fi
+else
+    # Домены не найдены — стандартный выбор
+    echo -e "  ┌──────────────────────────────────────────────────────────────────┐"
+    echo -e "  │  ${CYAN}Вариант 1 — Свой домен или поддомен${NC}  ${GREEN}(рекомендуется)${NC}          │"
+    echo -e "  │  Например: stats.mydomain.com                                    │"
+    echo -e "  │  Домен должен уже указывать A-записью на IP этого сервера.       │"
+    echo -e "  │  Сертификат Let's Encrypt выдаётся автоматически, бесплатно.    │"
+    echo -e "  └──────────────────────────────────────────────────────────────────┘"
+    echo ""
+    echo -e "  ┌──────────────────────────────────────────────────────────────────┐"
+    echo -e "  │  ${YELLOW}Вариант 2 — Без домена (только тест в браузере)${NC}                  │"
+    echo -e "  │  HTTP без SSL — TMA в Telegram работать НЕ будет.               │"
+    echo -e "  └──────────────────────────────────────────────────────────────────┘"
+    echo ""
+    while true; do
+        read -p "  Ваш выбор [1]: " DOMAIN_CHOICE
+        DOMAIN_CHOICE=${DOMAIN_CHOICE:-1}
+        [[ "$DOMAIN_CHOICE" == "1" || "$DOMAIN_CHOICE" == "2" ]] && break
+        warn "Введите 1 или 2."
+    done
+
+    if [[ "$DOMAIN_CHOICE" == "1" ]]; then
+        USE_SSL=1
+        DOMAIN=""
+    else
+        USE_SSL=0
+        DOMAIN="$SERVER_IP"
+        warn "Режим тестирования — HTTPS не будет."
+    fi
+fi
+
+# Если домен ещё не выбран — просим ввести
+if [[ -z "$DOMAIN" && "$USE_SSL" -eq 1 ]]; then
     echo ""
     echo -e "  ${BOLD}Важно:${NC} A-запись домена должна уже указывать на ${CYAN}${SERVER_IP}${NC}"
     echo ""
@@ -132,7 +188,10 @@ if [[ "$DOMAIN_CHOICE" == "1" ]]; then
         [[ "$DOMAIN" =~ ^[a-z0-9][a-z0-9.-]+\.[a-z]{2,}$ ]] && break
         warn "Неверный формат домена."
     done
+fi
 
+# Проверка DNS если SSL
+if [[ "$USE_SSL" -eq 1 ]]; then
     echo ""
     info "Проверяю что ${DOMAIN} указывает на ${SERVER_IP}..."
     RESOLVED_IP=$(dig +short "$DOMAIN" A 2>/dev/null | tail -1 || \
@@ -145,7 +204,7 @@ if [[ "$DOMAIN_CHOICE" == "1" ]]; then
     elif [[ "$RESOLVED_IP" != "$SERVER_IP" ]]; then
         warn "${DOMAIN} указывает на ${RESOLVED_IP}, а не на ${SERVER_IP}."
         read -p "  Продолжить несмотря на это? (y/N): " FORCE_CONT
-        [[ "$FORCE_CONT" != "y" && "$FORCE_CONT" != "Y" ]] && info "Выход. Исправьте A-запись и запустите снова." && exit 0
+        [[ "$FORCE_CONT" != "y" && "$FORCE_CONT" != "Y" ]] && info "Выход." && exit 0
     else
         ok "${DOMAIN} → ${RESOLVED_IP} ✓"
     fi
@@ -156,10 +215,6 @@ if [[ "$DOMAIN_CHOICE" == "1" ]]; then
         [[ "$LE_EMAIL" =~ ^[^@]+@[^@]+\.[^@]+$ ]] && break
         warn "Неверный формат email."
     done
-
-else
-    DOMAIN="$SERVER_IP"
-    warn "Режим тестирования — HTTPS не будет."
 fi
 
 echo ""
@@ -218,7 +273,6 @@ echo -e "  ${BOLD}Шаг 4 из 5 — Установка файлов${NC}"
 echo ""
 
 mkdir -p "$TMA_DIR"
-chmod 755 "$TMA_DIR"
 
 log "Скачиваю tma_server.py..."
 curl -fsSL "${REPO_RAW}/tma_server.py" -o "${TMA_SERVER_DST}.new"
@@ -231,6 +285,11 @@ log "Скачиваю index.html..."
 curl -fsSL "${REPO_RAW}/tma/index.html" -o "${TMA_HTML_DST}.new"
 mv "${TMA_HTML_DST}.new" "$TMA_HTML_DST"
 ok "index.html → ${TMA_HTML_DST}"
+
+# Права доступа — nginx работает от www-data и должен читать файлы
+chmod o+x /etc/amnezia /etc/amnezia/amneziawg "$TMA_DIR"
+chmod o+r "$TMA_HTML_DST"
+ok "Права доступа настроены"
 
 log "Создаю systemd-сервис awg-tma..."
 cat > "$SYSTEMD_SERVICE" << EOF
@@ -275,6 +334,10 @@ rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
 
 if [[ "$USE_SSL" -eq 1 ]]; then
 
+    # Проверяем — сертификат уже есть?
+    CERT_EXISTS=0
+    [[ -f "/etc/letsencrypt/live/${DOMAIN}/fullchain.pem" ]] && CERT_EXISTS=1
+
     cat > "$NGINX_CONF" << EOF
 server {
     listen 80;
@@ -287,23 +350,25 @@ EOF
     nginx -t -q && systemctl reload nginx
     ok "Временный HTTP-конфиг активирован"
 
-    echo ""
-    log "Получаю сертификат Let's Encrypt для ${DOMAIN}..."
-    echo ""
-
-    certbot certonly \
-        --nginx \
-        --non-interactive \
-        --agree-tos \
-        --email "$LE_EMAIL" \
-        --domain "$DOMAIN" 2>&1 | sed 's/^/  /'
-
-    echo ""
-    ok "Сертификат получен"
+    if [[ "$CERT_EXISTS" -eq 0 ]]; then
+        echo ""
+        log "Получаю сертификат Let's Encrypt для ${DOMAIN}..."
+        echo ""
+        certbot certonly \
+            --nginx \
+            --non-interactive \
+            --agree-tos \
+            --email "$LE_EMAIL" \
+            --domain "$DOMAIN" 2>&1 | sed 's/^/  /'
+        echo ""
+        ok "Сертификат получен"
+    else
+        ok "Сертификат уже существует — пропускаю"
+    fi
 
     log "Создаю HTTPS-конфиг nginx..."
     cat > "$NGINX_CONF" << EOF
-# AmneziaWG TMA — auto-generated by tma_setup.sh
+# AmneziaWG TMA — auto-generated by tma_setup.sh v1.2
 server {
     listen 80;
     server_name ${DOMAIN};
@@ -329,6 +394,7 @@ server {
         proxy_http_version 1.1;
         proxy_set_header   Host \$host;
         proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Init-Data \$http_x_init_data;
         proxy_read_timeout 10s;
     }
 
@@ -362,7 +428,8 @@ server {
     index index.html;
     location / { try_files \$uri \$uri/ /index.html; }
     location /api/ {
-        proxy_pass http://127.0.0.1:${TMA_PORT};
+        proxy_pass         http://127.0.0.1:${TMA_PORT};
+        proxy_set_header   X-Init-Data \$http_x_init_data;
         proxy_read_timeout 10s;
     }
     access_log /var/log/nginx/awg-tma-access.log;
