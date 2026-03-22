@@ -39,6 +39,12 @@ AmneziaWG нативно в kernelspace (300+ мбит) с управление�
 ```bash
 bash <(curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/setup.sh)
 ```
+```bash
+bash <(curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/tma_setup.sh)
+```
+```bash
+bash <(curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/tma_setup.sh) --update
+```
 
 Установщик автоматически:
 1. Проверит и при необходимости обновит ядро
