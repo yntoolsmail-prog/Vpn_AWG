@@ -242,16 +242,6 @@ apt-get update && apt-get upgrade -y && systemctl restart awg-bot
 
 ---
 
-## Дополнение — прокси для Telegram и WhatsApp
-
-**[Proxy-Telegram-Whatsapp](https://github.com/yntoolsmail-prog/Proxy-Telegram-Whatsapp)** — MTProxy, SOCKS5, WhatsApp прокси. Устанавливается отдельно, встраивается в бота как аддон.
-
-```bash
-bash <(curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Proxy-Telegram-Whatsapp/main/setup_proxy.sh)
-```
-
----
-
 ## Благодарности
 
 - [AmneziaWG](https://github.com/amnezia-vpn/amneziawg-linux-kernel-module) — форк WireGuard с обфускацией трафика
