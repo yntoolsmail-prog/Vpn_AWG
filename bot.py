@@ -1570,6 +1570,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("Пропущено. IP не изменён.", reply_markup=back_kb())
         else:
             await do_update_ip(query, new_ip)
+    elif data.startswith("repo_update_") and is_admin:
+        sha = data[12:]
+        await do_repo_update(query, sha)
+    elif data.startswith("repo_skip_") and is_admin:
+        sha = data[10:]
+        _write_last_commit(sha)
+        await query.edit_message_text(
+            f"⏭ Пропущено. Коммит `{sha[:7]}` отмечен как известный.",
+            parse_mode="Markdown",
+        )
     elif data == "help":
         await show_help(query)
     elif data == "help_dns":
@@ -3018,6 +3028,137 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# МОНИТОРИНГ РЕПОЗИТОРИЯ
+# ══════════════════════════════════════════════════════════════════════════════
+
+REPO_OWNER  = "yntoolsmail-prog"
+REPO_NAME   = "Vpn_AWG"
+REPO_BRANCH = "main"
+REPO_URL    = f"https://github.com/{REPO_OWNER}/{REPO_NAME}"
+REPO_COMMIT_FILE = "/etc/amnezia/amneziawg/last_commit.txt"
+
+def _gh_api(path: str) -> dict | None:
+    """GET к GitHub API, возвращает dict или None при ошибке."""
+    try:
+        out = subprocess.check_output(
+            ["curl", "-s", "--max-time", "10",
+             "-H", "Accept: application/vnd.github+json",
+             f"https://api.github.com/{path}"],
+            text=True,
+        )
+        return json.loads(out)
+    except Exception:
+        return None
+
+def _read_last_commit() -> str:
+    """Читает сохранённый SHA последнего известного коммита."""
+    try:
+        with open(REPO_COMMIT_FILE) as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return ""
+
+def _write_last_commit(sha: str):
+    """Сохраняет SHA коммита на диск."""
+    os.makedirs(os.path.dirname(REPO_COMMIT_FILE), exist_ok=True)
+    with open(REPO_COMMIT_FILE, "w") as f:
+        f.write(sha)
+
+async def check_repo_updates(context: ContextTypes.DEFAULT_TYPE):
+    """Job: проверяет новые коммиты в репозитории каждые 30 минут.
+    При появлении изменений отправляет уведомление админу."""
+    data = _gh_api(f"repos/{REPO_OWNER}/{REPO_NAME}/commits/{REPO_BRANCH}")
+    if not data or "sha" not in data:
+        logger.warning("check_repo_updates: не удалось получить данные из GitHub API")
+        return
+
+    latest_sha  = data["sha"]
+    short_sha   = latest_sha[:7]
+    last_known  = _read_last_commit()
+
+    if not last_known:
+        # Первый запуск — просто запоминаем текущий коммит, не шумим
+        _write_last_commit(latest_sha)
+        logger.info(f"check_repo_updates: инициализация, текущий коммит {short_sha}")
+        return
+
+    if latest_sha == last_known:
+        logger.info(f"check_repo_updates: изменений нет ({short_sha})")
+        return
+
+    # Есть новый коммит — собираем данные
+    commit_info  = data.get("commit", {})
+    message      = commit_info.get("message", "—").split("\n")[0][:80]
+    author       = commit_info.get("author", {}).get("name", "—")
+    date_raw     = commit_info.get("author", {}).get("date", "")
+    date_str     = date_raw[:10] if date_raw else "—"
+    compare_url  = f"{REPO_URL}/compare/{last_known[:7]}...{short_sha}"
+
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔍 Смотреть изменения", url=compare_url)],
+        [InlineKeyboardButton("🔄 Обновить сейчас",    callback_data=f"repo_update_{latest_sha}")],
+        [InlineKeyboardButton("⏭ Пропустить",          callback_data=f"repo_skip_{latest_sha}")],
+    ])
+
+    text = (
+        f"🆕 *Новые изменения в репозитории!*\n\n"
+        f"📦 [`{short_sha}`]({REPO_URL}/commit/{latest_sha})\n"
+        f"✏️ {message}\n"
+        f"👤 {author}  •  {date_str}\n\n"
+        f"👆 Нажмите «Смотреть изменения» или перейдите на сервер\n"
+        f"и выполните обновление через `vpn.sh` → Обновление."
+    )
+
+    await context.bot.send_message(
+        chat_id=ADMIN_ID,
+        text=text,
+        parse_mode="Markdown",
+        reply_markup=kb,
+        disable_web_page_preview=True,
+    )
+    logger.info(f"check_repo_updates: новый коммит {short_sha}, уведомление отправлено")
+
+async def do_repo_update(query, sha: str):
+    """Скачивает актуальные bot.py и vpn.sh из репозитория и перезапускает бота."""
+    short_sha = sha[:7]
+    await query.edit_message_text(
+        f"⏳ Обновляю файлы из репозитория (коммит `{short_sha}`)...",
+        parse_mode="Markdown",
+    )
+    REPO_RAW = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{REPO_BRANCH}"
+    try:
+        # Скачиваем оба файла
+        r_bot = subprocess.run(
+            ["curl", "-s", "--max-time", "30", f"{REPO_RAW}/bot.py", "-o", "/root/bot.py"],
+            capture_output=True,
+        )
+        r_vpn = subprocess.run(
+            ["curl", "-s", "--max-time", "30", f"{REPO_RAW}/vpn.sh", "-o", "/root/vpn.sh"],
+            capture_output=True,
+        )
+        if r_bot.returncode != 0 or r_vpn.returncode != 0:
+            raise RuntimeError("curl вернул ненулевой код")
+
+        subprocess.run(["chmod", "+x", "/root/vpn.sh"], check=True)
+        _write_last_commit(sha)
+
+        await query.edit_message_text(
+            f"✅ *Обновление выполнено!*\n\n"
+            f"📦 Коммит: `{short_sha}`\n"
+            f"📄 `bot.py` и `vpn.sh` обновлены.\n\n"
+            f"⏳ Бот перезапускается...",
+            parse_mode="Markdown",
+        )
+        subprocess.Popen(["bash", "-c", "sleep 2 && systemctl restart awg-bot"])
+
+    except Exception as e:
+        await query.edit_message_text(
+            f"❌ Ошибка при обновлении: `{e}`\n\n"
+            f"Зайдите на сервер и обновите вручную через `vpn.sh` → Обновление.",
+            parse_mode="Markdown",
+        )
+
+# ══════════════════════════════════════════════════════════════════════════════
 # ПРОВЕРКА И ОБНОВЛЕНИЕ IP СЕРВЕРА
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -3226,6 +3367,8 @@ def main():
     app.job_queue.run_once(check_ip_on_start, when=15)
     # Уведомление о старте — через 5 секунд после запуска
     app.job_queue.run_once(send_start_hello, when=5)
+    # Мониторинг обновлений репозитория — раз в сутки, первая проверка через 20 секунд после старта
+    app.job_queue.run_repeating(check_repo_updates, interval=86400, first=20)
 
     logger.info(f"Бот запущен. Admin ID: {ADMIN_ID}")
     print(f"\n\033[0;32m✓ Бот запущен! Admin ID: {ADMIN_ID}\033[0m\n")
