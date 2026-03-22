@@ -430,6 +430,695 @@
 <script>
 // ─── Telegram WebApp init ──────────────────────────────────────────────────────
 const tg = window.Telegram?.WebApp;
+if (tg) { tg.ready(); tg.expand(); }
+
+// ─── STATE ────────────────────────────────────────────────────────────────────
+let firstLoad = true;
+let lastData  = null;
+
+// ─── HELPERS ──────────────────────────────────────────────────────────────────
+function fmtHandshake(sec) {
+  if (!sec) return { text: "никогда", cls: "" };
+  if (sec < 180)   return { text: sec + "с назад", cls: "online" };
+  if (sec < 600)   return { text: Math.round(sec/60) + " мин", cls: "recent" };
+  if (sec < 3600)  return { text: Math.round(sec/60) + " мин", cls: "" };
+  if (sec < 86400) return { text: Math.round(sec/3600) + " ч", cls: "" };
+  return { text: Math.round(sec/86400) + " д", cls: "" };
+}
+function barColor(pct) {
+  if (pct > 85) return "red";
+  if (pct > 65) return "amber";
+  return "green";
+}
+function loadColor(val) {
+  const v = parseFloat(val);
+  if (v > 2.0) return "red";
+  if (v > 1.0) return "amber";
+  return "green";
+}
+function setVal(id, text) {
+  const el = document.getElementById(id);
+  if (el && el.textContent !== String(text)) el.textContent = text;
+}
+function setStyle(id, prop, val) {
+  const el = document.getElementById(id);
+  if (el) el.style[prop] = val;
+}
+function setClass(id, cls) {
+  const el = document.getElementById(id);
+  if (el && el.className !== cls) el.className = cls;
+}
+
+// ─── FIRST RENDER — строим каркас один раз ───────────────────────────────────
+function buildSkeleton(d) {
+  const ramPct = Math.round(d.ram_used_mb / d.ram_total_mb * 100);
+  const maxMonthly = Math.max(...d.monthly.map(m => m.total_gb));
+
+  document.getElementById('content').innerHTML = `
+  <div class="grid-3">
+    <div class="card fade-in">
+      <div class="card-label">онлайн</div>
+      <div class="card-value green" id="v-online">${d.peers_online}</div>
+      <div class="card-sub">из <span id="v-total">${d.peers_total}</span></div>
+      <div class="bar-wrap"><div class="bar-fill green" id="bar-online" style="width:${Math.round(d.peers_online/d.peers_total*100)}%"></div></div>
+    </div>
+    <div class="card fade-in" style="animation-delay:0.05s">
+      <div class="card-label">RAM</div>
+      <div class="card-value ${barColor(ramPct)}" id="v-ram">${ramPct}%</div>
+      <div class="card-sub"><span id="v-ram-mb">${d.ram_used_mb}</span> MB</div>
+      <div class="bar-wrap"><div class="bar-fill ${barColor(ramPct)}" id="bar-ram" style="width:${ramPct}%"></div></div>
+    </div>
+    <div class="card fade-in" style="animation-delay:0.1s">
+      <div class="card-label">Диск</div>
+      <div class="card-value ${barColor(d.disk_pct)}" id="v-disk">${d.disk_pct}%</div>
+      <div class="card-sub" id="v-disk-used">${d.disk_used}</div>
+      <div class="bar-wrap"><div class="bar-fill ${barColor(d.disk_pct)}" id="bar-disk" style="width:${d.disk_pct}%"></div></div>
+    </div>
+  </div>
+
+  <div class="card wide fade-in" style="animation-delay:0.12s">
+    <div class="card-label">Uptime · Load Average</div>
+    <div class="uptime-tag" id="v-uptime">${d.uptime}</div>
+    <div class="load-bars">
+      <div class="load-item">
+        <div class="load-num" id="v-load0" style="color:var(--${loadColor(d.load[0])})">${d.load[0]}</div>
+        <div class="load-period">1 мин</div>
+      </div>
+      <div class="load-item">
+        <div class="load-num" id="v-load1" style="color:var(--${loadColor(d.load[1])})">${d.load[1]}</div>
+        <div class="load-period">5 мин</div>
+      </div>
+      <div class="load-item">
+        <div class="load-num" id="v-load2" style="color:var(--${loadColor(d.load[2])})">${d.load[2]}</div>
+        <div class="load-period">15 мин</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-title">трафик · сейчас</div>
+  <div class="grid-2">
+    <div class="card fade-in" style="animation-delay:0.14s">
+      <div class="card-label">↓ Входящий</div>
+      <div class="card-value blue" id="v-rx">${d.bw_current_rx}</div>
+      <div class="card-sub">Mbit/s</div>
+    </div>
+    <div class="card fade-in" style="animation-delay:0.18s">
+      <div class="card-label">↑ Исходящий</div>
+      <div class="card-value green" id="v-tx">${d.bw_current_tx}</div>
+      <div class="card-sub">Mbit/s</div>
+    </div>
+  </div>
+
+  <div class="traffic-card fade-in" style="animation-delay:0.2s">
+    <div class="card-label" style="margin-bottom:8px">Пики скорости</div>
+    <div class="traffic-row">
+      <div class="traffic-label">📅 Пик сегодня</div>
+      <div class="traffic-val"><span class="arrow-down" id="v-day-rx">↓${d.bw_peak_day.rx}</span> <span class="arrow-up" id="v-day-tx">↑${d.bw_peak_day.tx}</span> <span style="font-size:10px;color:var(--text-dim)">Mbit</span></div>
+    </div>
+    <div class="traffic-row">
+      <div class="traffic-label">🏆 Абс. пик</div>
+      <div class="traffic-val"><span class="arrow-down" id="v-all-rx">↓${d.bw_peak_all.rx}</span> <span class="arrow-up" id="v-all-tx">↑${d.bw_peak_all.tx}</span> <span style="font-size:10px;color:var(--text-dim)">Mbit</span></div>
+    </div>
+    <div class="traffic-row">
+      <div class="traffic-label">📶 Всего ↓ (с рест.)</div>
+      <div class="traffic-val" style="color:var(--blue)" id="v-total-rx">${d.traffic_total_rx}</div>
+    </div>
+    <div class="traffic-row">
+      <div class="traffic-label">📶 Всего ↑ (с рест.)</div>
+      <div class="traffic-val" style="color:var(--green)" id="v-total-tx">${d.traffic_total_tx}</div>
+    </div>
+  </div>
+
+  <div class="section-title">месячный трафик</div>
+  <div class="chart-card fade-in" style="animation-delay:0.22s">
+    <div class="chart-bars">
+      ${d.monthly.map(m => {
+        const h = Math.max(6, Math.round(m.total_gb / maxMonthly * 56));
+        return `<div class="chart-col">
+          <div class="chart-bar ${m.current ? 'current' : ''}" style="height:${h}px" title="${m.total_gb} GB"></div>
+          <div class="chart-month">${m.label}</div>
+        </div>`;
+      }).join('')}
+    </div>
+    <div class="chart-legend">
+      <div><span class="legend-dot" style="background:var(--blue);border:1px solid var(--blue)"></span>прошлые</div>
+      <div><span class="legend-dot" style="background:var(--green-mid);border:1px solid var(--green)"></span>текущий</div>
+    </div>
+    <div style="margin-top:10px" id="monthly-table">
+      ${d.monthly.map(m => `
+        <div class="traffic-row">
+          <div class="traffic-label">${m.label}</div>
+          <div class="traffic-val" style="color:${m.current?'var(--green)':'var(--text-mid)'}">${m.total_gb >= 1000 ? (m.total_gb/1000).toFixed(2)+' TB' : m.total_gb+' GB'}</div>
+        </div>`).join('')}
+    </div>
+  </div>
+
+  <div class="section-title">клиенты</div>
+  <div class="peers-card fade-in" style="animation-delay:0.24s">
+    <div class="peers-header">
+      <div>устройство</div><div>хэндшейк</div><div style="text-align:right">трафик</div>
+    </div>
+    <div id="peers-list">
+      ${d.peers.map(p => {
+        const hs = fmtHandshake(p.handshake);
+        return `<div class="peer-row" id="peer-${p.name.replace(/\./g,'-')}">
+          <div class="peer-name">${p.name}</div>
+          <div class="peer-hs ${hs.cls}">${hs.text}</div>
+          <div class="peer-traffic">↓${p.rx}<br>↑${p.tx}</div>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>`;
+}
+
+// ─── LIVE UPDATE — только значения, без перерисовки ──────────────────────────
+function updateValues(d) {
+  const ramPct = Math.round(d.ram_used_mb / d.ram_total_mb * 100);
+
+  // Карточки
+  setVal('v-online', d.peers_online);
+  setVal('v-total', d.peers_total);
+  setStyle('bar-online', 'width', Math.round(d.peers_online/d.peers_total*100)+'%');
+
+  setVal('v-ram', ramPct+'%');
+  setVal('v-ram-mb', d.ram_used_mb);
+  setStyle('bar-ram', 'width', ramPct+'%');
+
+  setVal('v-disk', d.disk_pct+'%');
+  setVal('v-disk-used', d.disk_used);
+  setStyle('bar-disk', 'width', d.disk_pct+'%');
+
+  // Uptime + Load
+  setVal('v-uptime', d.uptime);
+  setVal('v-load0', d.load[0]); setStyle('v-load0', 'color', `var(--${loadColor(d.load[0])})`);
+  setVal('v-load1', d.load[1]); setStyle('v-load1', 'color', `var(--${loadColor(d.load[1])})`);
+  setVal('v-load2', d.load[2]); setStyle('v-load2', 'color', `var(--${loadColor(d.load[2])})`);
+
+  // Трафик сейчас
+  setVal('v-rx', d.bw_current_rx);
+  setVal('v-tx', d.bw_current_tx);
+
+  // Пики
+  setVal('v-day-rx', `↓${d.bw_peak_day.rx}`);
+  setVal('v-day-tx', `↑${d.bw_peak_day.tx}`);
+  setVal('v-all-rx', `↓${d.bw_peak_all.rx}`);
+  setVal('v-all-tx', `↑${d.bw_peak_all.tx}`);
+  setVal('v-total-rx', d.traffic_total_rx);
+  setVal('v-total-tx', d.traffic_total_tx);
+
+  // Пиры — обновляем хэндшейки
+  d.peers.forEach(p => {
+    const id = 'peer-' + p.name.replace(/\./g, '-');
+    const row = document.getElementById(id);
+    if (row) {
+      const hs = fmtHandshake(p.handshake);
+      const hsEl = row.querySelector('.peer-hs');
+      if (hsEl) { hsEl.textContent = hs.text; hsEl.className = 'peer-hs ' + hs.cls; }
+      const trEl = row.querySelector('.peer-traffic');
+      if (trEl) trEl.innerHTML = `↓${p.rx}<br>↑${p.tx}`;
+    }
+  });
+
+  // Время обновления
+  const now = new Date();
+  document.querySelector('#last-update span').textContent =
+    now.toLocaleTimeString('ru', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+
+  // Статус
+  const dot = document.getElementById('status-dot');
+  const txt = document.getElementById('status-text');
+  if (d.awg_status === 'running') {
+    dot.classList.remove('offline'); txt.textContent = 'online';
+  } else {
+    dot.classList.add('offline'); txt.textContent = 'offline';
+  }
+}
+
+// ─── LOAD ─────────────────────────────────────────────────────────────────────
+async function loadData() {
+  try {
+    const initData = tg?.initData || "";
+    const resp = await fetch("/api/stats", {
+      headers: { "X-Init-Data": initData }
+    });
+
+    if (resp.status === 401) {
+      document.getElementById('content').innerHTML =
+        `<div class="error-card">⛔ Нет доступа<br><span style="font-size:10px;opacity:0.7">Откройте через Telegram-бота</span></div>`;
+      return;
+    }
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+    const d = await resp.json();
+
+    if (firstLoad) {
+      buildSkeleton(d);   // первый раз — строим всё
+      firstLoad = false;
+    } else {
+      updateValues(d);    // потом — только цифры
+    }
+    lastData = d;
+
+  } catch(e) {
+    if (firstLoad) {
+      document.getElementById('content').innerHTML =
+        `<div class="error-card">⚠ Не удалось получить данные<br><span style="font-size:10px;opacity:0.7">${e.message}</span></div>`;
+    }
+    // при ошибке обновления — тихо пропускаем, старые данные остаются
+  }
+}
+
+// ─── AUTO-REFRESH каждые 5 сек ───────────────────────────────────────────────
+loadData();
+setInterval(loadData, 5000);
+
+</script>
+<title>AWG Server Stats</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Syne:wght@400;700;800&display=swap');
+
+  :root {
+    --bg: #0a0c0f;
+    --surface: #111418;
+    --surface2: #181d24;
+    --border: #1e2530;
+    --border-glow: #2a3545;
+    --green: #00e676;
+    --green-dim: #00e67622;
+    --green-mid: #00e67644;
+    --blue: #40c4ff;
+    --blue-dim: #40c4ff22;
+    --amber: #ffab00;
+    --amber-dim: #ffab0022;
+    --red: #ff5252;
+    --red-dim: #ff525222;
+    --text: #c8d6e5;
+    --text-dim: #5a6a7a;
+    --text-mid: #8a9baa;
+    --accent: #00e676;
+    --glow: 0 0 20px #00e67633;
+    --glow-blue: 0 0 20px #40c4ff33;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    min-height: 100vh;
+    overscroll-behavior: none;
+  }
+
+  /* Scanline overlay */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px);
+    pointer-events: none;
+    z-index: 100;
+  }
+
+  .app {
+    max-width: 480px;
+    margin: 0 auto;
+    padding: 12px;
+    padding-bottom: 24px;
+  }
+
+  /* Header */
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    margin-bottom: 10px;
+    position: relative;
+    overflow: hidden;
+  }
+  .header::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--green), transparent);
+    opacity: 0.6;
+  }
+  .header-left {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .header-title {
+    font-family: 'Syne', sans-serif;
+    font-size: 16px;
+    font-weight: 800;
+    color: var(--green);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  .header-subtitle {
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 0.1em;
+  }
+  .status-dot {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--green);
+  }
+  .dot {
+    width: 8px; height: 8px;
+    background: var(--green);
+    border-radius: 50%;
+    box-shadow: 0 0 8px var(--green);
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; box-shadow: 0 0 8px var(--green); }
+    50% { opacity: 0.5; box-shadow: 0 0 4px var(--green); }
+  }
+  .dot.offline { background: var(--red); box-shadow: 0 0 8px var(--red); }
+
+  /* Last update */
+  .last-update {
+    text-align: center;
+    font-size: 10px;
+    color: var(--text-dim);
+    margin-bottom: 10px;
+    letter-spacing: 0.05em;
+  }
+  .last-update span { color: var(--text-mid); }
+
+  /* Grid layout */
+  .grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .grid-3 {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+
+  /* Cards */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.3s;
+  }
+  .card:hover { border-color: var(--border-glow); }
+
+  .card-label {
+    font-size: 9px;
+    color: var(--text-dim);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+  .card-value {
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1;
+    color: var(--text);
+  }
+  .card-value.green { color: var(--green); }
+  .card-value.blue  { color: var(--blue); }
+  .card-value.amber { color: var(--amber); }
+  .card-value.red   { color: var(--red); }
+  .card-sub {
+    font-size: 10px;
+    color: var(--text-dim);
+    margin-top: 4px;
+  }
+
+  /* Bar meter */
+  .bar-wrap {
+    background: var(--surface2);
+    border-radius: 3px;
+    height: 4px;
+    margin-top: 8px;
+    overflow: hidden;
+  }
+  .bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.8s cubic-bezier(0.4,0,0.2,1);
+  }
+  .bar-fill.green { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .bar-fill.amber { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+  .bar-fill.red   { background: var(--red);   box-shadow: 0 0 6px var(--red); }
+  .bar-fill.blue  { background: var(--blue);  box-shadow: 0 0 6px var(--blue); }
+
+  /* Wide card */
+  .card.wide {
+    margin-bottom: 8px;
+  }
+
+  /* Section title */
+  .section-title {
+    font-size: 9px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin: 14px 0 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .section-title::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  /* Traffic card */
+  .traffic-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px;
+    margin-bottom: 8px;
+  }
+  .traffic-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 5px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .traffic-row:last-child { border-bottom: none; }
+  .traffic-label { font-size: 11px; color: var(--text-mid); }
+  .traffic-val   { font-size: 13px; font-weight: 500; }
+  .traffic-val .arrow-down { color: var(--blue); }
+  .traffic-val .arrow-up   { color: var(--green); }
+
+  /* Peers table */
+  .peers-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    margin-bottom: 8px;
+  }
+  .peers-header {
+    display: grid;
+    grid-template-columns: 1fr 90px 70px;
+    padding: 8px 12px;
+    background: var(--surface2);
+    border-bottom: 1px solid var(--border);
+    font-size: 9px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  .peer-row {
+    display: grid;
+    grid-template-columns: 1fr 90px 70px;
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--border);
+    align-items: center;
+    transition: background 0.15s;
+  }
+  .peer-row:last-child { border-bottom: none; }
+  .peer-row:hover { background: var(--surface2); }
+  .peer-name { font-size: 12px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .peer-hs   { font-size: 11px; color: var(--text-dim); }
+  .peer-hs.online { color: var(--green); }
+  .peer-hs.recent { color: var(--amber); }
+  .peer-traffic { font-size: 10px; color: var(--text-dim); text-align: right; }
+
+  /* Monthly chart */
+  .chart-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px;
+    margin-bottom: 8px;
+  }
+  .chart-bars {
+    display: flex;
+    align-items: flex-end;
+    gap: 6px;
+    height: 60px;
+    margin: 12px 0 6px;
+  }
+  .chart-col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    height: 100%;
+    justify-content: flex-end;
+  }
+  .chart-bar {
+    width: 100%;
+    border-radius: 3px 3px 0 0;
+    background: var(--blue-dim);
+    border: 1px solid var(--blue);
+    transition: height 0.8s cubic-bezier(0.4,0,0.2,1);
+    position: relative;
+  }
+  .chart-bar.current {
+    background: var(--green-mid);
+    border-color: var(--green);
+    box-shadow: 0 0 8px var(--green-dim);
+  }
+  .chart-month {
+    font-size: 9px;
+    color: var(--text-dim);
+    letter-spacing: 0.05em;
+  }
+  .chart-legend {
+    display: flex;
+    gap: 14px;
+    font-size: 10px;
+    color: var(--text-dim);
+  }
+  .legend-dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 1px;
+    margin-right: 4px;
+    vertical-align: middle;
+  }
+
+  /* Peaks */
+  .peak-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 7px 0;
+    border-bottom: 1px solid var(--border);
+    align-items: center;
+  }
+  .peak-row:last-child { border-bottom: none; }
+  .peak-label { font-size: 11px; color: var(--text-mid); }
+  .peak-val   { font-size: 13px; font-weight: 500; color: var(--amber); }
+
+  /* Load avg */
+  .load-bars {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+    align-items: center;
+  }
+  .load-item {
+    flex: 1;
+    text-align: center;
+  }
+  .load-num {
+    font-size: 15px;
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+  .load-period {
+    font-size: 9px;
+    color: var(--text-dim);
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Skeleton shimmer */
+  .skeleton {
+    background: linear-gradient(90deg, var(--surface2) 25%, var(--border) 50%, var(--surface2) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+    border-radius: 4px;
+  }
+  @keyframes shimmer { to { background-position: -200% 0; } }
+
+  /* Fade in animation */
+  .fade-in { animation: fadeIn 0.4s ease forwards; }
+  @keyframes fadeIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+
+  /* Error state */
+  .error-card {
+    background: var(--red-dim);
+    border: 1px solid var(--red);
+    border-radius: 10px;
+    padding: 16px;
+    text-align: center;
+    color: var(--red);
+    font-size: 12px;
+    margin-bottom: 8px;
+  }
+
+  /* Uptime badge */
+  .uptime-tag {
+    display: inline-block;
+    padding: 2px 8px;
+    background: var(--green-dim);
+    border: 1px solid var(--green);
+    border-radius: 20px;
+    font-size: 11px;
+    color: var(--green);
+    margin-top: 4px;
+  }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+
+  <div class="header">
+    <div class="header-left">
+      <div class="header-title">AWG Monitor</div>
+      <div class="header-subtitle">AmneziaWG · Server Stats</div>
+    </div>
+    <div class="status-dot" id="status-indicator">
+      <div class="dot" id="status-dot"></div>
+      <span id="status-text">online</span>
+    </div>
+  </div>
+
+  <div class="last-update" id="last-update">обновлено: <span>—</span></div>
+
+  <div id="content">
+    <!-- будет заполнено JS -->
+  </div>
+
+
+
+</div>
+
+<script>
+// ─── Telegram WebApp init ──────────────────────────────────────────────────────
+const tg = window.Telegram?.WebApp;
 if (tg) {
   tg.ready();
   tg.expand();
