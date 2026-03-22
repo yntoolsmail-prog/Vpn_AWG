@@ -260,12 +260,10 @@ def collect_stats_full() -> dict:
     except:
         load = ["0", "0", "0"]
 
-    # Текущая скорость (замер за 1 сек)
-    r1, t1 = read_iface_bytes(iface)
-    time.sleep(1)
-    r2, t2 = read_iface_bytes(iface)
-    cur_rx = round((r2 - r1) * 8 / 1_000_000, 2)
-    cur_tx = round((t2 - t1) * 8 / 1_000_000, 2)
+    # Текущая скорость — берём из bw_peak.json (bot.py пишет туда каждые 5 сек)
+    last_bw = peak.get("last", {})
+    cur_rx  = last_bw.get("rx", 0)
+    cur_tx  = last_bw.get("tx", 0)
 
     # Суммарный трафик AWG пиров (с момента перезагрузки)
     total_rx = sum(p.get("rx", 0) for p in peers.values())
