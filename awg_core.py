@@ -442,6 +442,16 @@ def read_iface_bytes(iface: str) -> tuple[int, int]:
         return 0, 0
 
 # ── Bandwidth ──────────────────────────────────────────────────────────────────
+# Формат строки лога (одна запись = одна минута):
+#   2024-01-15 14:32 AWG_DOWN=12.34 AWG_UP=5.67 ETH_DOWN=13.10 ETH_UP=6.20
+#
+# AWG = трафик клиентов:
+#   AWG_DOWN — клиенты скачивают (TX awg0, сервер отдаёт клиентам)
+#   AWG_UP   — клиенты отдают    (RX awg0, сервер получает от клиентов)
+# ETH = трафик сервера (для сравнения и контроля лимита):
+#   ETH_DOWN — сервер получает от провайдера
+#   ETH_UP   — сервер отдаёт провайдеру
+
 def load_bw_peak() -> dict:
     try:
         with open(BW_PEAK_FILE) as f:
@@ -456,52 +466,61 @@ def save_bw_peak(data: dict):
     except Exception:
         pass
 
-def get_bw_top(n: int = 5) -> list[tuple[str, float, float]]:
+def _parse_log_line(line: str) -> dict | None:
+    """Парсит строку лога. Возвращает dict с полями dt, awg_down, awg_up, eth_down, eth_up."""
+    parts = line.strip().split()
+    if len(parts) < 6:
+        return None
+    try:
+        fields = {p.split("=")[0]: float(p.split("=")[1]) for p in parts[2:] if "=" in p}
+        return {
+            "dt":       parts[0] + " " + parts[1],
+            "awg_down": fields.get("AWG_DOWN", 0.0),
+            "awg_up":   fields.get("AWG_UP",   0.0),
+            "eth_down": fields.get("ETH_DOWN",  0.0),
+            "eth_up":   fields.get("ETH_UP",    0.0),
+        }
+    except Exception:
+        return None
+
+def get_bw_top(n: int = 5) -> list[dict]:
+    """Топ-N минут по суммарной клиентской нагрузке (awg_down + awg_up)."""
     try:
         rows = []
         for line in open(BW_LOG_FILE).readlines():
-            parts = line.strip().split()
-            if len(parts) == 4:
-                try:
-                    dt = parts[0] + " " + parts[1]
-                    rx = float(parts[2].split("=")[1])
-                    tx = float(parts[3].split("=")[1])
-                    rows.append((dt, rx, tx))
-                except Exception:
-                    pass
-        rows.sort(key=lambda x: x[1] + x[2], reverse=True)
+            rec = _parse_log_line(line)
+            if rec:
+                rows.append(rec)
+        rows.sort(key=lambda x: x["awg_down"] + x["awg_up"], reverse=True)
         return rows[:n]
     except Exception:
         return []
 
 def get_bw_histogram_for(lines_data: list[str]) -> dict | None:
+    """Гистограмма клиентской нагрузки (по max из awg_down/awg_up)."""
     buckets = [
-        (0,   50,  "0-50  "), (50,  100, "50-100"),
-        (100, 150, "100-150"), (150, 200, "150-200"),
-        (200, 300, "200-300"), (300, 400, "300-400"),
-        (400, 500, "400-500"), (500, None,"500+  "),
+        (0,   50,  "0–50  "), (50,  100, "50–100"),
+        (100, 150, "100–150"), (150, 200, "150–200"),
+        (200, 300, "200–300"), (300, 400, "300–400"),
+        (400, 500, "400–500"), (500, None, "500+  "),
     ]
     counts = [0] * len(buckets)
     total  = 0
     for line in lines_data:
-        parts = line.strip().split()
-        if len(parts) == 4:
-            try:
-                rx  = float(parts[2].split("=")[1])
-                tx  = float(parts[3].split("=")[1])
-                val = max(rx, tx)
-                total += 1
-                for i, (lo, hi, _) in enumerate(buckets):
-                    if hi is None or val < hi:
-                        counts[i] += 1
-                        break
-            except Exception:
-                pass
+        rec = _parse_log_line(line)
+        if rec:
+            val = max(rec["awg_down"], rec["awg_up"])
+            total += 1
+            for i, (lo, hi, _) in enumerate(buckets):
+                if hi is None or val < hi:
+                    counts[i] += 1
+                    break
     if total == 0:
         return None
     return {"buckets": buckets, "counts": counts, "total": total}
 
 def get_bw_histogram(period_days: int = 0) -> dict | None:
+    """period_days=0 — всё время, иначе последние N дней."""
     try:
         all_lines = open(BW_LOG_FILE).readlines()
     except Exception:
@@ -513,6 +532,7 @@ def get_bw_histogram(period_days: int = 0) -> dict | None:
     return get_bw_histogram_for(all_lines)
 
 def get_bw_histogram_day(date_str: str) -> dict | None:
+    """Гистограмма за конкретный день (YYYY-MM-DD)."""
     try:
         lines = [l for l in open(BW_LOG_FILE).readlines() if l.startswith(date_str)]
     except Exception:
@@ -520,21 +540,22 @@ def get_bw_histogram_day(date_str: str) -> dict | None:
     return get_bw_histogram_for(lines)
 
 def get_log_days() -> list[str]:
+    """Уникальные даты в логе."""
     days = set()
     try:
         for line in open(BW_LOG_FILE).readlines():
             parts = line.strip().split()
-            if len(parts) == 4:
+            if len(parts) >= 2:
                 days.add(parts[0])
     except Exception:
         pass
     return sorted(days)
 
 def fmt_histogram(hist: dict, period_label: str = "") -> list[str]:
-    header = "\n📊 Распределение нагрузки на канал"
+    """Форматирует гистограмму клиентской нагрузки для вывода в Telegram."""
+    header = "\n📊 Клиентская нагрузка (max ↓↑ клиентов, мин/сут)"
     if period_label:
-        header += f" ({period_label})"
-    header += "\n   (по max из RX/TX, мин/сут):"
+        header += f" — {period_label}"
     lines  = [header]
     bar_max = 10
     for i, (lo, hi, label) in enumerate(hist["buckets"]):
@@ -548,7 +569,7 @@ def fmt_histogram(hist: dict, period_label: str = "") -> list[str]:
         elif lo >= 200: icon = "🟡"
         elif lo >= 100: icon = "🟢"
         else:           icon = "⚪"
-        lines.append(f"{icon} {label} {bar:<{bar_max}}  {pct:4.1f}%  {cnt} мин")
+        lines.append(f"{icon} {label} Mbit/s  {bar:<{bar_max}}  {pct:4.1f}%  {cnt} мин")
     lines.append(f"   Записей: {hist['total']}")
     return lines
 
@@ -637,11 +658,16 @@ def collect_stats_full() -> dict:
     try:    load = open("/proc/loadavg").read().split()[:3]
     except: load = ["0", "0", "0"]
 
-    last_bw  = peak.get("last", {})
-    total_rx = sum(p.get("rx", 0) for p in peers.values())
-    total_tx = sum(p.get("tx", 0) for p in peers.values())
-    day      = peak.get("day", {})
-    allp     = peak.get("all", {})
+    # Текущая скорость из последней записи пиков
+    last_bw = peak.get("last", {})
+
+    # Суммарный трафик клиентов из awg dump (накопительно с перезагрузки):
+    # RX awg0 = клиенты отдают (upload), TX awg0 = клиенты скачивают (download)
+    total_awg_up   = sum(p.get("rx", 0) for p in peers.values())
+    total_awg_down = sum(p.get("tx", 0) for p in peers.values())
+
+    day  = peak.get("day",  {})
+    allp = peak.get("all",  {})
 
     clients = get_all_clients()
     peers_list = []
@@ -653,8 +679,9 @@ def collect_stats_full() -> dict:
             "name":      name,
             "handshake": hs,
             "online":    bool(hs and now - hs < 180),
-            "rx":        fmt_bytes(stats.get("rx", 0)),
-            "tx":        fmt_bytes(stats.get("tx", 0)),
+            # RX awg0 = клиент отдал, TX awg0 = клиент скачал
+            "client_upload":   fmt_bytes(stats.get("rx", 0)),
+            "client_download": fmt_bytes(stats.get("tx", 0)),
         })
 
     try:
@@ -665,33 +692,53 @@ def collect_stats_full() -> dict:
         users_count = 0
 
     return {
-        "awg_status":       "running",
-        "server_ip":        SERVER_IP,
-        "server_port":      SERVER_PORT,
-        "server_endpoint":  SERVER_ENDPOINT,
-        "iface":            iface,
-        "uptime":           uptime,
-        "load":             load,
-        "ram_used_mb":      ram_used,
-        "ram_total_mb":     ram_total,
-        "disk_used":        disk_used,
-        "disk_total":       disk_total,
-        "disk_pct":         disk_pct,
-        "peers_total":      len(clients),
-        "peers_online":     online,
-        "users_count":      users_count,
-        "traffic_total_rx": fmt_bytes(total_rx),
-        "traffic_total_tx": fmt_bytes(total_tx),
-        "bw_current_rx":    last_bw.get("rx", 0),
-        "bw_current_tx":    last_bw.get("tx", 0),
-        "bw_peak_day": {
-            "rx": day.get("rx", 0), "tx": day.get("tx", 0),
-            "load": day.get("load", 0), "date": day.get("date", "—"),
+        "awg_status":      "running",
+        "server_ip":       SERVER_IP,
+        "server_port":     SERVER_PORT,
+        "server_endpoint": SERVER_ENDPOINT,
+        "eth_iface":       iface,
+        "uptime":          uptime,
+        "load":            load,
+        "ram_used_mb":     ram_used,
+        "ram_total_mb":    ram_total,
+        "disk_used":       disk_used,
+        "disk_total":      disk_total,
+        "disk_pct":        disk_pct,
+        "peers_total":     len(clients),
+        "peers_online":    online,
+        "users_count":     users_count,
+
+        # Суммарный трафик клиентов (awg0, накопительно с перезагрузки)
+        "clients_total_download": fmt_bytes(total_awg_down),
+        "clients_total_upload":   fmt_bytes(total_awg_up),
+
+        # Скорость прямо сейчас
+        "awg_current_down": last_bw.get("awg_down", 0),  # клиенты скачивают
+        "awg_current_up":   last_bw.get("awg_up",   0),  # клиенты отдают
+        "eth_current_down": last_bw.get("eth_down",  0),  # сервер получает
+        "eth_current_up":   last_bw.get("eth_up",    0),  # сервер отдаёт
+
+        # Пики клиентов (awg0)
+        "awg_peak_day": {
+            "down": day.get("awg_down", 0),
+            "up":   day.get("awg_up",   0),
+            "date": day.get("date", "—"),
         },
-        "bw_peak_all": {
-            "rx": allp.get("rx", 0), "tx": allp.get("tx", 0),
-            "load": allp.get("load", 0),
+        "awg_peak_all": {
+            "down": allp.get("awg_down", 0),
+            "up":   allp.get("awg_up",   0),
         },
+        # Пики сервера (eth0) — для сравнения
+        "eth_peak_day": {
+            "down": day.get("eth_down", 0),
+            "up":   day.get("eth_up",   0),
+            "date": day.get("date", "—"),
+        },
+        "eth_peak_all": {
+            "down": allp.get("eth_down", 0),
+            "up":   allp.get("eth_up",   0),
+        },
+
         "bw_top":  get_bw_top(5),
         "monthly": get_vnstat_monthly(),
         "peers":   peers_list,
