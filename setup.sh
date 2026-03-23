@@ -45,21 +45,88 @@ _install_tma() {
     echo -e "  ${BOLD}Установка TMA — веб-панель${NC}"
     echo ""
 
-    # Домен
-    echo -e "  Для TMA нужен HTTPS-адрес (Telegram не открывает HTTP)."
-    echo -e "  Вариант 1 — домен/поддомен с A-записью на этот сервер ${GREEN}(рекомендуется)${NC}"
-    echo -e "  Вариант 2 — только тест в браузере без SSL"
-    echo ""
-    read -p "  Введите домен (или Enter чтобы пропустить SSL): " TMA_DOMAIN
-    TMA_DOMAIN=$(echo "$TMA_DOMAIN" | tr -d " " | tr "[:upper:]" "[:lower:]")
+    # ── Поиск доменов ─────────────────────────────────────────────────────────
+    local FOUND_DOMAINS=()
+    local _ep _ep_bak
+    _ep=$(grep    "^SERVER_ENDPOINT="        "${AWG_DIR}/server.env" 2>/dev/null | cut -d= -f2)
+    _ep_bak=$(grep "^SERVER_ENDPOINT_BACKUP=" "${AWG_DIR}/server.env" 2>/dev/null | cut -d= -f2)
+    [[ -n "$_ep"     && "$_ep"     != "$SERVER_IP" && ! "$_ep"     =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && FOUND_DOMAINS+=("$_ep")
+    [[ -n "$_ep_bak" && "$_ep_bak" != "$SERVER_IP" && ! "$_ep_bak" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && FOUND_DOMAINS+=("$_ep_bak")
+    if command -v nginx &>/dev/null; then
+        while IFS= read -r _d; do
+            [[ -n "$_d" && "$_d" != "_" && "$_d" != "$SERVER_IP" && ! "$_d" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && FOUND_DOMAINS+=("$_d")
+        done < <(grep -h "server_name" /etc/nginx/sites-enabled/* 2>/dev/null | awk '{print $2}' | tr -d ';' | sort -u)
+    fi
+    FOUND_DOMAINS=($(printf "%s\n" "${FOUND_DOMAINS[@]}" | sort -u))
 
-    if [[ -n "$TMA_DOMAIN" ]]; then
-        USE_SSL=1
-        read -p "  Email для Let's Encrypt: " LE_EMAIL
+    # ── Выбор домена ──────────────────────────────────────────────────────────
+    echo ""
+    echo -e "  ${BOLD}Домен для TMA${NC}"
+    echo -e "  Telegram не открывает страницы без HTTPS."
+    echo ""
+
+    local _i=1 TMA_DOMAIN="" USE_SSL=0 LE_EMAIL=""
+    if [[ ${#FOUND_DOMAINS[@]} -gt 0 ]]; then
+        echo -e "  ${GREEN}Найдены домены в конфигурации:${NC}"
+        echo ""
+        for _d in "${FOUND_DOMAINS[@]}"; do
+            echo -e "  ${CYAN}${_i})${NC} ${_d}"; ((_i++))
+        done
+        echo -e "  ${CYAN}${_i})${NC} Ввести другой домен"
+        echo -e "  ${CYAN}$((_i+1)))${NC} Без домена (тест в браузере, в Telegram не работает)"
+        echo ""
+        local _choice
+        while true; do
+            read -p "  Ваш выбор [1]: " _choice
+            _choice=${_choice:-1}
+            [[ "$_choice" =~ ^[0-9]+$ && "$_choice" -ge 1 && "$_choice" -le $((_i+1)) ]] && break
+            warn "Неверный выбор."
+        done
+        if [[ "$_choice" -le ${#FOUND_DOMAINS[@]} ]]; then
+            TMA_DOMAIN="${FOUND_DOMAINS[$((_choice-1))]}"; USE_SSL=1
+            ok "Выбран: ${TMA_DOMAIN}"
+        elif [[ "$_choice" -eq $_i ]]; then
+            TMA_DOMAIN=""; USE_SSL=1
+        else
+            TMA_DOMAIN="$SERVER_IP"; USE_SSL=0
+            warn "Режим без SSL — TMA в Telegram работать не будет."
+        fi
     else
-        USE_SSL=0
-        TMA_DOMAIN="$SERVER_IP"
-        warn "Режим без SSL — TMA в Telegram работать не будет."
+        echo -e "  Вариант 1 — домен с A-записью на этот сервер ${GREEN}(рекомендуется)${NC}"
+        echo -e "  Вариант 2 — без домена, только тест в браузере"
+        echo ""
+        local _input
+        read -p "  Введите домен (или Enter чтобы пропустить SSL): " _input
+        _input=$(echo "$_input" | tr -d " " | tr "[:upper:]" "[:lower:]")
+        if [[ -n "$_input" ]]; then
+            TMA_DOMAIN="$_input"; USE_SSL=1
+        else
+            TMA_DOMAIN="$SERVER_IP"; USE_SSL=0
+            warn "Режим без SSL — TMA в Telegram работать не будет."
+        fi
+    fi
+
+    # Если выбрали "ввести другой" — спрашиваем
+    if [[ -z "$TMA_DOMAIN" && "$USE_SSL" -eq 1 ]]; then
+        echo ""
+        echo -e "  A-запись домена должна указывать на ${CYAN}${SERVER_IP}${NC}"
+        echo ""
+        while true; do
+            read -p "  Введите домен: " TMA_DOMAIN
+            TMA_DOMAIN=$(echo "$TMA_DOMAIN" | tr -d " " | tr "[:upper:]" "[:lower:]")
+            [[ "$TMA_DOMAIN" =~ ^[a-z0-9][a-z0-9.-]+\.[a-z]{2,}$ ]] && break
+            warn "Неверный формат домена."
+        done
+    fi
+
+    # Email для certbot
+    if [[ "$USE_SSL" -eq 1 ]]; then
+        echo ""
+        while true; do
+            read -p "  Email для Let's Encrypt: " LE_EMAIL
+            [[ "$LE_EMAIL" =~ ^[^@]+@[^@]+\.[^@]+$ ]] && break
+            warn "Неверный формат email."
+        done
     fi
 
     # Зависимости
