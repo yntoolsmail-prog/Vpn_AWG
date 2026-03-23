@@ -106,143 +106,184 @@ def sites_keyboard(selected: set, device_name: str, expanded: set | None = None)
     return InlineKeyboardMarkup(rows)
 
 async def bw_monitor_job(context: ContextTypes.DEFAULT_TYPE):
-    """Job: каждые 5 секунд замеряет скорость, обновляет пики.
-    В лог пишет раз в минуту чтобы не раздувать файл."""
-    iface = get_host_iface()
-    now   = int(time.time())
+    """Job: каждые 5 секунд замеряет скорость по awg0 (клиенты) и eth0 (сервер).
+    В лог пишет раз в минуту максимальные значения за окно.
+
+    Логика RX/TX для awg0 с точки зрения клиента:
+      TX awg0 = сервер отдаёт клиентам  = клиенты скачивают (↓ download)
+      RX awg0 = сервер получает от клиентов = клиенты отдают (↑ upload)
+    Для eth0 аналогично с точки зрения сервера.
+    """
+    now       = int(time.time())
+    eth_iface = get_host_iface()
+
+    # Читаем оба интерфейса
+    eth_r2, eth_t2 = read_iface_bytes(eth_iface)
+    awg_r2, awg_t2 = read_iface_bytes(AWG_IFACE)
 
     prev = context.bot_data.get("bw_prev")
-    r2, t2 = read_iface_bytes(iface)
 
     if prev:
         dt = now - prev["ts"]
         if dt > 0:
-            rx_mbit = round((r2 - prev["rx"]) * 8 / 1_000_000 / dt, 2)
-            tx_mbit = round((t2 - prev["tx"]) * 8 / 1_000_000 / dt, 2)
-            # Метрика нагрузки на канал — максимум из двух направлений
-            load    = round(max(rx_mbit, tx_mbit), 2)
+            def _mbit(new, old):
+                diff = new - old
+                if diff < 0:
+                    return None  # перезагрузка счётчика
+                return round(diff * 8 / 1_000_000 / dt, 2)
 
-            # Защита от фантомных всплесков после перезапуска
-            if r2 < prev["rx"] or t2 < prev["tx"] or load > 10_000:
-                context.bot_data["bw_prev"] = {"rx": r2, "tx": t2, "ts": now}
+            # AWG: клиентский трафик
+            awg_down = _mbit(awg_t2, prev["awg_t"])  # TX awg0 = клиенты скачивают
+            awg_up   = _mbit(awg_r2, prev["awg_r"])  # RX awg0 = клиенты отдают
+            # ETH: серверный трафик
+            eth_down = _mbit(eth_r2, prev["eth_r"])  # RX eth0 = сервер получает
+            eth_up   = _mbit(eth_t2, prev["eth_t"])  # TX eth0 = сервер отдаёт
+
+            # Защита от фантомных всплесков
+            if None in (awg_down, awg_up, eth_down, eth_up) or \
+               max(awg_down, awg_up, eth_down, eth_up) > 10_000:
+                context.bot_data["bw_prev"] = {
+                    "awg_r": awg_r2, "awg_t": awg_t2,
+                    "eth_r": eth_r2, "eth_t": eth_t2, "ts": now,
+                }
                 return
 
-            # Пики по max(RX, TX)
-            peak    = load_bw_peak()
-            today   = time.strftime("%Y-%m-%d")
+            # Пики — по клиентской нагрузке (awg), пики сервера (eth) рядом
+            awg_load = round(max(awg_down, awg_up), 2)
+            eth_load = round(max(eth_down, eth_up), 2)
+            peak     = load_bw_peak()
+            today    = time.strftime("%Y-%m-%d")
+
             day_peak = peak.get("day", {})
             if day_peak.get("date") != today:
-                day_peak = {"date": today, "load": 0, "rx": 0, "tx": 0}
-            if load > day_peak.get("load", 0):
-                day_peak = {"date": today, "load": load, "rx": rx_mbit, "tx": tx_mbit}
+                day_peak = {"date": today,
+                            "awg_down": 0, "awg_up": 0,
+                            "eth_down": 0, "eth_up": 0}
+            if awg_load > max(day_peak.get("awg_down", 0), day_peak.get("awg_up", 0)):
+                day_peak.update({"date": today,
+                                 "awg_down": awg_down, "awg_up": awg_up,
+                                 "eth_down": eth_down, "eth_up": eth_up})
 
-            all_peak = peak.get("all", {"load": 0, "rx": 0, "tx": 0})
-            if load > all_peak.get("load", 0):
-                all_peak = {"load": load, "rx": rx_mbit, "tx": tx_mbit}
+            all_peak = peak.get("all", {"awg_down": 0, "awg_up": 0,
+                                        "eth_down": 0, "eth_up": 0})
+            if awg_load > max(all_peak.get("awg_down", 0), all_peak.get("awg_up", 0)):
+                all_peak = {"awg_down": awg_down, "awg_up": awg_up,
+                            "eth_down": eth_down, "eth_up": eth_up}
 
-            save_bw_peak({"day": day_peak, "all": all_peak,
-                          "last": {"rx": rx_mbit, "tx": tx_mbit, "ts": now}})
+            save_bw_peak({
+                "day":  day_peak,
+                "all":  all_peak,
+                "last": {"awg_down": awg_down, "awg_up": awg_up,
+                         "eth_down": eth_down, "eth_up": eth_up, "ts": now},
+            })
 
-            # В лог пишем раз в минуту — максимальный load за окно
-            minute_max = context.bot_data.get("bw_minute_max", {"rx": 0, "tx": 0, "load": 0, "ts": now})
-            if load > minute_max.get("load", 0):
-                minute_max = {"rx": rx_mbit, "tx": tx_mbit, "load": load, "ts": minute_max["ts"]}
-            context.bot_data["bw_minute_max"] = minute_max
+            # В лог — раз в минуту, пишем максимальные значения за окно
+            mm = context.bot_data.get("bw_minute_max", {
+                "awg_down": 0, "awg_up": 0,
+                "eth_down": 0, "eth_up": 0,
+                "awg_load": 0, "ts": now,
+            })
+            if awg_load > mm.get("awg_load", 0):
+                mm.update({"awg_down": awg_down, "awg_up": awg_up,
+                           "eth_down": eth_down, "eth_up": eth_up,
+                           "awg_load": awg_load})
+            context.bot_data["bw_minute_max"] = mm
 
-            if now - minute_max["ts"] >= 60:
+            if now - mm["ts"] >= 60:
                 try:
                     with open(BW_LOG_FILE, "a") as f:
-                        f.write(f"{time.strftime('%Y-%m-%d %H:%M')} "
-                                f"RX={minute_max['rx']} TX={minute_max['tx']}\n")
+                        f.write(
+                            f"{time.strftime('%Y-%m-%d %H:%M')} "
+                            f"AWG_DOWN={mm['awg_down']} AWG_UP={mm['awg_up']} "
+                            f"ETH_DOWN={mm['eth_down']} ETH_UP={mm['eth_up']}\n"
+                        )
                     lines = open(BW_LOG_FILE).readlines()
                     if len(lines) > 10080:
                         with open(BW_LOG_FILE, "w") as f:
                             f.writelines(lines[-10080:])
-                except:
+                except Exception:
                     pass
-                context.bot_data["bw_minute_max"] = {"rx": 0, "tx": 0, "load": 0, "ts": now}
+                context.bot_data["bw_minute_max"] = {
+                    "awg_down": 0, "awg_up": 0,
+                    "eth_down": 0, "eth_up": 0,
+                    "awg_load": 0, "ts": now,
+                }
 
-    context.bot_data["bw_prev"] = {"rx": r2, "tx": t2, "ts": now}
+    context.bot_data["bw_prev"] = {
+        "awg_r": awg_r2, "awg_t": awg_t2,
+        "eth_r": eth_r2, "eth_t": eth_t2, "ts": now,
+    }
 
-
-def fmt_histogram(hist: dict, period_label: str = "") -> list[str]:
-    """Форматирует гистограмму для вывода в Telegram"""
-    header = f"\n📊 Распределение нагрузки на канал"
-    if period_label:
-        header += f" ({period_label})"
-    header += "\n   (по max из RX/TX, мин/сут):"
-    lines  = [header]
-    bar_max = 10
-    for i, (lo, hi, label) in enumerate(hist["buckets"]):
-        cnt = hist["counts"][i]
-        if cnt == 0:
-            continue
-        pct  = cnt / hist["total"] * 100
-        mins = cnt  # каждая запись = 1 минута
-        bar  = "█" * max(1, round(pct / 100 * bar_max))
-        if lo >= 500:   icon = "🔴"
-        elif lo >= 300: icon = "🟠"
-        elif lo >= 200: icon = "🟡"
-        elif lo >= 100: icon = "🟢"
-        else:           icon = "⚪"
-        lines.append(f"{icon} {label} {bar:<{bar_max}}  {pct:4.1f}%  {mins} мин")
-    lines.append(f"   Записей: {hist['total']}")
-    return lines
 
 async def show_bandwidth(query, period_days: int = 0):
-    """Экран статистики трафика для админа"""
-    iface = get_host_iface()
-    peak  = load_bw_peak()
-    last  = peak.get("last", {})
-    day   = peak.get("day", {})
-    allp  = peak.get("all", {})
-    top   = get_bw_top_fixed(5)
+    """Экран статистики трафика для админа."""
+    peak = load_bw_peak()
+    last = peak.get("last", {})
+    day  = peak.get("day",  {})
+    allp = peak.get("all",  {})
+    top  = get_bw_top(5)
 
-    r1, t1 = read_iface_bytes(iface)
-    time.sleep(1)
-    r2, t2 = read_iface_bytes(iface)
-    cur_rx = round((r2 - r1) * 8 / 1_000_000, 2)
-    cur_tx = round((t2 - t1) * 8 / 1_000_000, 2)
+    lines = ["📈 Статистика трафика\n"]
 
-    lines = [
-        f"📈 Статистика трафика\n",
-        f"🌐 Интерфейс: {iface}",
-        f"⚡ Сейчас: ↓{cur_rx} ↑{cur_tx} Mbit/s",
-    ]
+    # ── Скорость прямо сейчас ──
     if last:
         last_time = time.strftime("%H:%M", time.localtime(last.get("ts", 0)))
-        lines.append(f"🕐 Замер {last_time}: ↓{last.get('rx', 0)} ↑{last.get('tx', 0)} Mbit/s")
+        lines.append(f"⚡ Клиенты ({last_time}):")
+        lines.append(f"   ↓ скачивают {last.get('awg_down', 0)} Mbit/s  "
+                     f"↑ отдают {last.get('awg_up', 0)} Mbit/s")
+        lines.append(f"🌐 Сервер ({last_time}):")
+        lines.append(f"   ↓ получает {last.get('eth_down', 0)} Mbit/s  "
+                     f"↑ отдаёт {last.get('eth_up', 0)} Mbit/s")
+        awg_d = last.get("awg_down", 0)
+        eth_d = last.get("eth_down", 0)
+        if eth_d > 0:
+            overhead = round(eth_d - awg_d, 2)
+            lines.append(f"   overhead: {overhead:+.2f} Mbit/s")
 
+    # ── Пики клиентов (awg0) ──
+    if day:
+        lines.append(f"\n🏅 Пик клиентов сегодня ({day.get('date', '—')}):")
+        lines.append(f"   ↓ {day.get('awg_down', 0)}  ↑ {day.get('awg_up', 0)} Mbit/s")
+        lines.append(f"   сервер: ↓ {day.get('eth_down', 0)}  ↑ {day.get('eth_up', 0)} Mbit/s")
+    if allp:
+        lines.append(f"\n🏆 Пик клиентов за всё время:")
+        lines.append(f"   ↓ {allp.get('awg_down', 0)}  ↑ {allp.get('awg_up', 0)} Mbit/s")
+        lines.append(f"   сервер: ↓ {allp.get('eth_down', 0)}  ↑ {allp.get('eth_up', 0)} Mbit/s")
+
+    # ── Топ-5 минут по клиентам ──
+    if top:
+        lines.append(f"\n🔝 Топ-5 минут (клиенты):")
+        for rec in top:
+            lines.append(
+                f"   {rec['dt']}  "
+                f"↓{rec['awg_down']} ↑{rec['awg_up']}  "
+                f"(сервер ↓{rec['eth_down']} ↑{rec['eth_up']})"
+            )
+
+    # ── Месячный трафик сервера (vnstat/eth0) — для контроля лимита ──
     monthly = get_vnstat_monthly()
     if monthly:
-        lines.append(f"\n📦 Трафик по месяцам (↓вх + ↑исх = итого):")
+        lines.append(f"\n📦 Трафик сервера по месяцам (eth0, лимит провайдера):")
         for m in monthly:
-            lines.append(f"   {m['label']}  ↓{m['rx_gb']} + ↑{m['tx_gb']} = {m['total_gb']} GB")
+            cur_mark = " ◀ текущий" if m.get("current") else ""
+            lines.append(
+                f"   {m['label']}  "
+                f"↓{m['rx_gb']} + ↑{m['tx_gb']} = {m['total_gb']} GB{cur_mark}"
+            )
         cur = monthly[-1]
-        if cur["label"] == time.strftime("%Y-%m"):
+        if cur.get("current"):
             total = cur["total_gb"]
             warn = ""
             if total >= 4000:   warn = "  🔴 >4 TB!"
             elif total >= 3000: warn = "  🟠 >3 TB"
             elif total >= 2000: warn = "  🟡 >2 TB"
             elif total >= 1000: warn = "  🟢 >1 TB"
-            lines.append(f"\n📅 Текущий месяц: {total} GB{warn}")
+            if warn:
+                lines.append(f"   ⚠️ Текущий месяц: {total} GB{warn}")
     else:
-        lines.append("\n📦 Месячный трафик: vnstat ещё собирает данные.")
+        lines.append("\n📦 Трафик сервера: vnstat ещё собирает данные.")
 
-    if day:
-        load_day = day.get("load", max(day.get("rx", 0), day.get("tx", 0)))
-        lines.append(f"\n📅 Пик сегодня ({day.get('date', '—')}):")
-        lines.append(f"   {load_day} Mbit/s  (↓{day.get('rx', 0)} ↑{day.get('tx', 0)})")
-    if allp:
-        load_all = allp.get("load", max(allp.get("rx", 0), allp.get("tx", 0)))
-        lines.append(f"\n🏆 Абс. пик скорости:")
-        lines.append(f"   {load_all} Mbit/s  (↓{allp.get('rx', 0)} ↑{allp.get('tx', 0)})")
-    if top:
-        lines.append(f"\n🔝 Топ-5 минут по нагрузке:")
-        for dt, rx, tx in top:
-            lines.append(f"   {dt}  ↓{rx} ↑{tx}")
-
+    # ── Гистограмма клиентской нагрузки ──
     period_label = {0: "всё время", 7: "7 дней", 30: "30 дней"}.get(period_days, f"{period_days} дней")
     hist = get_bw_histogram(period_days)
     if hist:
