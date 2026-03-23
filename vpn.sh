@@ -589,7 +589,7 @@ manage_updates() {
         show_header
         echo -e "${BOLD}  Обновление${NC}"
         echo ""
-        echo "  1) Обновить bot.py и vpn.sh из репозитория"
+        echo "  1) Обновить все файлы проекта"
         echo "  2) Обновить систему (apt upgrade)"
         echo "  3) Обновить python-telegram-bot"
         echo "  0) Назад"
@@ -597,17 +597,11 @@ manage_updates() {
         read -p "  Выбор: " CHOICE
         case $CHOICE in
             1)
-                echo -e "  ${CYAN}Скачиваю актуальные файлы...${NC}"
-                local REPO="https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main"
-                if curl -s "${REPO}/bot.py" -o /root/bot.py && \
-                   curl -s "${REPO}/vpn.sh" -o /root/vpn.sh; then
-                    chmod +x /root/vpn.sh
-                    echo -e "${GREEN}  ✓ bot.py и vpn.sh обновлены${NC}"
-                    echo -e "  ${CYAN}Перезапускаю бота...${NC}"
-                    systemctl restart awg-bot
-                    echo -e "${GREEN}  ✓ Бот перезапущен${NC}"
+                echo -e "  ${CYAN}Обновляю все файлы проекта...${NC}"
+                if bash /root/setup.sh --update; then
+                    echo -e "${GREEN}  ✓ Обновление завершено${NC}"
                 else
-                    echo -e "${RED}  ✗ Ошибка скачивания. Проверьте интернет.${NC}"
+                    echo -e "${RED}  ✗ Ошибка обновления${NC}"
                 fi
                 press_enter
                 ;;

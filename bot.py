@@ -1,38 +1,22 @@
 #!/usr/bin/env python3
-# Version: 2.5
-import os, subprocess, logging, json, zlib, base64, struct, time, tarfile, tempfile, shutil, socket, ipaddress, re, asyncio
+# bot.py — Telegram-бот AmneziaWG
+# Version: 3.0
+# Вся бизнес-логика — в awg_core.py и sites_data.py
+import os, subprocess, logging, json, time, tempfile, shutil, re, asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, filters, ContextTypes, ConversationHandler
 )
+from awg_core import *
+from sites_data import *
 
-CONFIG_FILE = "/etc/amnezia/amneziawg/bot.env"
-ENV_FILE    = "/etc/amnezia/amneziawg/server.env"
-USERS_FILE  = "/etc/amnezia/amneziawg/users.json"
-CLIENTS_DIR = "/etc/amnezia/amneziawg/clients"
-BACKUP_DIR  = "/etc/amnezia/amneziawg/backups"
-MAINTENANCE_FILE = "/etc/amnezia/amneziawg/maintenance.json"
-BW_LOG_FILE      = "/var/log/awg-bw.log"
-BW_PEAK_FILE     = "/etc/amnezia/amneziawg/bw_peak.json"
-# AWG_CONF строится динамически после загрузки server.env — см. ниже
-
-# ── Конфиг ─────────────────────────────────────────────────────────────────────
-def load_env(path):
-    env = {}
-    with open(path) as f:
-        for line in f:
-            line = line.strip()
-            if "=" in line and not line.startswith("#"):
-                k, v = line.split("=", 1)
-                env[k.strip()] = v.strip()
-    return env
-
+# ── Первый запуск: создаём bot.env если не существует ─────────────────────────
 def setup():
     R='\033[0;31m'; G='\033[0;32m'; C='\033[0;36m'; B='\033[1m'; NC='\033[0m'
     print(f"\n{C}{B}{'='*50}{NC}")
     print(f"{C}{B}   AmneziaWG — Настройка Telegram бота{NC}")
-    print(f"{C}{B}{'='*50}{NC}\n")
+    print(f"\n{C}{B}{'='*50}{NC}\n")
     while True:
         token = input("  Вставьте токен бота: ").strip()
         if ":" in token and len(token) > 20: break
@@ -50,35 +34,8 @@ def setup():
 if not os.path.exists(CONFIG_FILE):
     setup()
 
-cfg           = load_env(CONFIG_FILE)
-BOT_TOKEN     = cfg["BOT_TOKEN"]
-ADMIN_ID      = int(cfg["ADMIN_ID"])
-srv           = load_env(ENV_FILE)
-SERVER_IP     = srv["SERVER_IP"]
-SERVER_PORT   = srv["SERVER_PORT"]
-SERVER_PUBLIC = srv["SERVER_PUBLIC"]
-VPN_SUBNET    = srv["VPN_SUBNET"]
-AWG_IFACE     = srv.get("VPN_IFACE", "awg0")   # фолбэк на awg0 для старых установок
-AWG_CONF      = f"/etc/amnezia/amneziawg/{AWG_IFACE}.conf"
-PRIMARY_DNS   = srv.get("PRIMARY_DNS", "1.1.1.1")
-SECONDARY_DNS = srv.get("SECONDARY_DNS", "1.0.0.1")
-TZ            = srv.get("TIMEZONE", "UTC")
-# Эндпоинты: если домен не задан — используем IP
-SERVER_ENDPOINT        = srv.get("SERVER_ENDPOINT", "") or SERVER_IP
-SERVER_ENDPOINT_BACKUP = srv.get("SERVER_ENDPOINT_BACKUP", "")
-
-# Применяем часовой пояс для всего процесса
-os.environ["TZ"] = TZ
-try:
-    time.tzset()
-except AttributeError:
-    pass  # Windows не поддерживает tzset, но на сервере Ubuntu всегда есть
-
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 logger = logging.getLogger(__name__)
-
-# Глобальный lock — один клиент за раз, никаких гонок данных
-_client_lock = asyncio.Lock()
 
 # Состояния ConversationHandler
 WAITING_REGISTER_NAME  = 10
@@ -90,212 +47,7 @@ WAITING_TZ_INPUT       = 15   # ждём ручной ввод часового 
 
 IMG_BASE = "https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/.images"
 
-# ── Split tunneling: база сайтов ───────────────────────────────────────────────
-SITES = {
-    # Локальная сеть
-    "local": {
-        "name": "Локальная сеть (роутер, NAS...)", "emoji": "🏠",
-        "domains": [], "subnets": ["192.168.0.0/16"],
-    },
-    # Банки и платежи
-    "sber": {
-        "name": "Сбербанк", "emoji": "💚",
-        "domains": ["sber.ru", "sberbank.ru", "online.sberbank.ru", "sberbank.com", "sbrf.ru"],
-    },
-    "tbank": {
-        "name": "Т-Банк (Тинькофф)", "emoji": "🟡",
-        "domains": ["tbank.ru", "tinkoff.ru", "acdn.tinkoff.ru"],
-    },
-    "alfa": {
-        "name": "Альфа-Банк", "emoji": "🔴",
-        "domains": ["alfabank.ru", "click.alfabank.ru"],
-    },
-    "vtb": {
-        "name": "ВТБ", "emoji": "🔵",
-        "domains": ["vtb.ru", "online.vtb.ru", "mb.vtb.ru"],
-    },
-    "raiffeisen": {
-        "name": "Райффайзен", "emoji": "🟠",
-        "domains": ["raiffeisen.ru", "ecom.raiffeisen.ru"],
-    },
-    "sbp": {
-        "name": "СБП / НСПК", "emoji": "⚡",
-        "domains": ["sbp.nspk.ru", "nspk.ru", "qr.nspk.ru"],
-    },
-    # Маркетплейсы
-    "ozon": {
-        "name": "Ozon", "emoji": "🔵",
-        "domains": ["ozon.ru", "static.ozon.ru", "cdn1.ozone.ru"],
-    },
-    "wildberries": {
-        "name": "Wildberries", "emoji": "🟣",
-        "domains": ["wildberries.ru", "wbstatic.net", "wbbasket.ru", "wbx-static.com"],
-    },
-    "avito": {
-        "name": "Авито", "emoji": "🟢",
-        "domains": ["avito.ru", "cdn.avito.ru", "m.avito.ru"],
-    },
-    # Яндекс (одиночный — без заголовка категории)
-    "yandex": {
-        "name": "Яндекс (все сервисы)", "emoji": "🔴",
-        "domains": [
-            "yandex.ru", "ya.ru", "yandex.com", "yandex.net",
-            "maps.yandex.ru", "taxi.yandex.ru", "go.yandex.ru",
-            "music.yandex.ru", "storage.mds.yandex.net",
-            "market.yandex.ru", "yastatic.net", "avatars.mds.yandex.net",
-        ],
-    },
-    # Видео и стриминг
-    "kinopoisk": {
-        "name": "Кинопоиск", "emoji": "🎬",
-        "domains": ["kinopoisk.ru", "www.kinopoisk.ru"],
-    },
-    "rutube": {
-        "name": "Rutube", "emoji": "📺",
-        "domains": ["rutube.ru", "pics.rutube.ru", "strm.rutube.ru"],
-    },
-    "vkvideo": {
-        "name": "VK Видео", "emoji": "📱",
-        "domains": ["vkvideo.ru"],
-    },
-    "ivi": {
-        "name": "Иви", "emoji": "🍿",
-        "domains": ["ivi.ru", "cdn.ivi.ru"],
-    },
-    "okko": {
-        "name": "Okko", "emoji": "🎥",
-        "domains": ["okko.tv", "static.okko.tv"],
-    },
-    "trikolor": {
-        "name": "Триколор", "emoji": "📡",
-        "domains": ["trikolor.tv"],
-    },
-    # Транспорт и доставка
-    "rzd": {
-        "name": "РЖД", "emoji": "🚂",
-        "domains": ["rzd.ru", "www.rzd.ru", "pass.rzd.ru", "ticket.rzd.ru"],
-    },
-    "pochta": {
-        "name": "Почта России", "emoji": "📬",
-        "domains": ["pochta.ru", "www.pochta.ru", "tracking.pochta.ru"],
-    },
-    "delivery": {
-        "name": "Яндекс Еда / Самокат", "emoji": "🍔",
-        "domains": ["eda.yandex.ru", "eats.yandex.ru", "samokat.ru", "delivery-club.ru"],
-    },
-    # ЖКХ
-    "zhkh_msk": {
-        "name": "ЖКХ Москва (Мосэнергосбыт, ЕИРЦ)", "emoji": "🏘",
-        "domains": ["mosenergosbyt.ru", "lkk.mosenergosbyt.ru", "eirc-mo.ru"],
-    },
-    "zhkh_fed": {
-        "name": "ГИС ЖКХ (федеральный)", "emoji": "🏠",
-        "domains": ["dom.gosuslugi.ru", "lkr.reformagkh.ru"],
-    },
-    # Государственные сервисы
-    "gosuslugi": {
-        "name": "Госуслуги", "emoji": "🏛",
-        "domains": [
-            "gosuslugi.ru", "esia.gosuslugi.ru", "lk.gosuslugi.ru",
-            "beta.gosuslugi.ru", "oplata.gosuslugi.ru",
-        ],
-    },
-    "mos": {
-        "name": "Mos.ru", "emoji": "🏙",
-        "domains": ["mos.ru", "www.mos.ru", "lk.mos.ru"],
-    },
-    "nalog": {
-        "name": "ФНС / Налоги", "emoji": "📋",
-        "domains": ["nalog.gov.ru", "lkfl.nalog.ru", "lkul.nalog.ru", "pb.nalog.ru"],
-    },
-    "emias": {
-        "name": "ЕМИАС / Здоровье", "emoji": "🏥",
-        "domains": ["emias.info", "moscow.emias.info"],
-    },
-    "gibdd": {
-        "name": "ГИБДД / Штрафы", "emoji": "🚗",
-        "domains": ["gibdd.ru", "www.gibdd.ru", "xn--b1aew.xn--p1ai"],
-    },
-    "rosreestr": {
-        "name": "Росреестр", "emoji": "🏦",
-        "domains": ["rosreestr.gov.ru", "lk.rosreestr.gov.ru"],
-    },
-    "fssp": {
-        "name": "ФССП (Приставы)", "emoji": "⚖️",
-        "domains": ["fssprus.ru", "lk.fssprus.ru"],
-    },
-    # Соцсети
-    "vk": {
-        "name": "ВКонтакте", "emoji": "💙",
-        "domains": ["vk.com", "vk.me", "userapi.com", "vkuseraudio.net", "vk-cdn.net"],
-    },
-    "ok": {
-        "name": "Одноклассники", "emoji": "🟠",
-        "domains": ["ok.ru", "www.ok.ru", "udn.odnoklassniki.ru"],
-    },
-    # Прочее
-    "hh": {
-        "name": "HeadHunter (hh.ru)", "emoji": "💼",
-        "domains": ["hh.ru", "api.hh.ru", "hhcdn.ru"],
-    },
-    "2gis": {
-        "name": "2ГИС", "emoji": "🗺",
-        "domains": ["2gis.ru", "2gis.com"],
-    },
-}
 
-CATEGORIES = {
-    "🏠 Локальная сеть":         ["local"],
-    "🏦 Банки и платежи":        ["sber", "tbank", "alfa", "vtb", "raiffeisen", "sbp"],
-    "🛒 Маркетплейсы":           ["ozon", "wildberries", "avito"],
-    "🔴 Яндекс":                 ["yandex"],
-    "🎬 Видео и стриминг":       ["kinopoisk", "rutube", "vkvideo", "ivi", "okko", "trikolor"],
-    "🚂 Транспорт и доставка":   ["rzd", "pochta", "delivery"],
-    "🏘 ЖКХ":                    ["zhkh_msk", "zhkh_fed"],
-    "🏛 Государственные сервисы":["gosuslugi", "mos", "nalog", "emias", "gibdd", "rosreestr", "fssp"],
-    "💬 Соцсети":                ["vk", "ok"],
-    "📦 Прочее":                 ["hh", "2gis"],
-}
-
-# Всегда включены — пользователь снять не может
-DEFAULT_SELECTED = {"local"}
-
-# Все ключи которые пользователь может включить (без заблокированных)
-ALL_SELECTABLE = {k for k in SITES if k not in DEFAULT_SELECTED}
-
-
-def build_allowed_ips(selected_keys) -> str:
-    """Резолвит домены, вычитает IP из 0.0.0.0/0, возвращает строку AllowedIPs."""
-    excluded: set[str] = set()
-    for key in selected_keys:
-        site = SITES.get(key, {})
-        for subnet in site.get("subnets", []):
-            excluded.add(subnet)
-        for domain in site.get("domains", []):
-            try:
-                results = socket.getaddrinfo(domain, None, socket.AF_INET)
-                for r in results:
-                    excluded.add(f"{r[4][0]}/32")
-            except Exception:
-                pass
-
-    if not excluded:
-        return "0.0.0.0/0"
-
-    allowed = [ipaddress.ip_network("0.0.0.0/0")]
-    for net_str in excluded:
-        target = ipaddress.ip_network(net_str, strict=False)
-        new_allowed = []
-        for net in allowed:
-            if target.overlaps(net):
-                new_allowed.extend(net.address_exclude(target))
-            else:
-                new_allowed.append(net)
-        allowed = new_allowed
-
-    return ", ".join(
-        str(n) for n in sorted(allowed, key=lambda n: (n.network_address, n.prefixlen))
-    )
 
 
 def sites_keyboard(selected: set, device_name: str, expanded: set | None = None) -> InlineKeyboardMarkup:
@@ -353,402 +105,14 @@ def sites_keyboard(selected: set, device_name: str, expanded: set | None = None)
     ])
     return InlineKeyboardMarkup(rows)
 
-# ── Пользователи ───────────────────────────────────────────────────────────────
-_users_cache: dict | None = None
-_users_cache_ts: float = 0.0
-_USERS_CACHE_TTL: float = 5.0  # секунд
-
-def load_users() -> dict:
-    global _users_cache, _users_cache_ts
-    now = time.monotonic()
-    if _users_cache is not None and (now - _users_cache_ts) < _USERS_CACHE_TTL:
-        return _users_cache
-    try:
-        with open(USERS_FILE) as f:
-            _users_cache = json.load(f)
-    except:
-        _users_cache = {"approved": {}, "pending": {}}
-    _users_cache_ts = now
-    return _users_cache
-
-def save_users(data: dict):
-    global _users_cache, _users_cache_ts
-    with open(USERS_FILE, "w") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-    _users_cache = data
-    _users_cache_ts = time.monotonic()
-
-def is_approved(user_id: int) -> bool:
-    if user_id == ADMIN_ID:
-        return True
-    users = load_users()
-    return str(user_id) in users["approved"]
-
-def get_user_name(user_id: int) -> str:
-    if user_id == ADMIN_ID:
-        return "Admin"
-    users = load_users()
-    info = users["approved"].get(str(user_id), {})
-    return info.get("name", "User")
-
-def get_user_display(user_id: int) -> str:
-    if user_id == ADMIN_ID:
-        return "Admin"
-    users = load_users()
-    info = users["approved"].get(str(user_id), {})
-    return info.get("display", info.get("name", "User"))
-
-# ── AWG хелперы ────────────────────────────────────────────────────────────────
-def get_awg_dump() -> dict:
-    try:
-        out = subprocess.check_output(["awg", "show", AWG_IFACE, "dump"], text=True)
-    except:
-        return {}
-    peers = {}
-    for line in out.strip().split("\n")[1:]:
-        parts = line.split("\t")
-        if len(parts) < 7:
-            continue
-        pub       = parts[0]
-        endpoint  = parts[2] if parts[2] != "(none)" else ""
-        allowed   = parts[3] if parts[3] != "(none)" else ""
-        handshake = int(parts[4]) if parts[4] not in ("0", "(none)") else 0
-        rx        = int(parts[5])
-        tx        = int(parts[6])
-        peers[pub] = {"rx": rx, "tx": tx, "endpoint": endpoint,
-                      "allowed": allowed, "handshake": handshake}
-    return peers
-
-def next_ip() -> int:
-    """Ищет свободный IP в ОБОИХ источниках: awg0.conf и файлах в /clients/.
-    Это защищает от рассинхрона между конфигом и реальным состоянием."""
-    used: set[str] = set()
-
-    # Источник 1: awg0.conf
-    try:
-        with open(AWG_CONF) as f:
-            for line in f:
-                if "AllowedIPs" in line:
-                    for part in line.split():
-                        if part.startswith(VPN_SUBNET + "."):
-                            used.add(part.split("/")[0])
-    except FileNotFoundError:
-        pass
-
-    # Источник 2: клиентские конфиги в /clients/
-    if os.path.isdir(CLIENTS_DIR):
-        for fname in os.listdir(CLIENTS_DIR):
-            if not fname.endswith(".conf"):
-                continue
-            try:
-                with open(f"{CLIENTS_DIR}/{fname}") as f:
-                    for line in f:
-                        if line.startswith("Address"):
-                            ip = line.split("=", 1)[1].strip().split("/")[0]
-                            used.add(ip)
-            except Exception:
-                pass
-
-    i = 2
-    while f"{VPN_SUBNET}.{i}" in used:
-        i += 1
-    return i
-
-def get_all_clients() -> list:
-    if not os.path.exists(CLIENTS_DIR):
-        return []
-    return sorted([f[:-5] for f in os.listdir(CLIENTS_DIR) if f.endswith(".conf")])
-
-def get_user_clients(user_id: int) -> list:
-    prefix = get_user_name(user_id) + "."
-    return [c for c in get_all_clients() if c.startswith(prefix)]
-
-def get_client_pub(name: str) -> str | None:
-    """Получить публичный ключ клиента — сначала из .pub файла, иначе вычислить и сохранить"""
-    pub_path = f"{CLIENTS_DIR}/{name}.pub"
-
-    # Быстрый путь: .pub файл уже есть
-    if os.path.exists(pub_path):
-        with open(pub_path) as f:
-            return f.read().strip()
-
-    # Медленный путь: вычисляем из PrivateKey и сохраняем на будущее
-    try:
-        with open(f"{CLIENTS_DIR}/{name}.conf") as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith("PrivateKey"):
-                    priv = line.split("=", 1)[1].strip()
-                    pub = subprocess.check_output(
-                        ["awg", "pubkey"], input=priv, text=True
-                    ).strip()
-                    # Сохраняем чтобы больше не вычислять
-                    with open(pub_path, "w") as pf:
-                        pf.write(pub)
-                    return pub
-    except:
-        pass
-    return None
-
-def get_client_keys(name: str) -> dict | None:
-    """Читает все ключи и параметры из клиентского .conf файла.
-    Возвращает dict с priv, pub, ip, psk, obfs — или None если файл не найден/битый."""
-    conf_path = f"{CLIENTS_DIR}/{name}.conf"
-    if not os.path.exists(conf_path):
-        return None
-    try:
-        data: dict = {}
-        obfs: dict = {}
-        with open(conf_path) as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#") or line.startswith("["):
-                    continue
-                if "=" not in line:
-                    continue
-                k, v = line.split("=", 1)
-                k, v = k.strip(), v.strip()
-                if k == "PrivateKey":
-                    data["priv"] = v
-                elif k == "Address":
-                    data["ip"] = v.split("/")[0]
-                elif k == "PresharedKey":
-                    data["psk"] = v
-                elif k in ("Jc", "Jmin", "Jmax", "S1", "S2", "H1", "H2", "H3", "H4"):
-                    obfs[k] = v
-        # Публичный ключ — из .pub файла или вычисляем
-        pub = get_client_pub(name)
-        if not pub:
-            return None
-        data["pub"] = pub
-        if obfs:
-            data["obfs"] = obfs
-        # Обязательные поля
-        if not all(k in data for k in ("priv", "pub", "ip", "psk")):
-            return None
-        return data
-    except Exception:
-        return None
-
-def remove_client_from_awg(name: str):
-    """Удалить клиента из AWG и конфига"""
-    conf_path = f"{CLIENTS_DIR}/{name}.conf"
-    if not os.path.exists(conf_path):
-        return
-
-    pub = get_client_pub(name)
-    if pub:
-        subprocess.run(["awg", "set", AWG_IFACE, "peer", pub, "remove"])
-
-    # Удаляем блок из конфига интерфейса
-    with open(AWG_CONF, encoding="utf-8", errors="replace") as f:
-        lines = f.read().split("\n")
-    new_lines, skip = [], False
-    for line in lines:
-        if line.strip() == f"# Client: {name}":
-            skip = True
-        elif skip and line.strip().startswith("[") and line.strip() != "[Peer]":
-            skip = False
-            new_lines.append(line)
-        elif not skip:
-            new_lines.append(line)
-    with open(AWG_CONF, "w") as f:
-        f.write("\n".join(new_lines))
-
-    # Удаляем все файлы клиента
-    for ext in [".conf", ".pub", ".vpn", ".vpnlink"]:
-        p = f"{CLIENTS_DIR}/{name}{ext}"
-        if os.path.exists(p):
-            os.remove(p)
-
-# ── Обфускация и генерация конфига ─────────────────────────────────────────────
-def gen_obfs() -> dict:
-    return {
-        "Jc":   srv.get("JC",   "4"),
-        "Jmin": srv.get("JMIN", "40"),
-        "Jmax": srv.get("JMAX", "70"),
-        "S1":   srv.get("S1",   "0"),
-        "S2":   srv.get("S2",   "0"),
-        "H1":   srv.get("H1",   "1"),
-        "H2":   srv.get("H2",   "2"),
-        "H3":   srv.get("H3",   "3"),
-        "H4":   srv.get("H4",   "4"),
-    }
-
-def make_wg_conf(priv, ip, psk, obfs, endpoint: str = None, allowed_ips: str = "0.0.0.0/0") -> str:
-    ep = endpoint or SERVER_ENDPOINT
-    return "\n".join([
-        "[Interface]",
-        f"PrivateKey = {priv}", f"Address = {ip}/32",
-        f"DNS = {PRIMARY_DNS}, {SECONDARY_DNS}",
-        f"Jc = {obfs['Jc']}", f"Jmin = {obfs['Jmin']}", f"Jmax = {obfs['Jmax']}",
-        f"S1 = {obfs['S1']}", f"S2 = {obfs['S2']}",
-        f"H1 = {obfs['H1']}", f"H2 = {obfs['H2']}", f"H3 = {obfs['H3']}", f"H4 = {obfs['H4']}",
-        "", "[Peer]", f"PublicKey = {SERVER_PUBLIC}", f"PresharedKey = {psk}",
-        f"Endpoint = {ep}:{SERVER_PORT}", f"AllowedIPs = {allowed_ips}", "PersistentKeepalive = 25",
-    ]) + "\n"
-
-def make_vpn_link(priv, pub, ip, psk, obfs, name, endpoint: str = None) -> str:
-    """Генерирует vpn:// ссылку для AmneziaVPN.
-    endpoint — хост без порта; если не указан, используется SERVER_ENDPOINT."""
-    ep = endpoint or SERVER_ENDPOINT
-    wg = (
-        f"[Interface]\nAddress = {ip}/32\nDNS = {PRIMARY_DNS}, {SECONDARY_DNS}\n"
-        f"PrivateKey = {priv}\nJc = {obfs['Jc']}\nJmin = {obfs['Jmin']}\nJmax = {obfs['Jmax']}\n"
-        f"S1 = {obfs['S1']}\nS2 = {obfs['S2']}\nH1 = {obfs['H1']}\nH2 = {obfs['H2']}\n"
-        f"H3 = {obfs['H3']}\nH4 = {obfs['H4']}\n\n"
-        f"[Peer]\nPublicKey = {SERVER_PUBLIC}\nPresharedKey = {psk}\n"
-        f"AllowedIPs = 0.0.0.0/0, ::/0\nEndpoint = {ep}:{SERVER_PORT}\nPersistentKeepalive = 25\n"
-    )
-    lc = {**obfs, "allowed_ips": ["0.0.0.0/0", "::/0"], "clientId": pub,
-          "client_ip": ip, "client_priv_key": priv, "client_pub_key": pub,
-          "config": wg, "hostName": ep, "mtu": "1420",
-          "persistent_keep_alive": "25", "port": int(SERVER_PORT),
-          "psk_key": psk, "server_pub_key": SERVER_PUBLIC}
-    c = {"containers": [{"awg": {**obfs, "last_config": json.dumps(lc, indent=4),
-         "port": str(SERVER_PORT), "subnet_address": ".".join(ip.split(".")[:3]) + ".0",
-         "transport_proto": "udp"}, "container": "amnezia-awg"}],
-         "defaultContainer": "amnezia-awg", "description": name,
-         "dns1": PRIMARY_DNS, "dns2": SECONDARY_DNS,
-         "hostName": ep, "nameOverriddenByUser": True}
-    b = json.dumps(c, ensure_ascii=False).encode()
-    p = struct.pack(">I", len(b)) + zlib.compress(b)
-    return "vpn://" + base64.urlsafe_b64encode(p).decode().rstrip("=")
-
-async def create_client(name: str, app=None, notify_chat_id: int = None):
-    """Создаёт клиента AWG.
-    Защита от гонок: asyncio.Lock() — один клиент за раз.
-    Верификация: после всех шагов проверяем что пир реально появился в awg show.
-    Откат: если верификация провалилась — удаляем всё что успели создать."""
-    async with _client_lock:
-        priv = subprocess.check_output(["awg", "genkey"], text=True).strip()
-        pub  = subprocess.check_output(["awg", "pubkey"], input=priv, text=True).strip()
-        psk  = subprocess.check_output(["awg", "genpsk"], text=True).strip()
-        ip   = f"{VPN_SUBNET}.{next_ip()}"
-        obfs = gen_obfs()
-
-        os.makedirs(CLIENTS_DIR, exist_ok=True)
-        conf_path = f"{CLIENTS_DIR}/{name}.conf"
-        pub_path  = f"{CLIENTS_DIR}/{name}.pub"
-
-        # Шаг 1: записываем в awg0.conf
-        with open(AWG_CONF, "a") as f:
-            f.write(f"\n# Client: {name}\n[Peer]\nPublicKey = {pub}\nPresharedKey = {psk}\nAllowedIPs = {ip}/32\n")
-
-        # Шаг 2: применяем в живой интерфейс
-        subprocess.run(["awg", "set", AWG_IFACE, "peer", pub,
-                        "preshared-key", "/dev/stdin", "allowed-ips", f"{ip}/32"],
-                       input=psk, text=True)
-
-        # Шаг 3: создаём файлы клиента
-        with open(conf_path, "w") as f:
-            f.write(make_wg_conf(priv, ip, psk, obfs))
-        with open(pub_path, "w") as f:
-            f.write(pub)
-
-        # Шаг 4: верификация — проверяем что пир реально зарегистрирован в awg
-        dump = get_awg_dump()
-        peer_ok = pub in dump and dump[pub].get("allowed", "").startswith(ip)
-
-        # Шаг 4b: проверяем что запись есть в awg0.conf
-        try:
-            with open(AWG_CONF) as f:
-                conf_content = f.read()
-            conf_ok = pub in conf_content and f"{ip}/32" in conf_content
-        except Exception:
-            conf_ok = False
-
-        # Шаг 4c: проверяем что файлы клиента созданы
-        files_ok = os.path.exists(conf_path) and os.path.exists(pub_path)
-
-        if not peer_ok or not conf_ok or not files_ok:
-            # ОТКАТ: удаляем всё что успели создать
-            logger.error(f"create_client({name}): верификация провалилась "
-                         f"(peer_ok={peer_ok}, conf_ok={conf_ok}, files_ok={files_ok}), откат")
-            try:
-                subprocess.run(["awg", "set", AWG_IFACE, "peer", pub, "remove"])
-            except Exception:
-                pass
-            # Удаляем запись из awg0.conf
-            try:
-                with open(AWG_CONF, encoding="utf-8", errors="replace") as f:
-                    lines = f.read().split("\n")
-                new_lines, skip = [], False
-                for line in lines:
-                    if line.strip() == f"# Client: {name}":
-                        skip = True
-                    elif skip and line.strip().startswith("[") and line.strip() != "[Peer]":
-                        skip = False
-                        new_lines.append(line)
-                    elif not skip:
-                        new_lines.append(line)
-                with open(AWG_CONF, "w") as f:
-                    f.write("\n".join(new_lines))
-            except Exception:
-                pass
-            # Удаляем файлы
-            for ext in [".conf", ".pub"]:
-                p = f"{CLIENTS_DIR}/{name}{ext}"
-                if os.path.exists(p):
-                    os.remove(p)
-            raise RuntimeError(
-                f"Не удалось создать клиента '{name}': верификация провалилась. "
-                f"Попробуйте снова."
-            )
-
-# ── Мониторинг трафика ─────────────────────────────────────────────────────────
-def _read_iface_bytes(iface: str) -> tuple[int, int]:
-    """Читает rx/tx байты для сетевого интерфейса из /sys"""
-    try:
-        rx = int(open(f"/sys/class/net/{iface}/statistics/rx_bytes").read())
-        tx = int(open(f"/sys/class/net/{iface}/statistics/tx_bytes").read())
-        return rx, tx
-    except:
-        return 0, 0
-
-def _get_host_iface() -> str:
-    """Определяет основной сетевой интерфейс сервера (не awg)"""
-    try:
-        out = subprocess.check_output(["ip", "route", "get", "8.8.8.8"], text=True)
-        for part in out.split():
-            if part not in ("via", "dev", "src", "uid", "8.8.8.8", "cache") and "/" not in part:
-                prev = out.split()[out.split().index(part) - 1]
-                if prev == "dev":
-                    return part
-    except:
-        pass
-    # фолбэк — первый не-loopback не-awg интерфейс
-    try:
-        for line in open("/proc/net/dev").readlines()[2:]:
-            iface = line.split(":")[0].strip()
-            if iface and iface != "lo" and not iface.startswith("awg"):
-                return iface
-    except:
-        pass
-    return "eth0"
-
-def load_bw_peak() -> dict:
-    try:
-        with open(BW_PEAK_FILE) as f:
-            return json.load(f)
-    except:
-        return {}
-
-def save_bw_peak(data: dict):
-    try:
-        with open(BW_PEAK_FILE, "w") as f:
-            json.dump(data, f)
-    except:
-        pass
-
 async def bw_monitor_job(context: ContextTypes.DEFAULT_TYPE):
     """Job: каждые 5 секунд замеряет скорость, обновляет пики.
     В лог пишет раз в минуту чтобы не раздувать файл."""
-    iface = _get_host_iface()
+    iface = get_host_iface()
     now   = int(time.time())
 
     prev = context.bot_data.get("bw_prev")
-    r2, t2 = _read_iface_bytes(iface)
+    r2, t2 = read_iface_bytes(iface)
 
     if prev:
         dt = now - prev["ts"]
@@ -800,233 +164,6 @@ async def bw_monitor_job(context: ContextTypes.DEFAULT_TYPE):
 
     context.bot_data["bw_prev"] = {"rx": r2, "tx": t2, "ts": now}
 
-def get_vnstat_monthly() -> list[dict]:
-    """Парсит vnstat --months и возвращает последние месяцы с трафиком"""
-    iface = _get_host_iface()
-    try:
-        out = subprocess.check_output(
-            ["vnstat", "-i", iface, "--months", "--json"],
-            text=True, stderr=subprocess.DEVNULL
-        )
-        data = json.loads(out)
-        months = data["interfaces"][0]["traffic"]["month"]
-        result = []
-        for m in months[-6:]:  # последние 6 месяцев
-            rx_gb = round(m["rx"] / 1024**3, 2)
-            tx_gb = round(m["tx"] / 1024**3, 2)
-            result.append({
-                "label": f"{m['date']['year']}-{m['date']['month']:02d}",
-                "rx_gb": rx_gb,
-                "tx_gb": tx_gb,
-                "total_gb": round(rx_gb + tx_gb, 2),
-            })
-        return result
-    except Exception:
-        pass
-
-    # фолбэк — текстовый вывод если нет --json (старый vnstat)
-    try:
-        out = subprocess.check_output(
-            ["vnstat", "-i", iface, "--months"],
-            text=True, stderr=subprocess.DEVNULL
-        )
-        result = []
-        for line in out.splitlines():
-            # Формат: "  2024-01  |  1.23 GiB  |  4.56 GiB  |  5.79 GiB"
-            parts = [p.strip() for p in line.split("|")]
-            if len(parts) >= 4 and "-" in parts[0] and len(parts[0].strip()) == 7:
-                label = parts[0].strip()
-                def parse_gb(s):
-                    s = s.strip()
-                    try:
-                        val, unit = s.split()
-                        val = float(val)
-                        unit = unit.lower()
-                        if "gib" in unit or "gb" in unit: return round(val, 2)
-                        if "mib" in unit or "mb" in unit: return round(val / 1024, 2)
-                        if "kib" in unit or "kb" in unit: return round(val / 1024**2, 2)
-                    except: pass
-                    return 0.0
-                rx = parse_gb(parts[1])
-                tx = parse_gb(parts[2])
-                result.append({"label": label, "rx_gb": rx, "tx_gb": tx,
-                                "total_gb": round(rx + tx, 2)})
-        return result[-6:]
-    except Exception:
-        return []
-
-def get_bw_top(n: int = 5) -> list[tuple[str, float, float]]:
-    """Топ-N минут по суммарному трафику из лога"""
-    try:
-        lines = open(BW_LOG_FILE).readlines()
-        rows = []
-        for line in lines:
-            parts = line.strip().split()
-            if len(parts) == 3:
-                try:
-                    dt   = parts[0] + " " + parts[1]
-                    rx   = float(parts[2].split("=")[1])
-                    tx   = float(parts[3].split("=")[1]) if len(parts) > 3 else 0.0
-                    rows.append((dt, rx, tx))
-                except:
-                    pass
-        rows.sort(key=lambda x: x[1] + x[2], reverse=True)
-        return rows[:n]
-    except:
-        return []
-
-def get_bw_top_fixed(n: int = 5) -> list[tuple[str, float, float]]:
-    """Топ-N минут по суммарному трафику из лога (фиксированный парсер)"""
-    try:
-        rows = []
-        for line in open(BW_LOG_FILE).readlines():
-            # Формат: 2024-01-15 14:32 RX=12.34 TX=5.67
-            parts = line.strip().split()
-            if len(parts) == 4:
-                try:
-                    dt = parts[0] + " " + parts[1]
-                    rx = float(parts[2].split("=")[1])
-                    tx = float(parts[3].split("=")[1])
-                    rows.append((dt, rx, tx))
-                except:
-                    pass
-        rows.sort(key=lambda x: x[1] + x[2], reverse=True)
-        return rows[:n]
-    except:
-        return []
-
-def get_bw_histogram() -> dict | None:
-    """Читает лог и строит распределение по диапазонам скорости (RX+TX суммарно)"""
-    buckets = [
-        (0,   50,  "0–50"),
-        (50,  100, "50–100"),
-        (100, 150, "100–150"),
-        (150, 200, "150–200"),
-        (200, 300, "200–300"),
-        (300, 400, "300–400"),
-        (400, 500, "400–500"),
-        (500, None,"500+"),
-    ]
-    counts = [0] * len(buckets)
-    total  = 0
-    try:
-        for line in open(BW_LOG_FILE).readlines():
-            parts = line.strip().split()
-            if len(parts) == 4:
-                try:
-                    rx = float(parts[2].split("=")[1])
-                    tx = float(parts[3].split("=")[1])
-                    val = rx + tx
-                    total += 1
-                    for i, (lo, hi, _) in enumerate(buckets):
-                        if hi is None or val < hi:
-                            counts[i] += 1
-                            break
-                except:
-                    pass
-    except:
-        return None
-    if total == 0:
-        return None
-    return {"buckets": buckets, "counts": counts, "total": total}
-
-def fmt_histogram(hist: dict) -> list[str]:
-    """Форматирует гистограмму для вывода в Telegram"""
-    lines = ["\n📊 Распределение нагрузки (мин/сут, RX+TX):"]
-    buckets = hist["buckets"]
-    counts  = hist["counts"]
-    total   = hist["total"]
-    bar_max = 12  # максимальная длина полоски
-
-    for i, (lo, hi, label) in enumerate(buckets):
-        cnt  = counts[i]
-        if cnt == 0:
-            continue
-        pct  = cnt / total * 100
-        mins_per_day = cnt / max(total / 1440, 1)  # приводим к минутам в сутки
-        bar_len = max(1, round(pct / 100 * bar_max)) if pct > 0 else 0
-        bar  = "█" * bar_len
-
-        # Цветовой маркер по диапазону
-        if lo >= 500:   icon = "🔴"
-        elif lo >= 300: icon = "🟠"
-        elif lo >= 200: icon = "🟡"
-        elif lo >= 100: icon = "🟢"
-        else:           icon = "⚪"
-
-        lines.append(
-            f"{icon} {label:>8} Mbit/s  {bar:<{bar_max}}  "
-            f"{pct:4.1f}%  ~{mins_per_day:.0f} мин/сут"
-        )
-    lines.append(f"   Всего замеров: {total} (~{total//1440} сут данных)")
-    return lines
-
-def get_bw_histogram_for(lines_data: list[str]) -> dict | None:
-    """Строит гистограмму из переданных строк лога"""
-    buckets = [
-        (0,   50,  "0–50  "),
-        (50,  100, "50–100"),
-        (100, 150, "100–150"),
-        (150, 200, "150–200"),
-        (200, 300, "200–300"),
-        (300, 400, "300–400"),
-        (400, 500, "400–500"),
-        (500, None,"500+  "),
-    ]
-    counts = [0] * len(buckets)
-    total  = 0
-    for line in lines_data:
-        parts = line.strip().split()
-        if len(parts) == 4:
-            try:
-                rx  = float(parts[2].split("=")[1])
-                tx  = float(parts[3].split("=")[1])
-                val = max(rx, tx)  # нагрузка на канал = максимум из двух направлений
-                total += 1
-                for i, (lo, hi, _) in enumerate(buckets):
-                    if hi is None or val < hi:
-                        counts[i] += 1
-                        break
-            except:
-                pass
-    if total == 0:
-        return None
-    return {"buckets": buckets, "counts": counts, "total": total}
-
-def get_bw_histogram(period_days: int = 0) -> dict | None:
-    """period_days=0 — всё время, иначе последние N дней"""
-    try:
-        all_lines = open(BW_LOG_FILE).readlines()
-    except:
-        return None
-    if period_days > 0:
-        cutoff = time.strftime(
-            "%Y-%m-%d",
-            time.localtime(time.time() - period_days * 86400)
-        )
-        all_lines = [l for l in all_lines if l[:10] >= cutoff]
-    return get_bw_histogram_for(all_lines)
-
-def get_log_days() -> list[str]:
-    """Возвращает отсортированный список уникальных дат в логе"""
-    days = set()
-    try:
-        for line in open(BW_LOG_FILE).readlines():
-            parts = line.strip().split()
-            if len(parts) == 4:
-                days.add(parts[0])
-    except:
-        pass
-    return sorted(days)
-
-def get_bw_histogram_day(date_str: str) -> dict | None:
-    """Гистограмма за конкретный день (YYYY-MM-DD)"""
-    try:
-        lines = [l for l in open(BW_LOG_FILE).readlines()
-                 if l.startswith(date_str)]
-    except:
-        return None
-    return get_bw_histogram_for(lines)
 
 def fmt_histogram(hist: dict, period_label: str = "") -> list[str]:
     """Форматирует гистограмму для вывода в Telegram"""
@@ -1054,16 +191,16 @@ def fmt_histogram(hist: dict, period_label: str = "") -> list[str]:
 
 async def show_bandwidth(query, period_days: int = 0):
     """Экран статистики трафика для админа"""
-    iface = _get_host_iface()
+    iface = get_host_iface()
     peak  = load_bw_peak()
     last  = peak.get("last", {})
     day   = peak.get("day", {})
     allp  = peak.get("all", {})
     top   = get_bw_top_fixed(5)
 
-    r1, t1 = _read_iface_bytes(iface)
+    r1, t1 = read_iface_bytes(iface)
     time.sleep(1)
-    r2, t2 = _read_iface_bytes(iface)
+    r2, t2 = read_iface_bytes(iface)
     cur_rx = round((r2 - r1) * 8 / 1_000_000, 2)
     cur_tx = round((t2 - t1) * 8 / 1_000_000, 2)
 
@@ -1208,41 +345,6 @@ async def do_bw_reset_all(query):
 
 
 
-# ── Бэкап ──────────────────────────────────────────────────────────────────────
-async def do_backup(query):
-    os.makedirs(BACKUP_DIR, exist_ok=True)
-    ts          = time.strftime("%Y%m%d_%H%M%S")
-    backup_path = f"{BACKUP_DIR}/awg_backup_{ts}.tar.gz"
-
-    try:
-        with tarfile.open(backup_path, "w:gz") as tar:
-            tar.add(AWG_CONF,    arcname=f"{AWG_IFACE}.conf")
-            tar.add(ENV_FILE,    arcname="server.env")
-            tar.add(CLIENTS_DIR, arcname="clients")
-            if os.path.exists(USERS_FILE):
-                tar.add(USERS_FILE, arcname="users.json")
-
-        with open(backup_path, "rb") as fh:
-            await query.message.reply_document(
-                document=fh,
-                filename=f"awg_backup_{ts}.tar.gz",
-                caption=f"💾 Бэкап от {time.strftime('%d.%m.%Y %H:%M:%S')}\n"
-                        f"Клиентов: {len(get_all_clients())}"
-            )
-        await query.edit_message_text(
-            f"✅ Бэкап создан и отправлен.\n\nФайл также сохранён на сервере:\n`{backup_path}`",
-            reply_markup=back_kb(), parse_mode="Markdown"
-        )
-    except Exception as e:
-        await query.edit_message_text(f"❌ Ошибка при создании бэкапа: {e}", reply_markup=back_kb())
-
-# ── Форматирование ─────────────────────────────────────────────────────────────
-def fmt_bytes(b: int) -> str:
-    if b < 1024:        return f"{b} B"
-    elif b < 1024**2:   return f"{b/1024:.1f} KB"
-    elif b < 1024**3:   return f"{b/1024**2:.1f} MB"
-    else:               return f"{b/1024**3:.2f} GB"
-
 def fmt_handshake(ts: int) -> str:
     if not ts: return "никогда"
     diff = int(time.time()) - ts
@@ -1251,6 +353,24 @@ def fmt_handshake(ts: int) -> str:
     elif diff < 3600:  return f"{diff//60} мин назад"
     elif diff < 86400: return f"{diff//3600} ч назад"
     else:              return f"{diff//86400} д назад"
+
+# ── Бэкап ──────────────────────────────────────────────────────────────────────
+async def do_backup(query):
+    try:
+        backup_path = create_backup()
+        ts = time.strftime('%d.%m.%Y %H:%M:%S')
+        with open(backup_path, "rb") as fh:
+            await query.message.reply_document(
+                document=fh,
+                filename=os.path.basename(backup_path),
+                caption=f"💾 Бэкап от {ts}\nКлиентов: {len(get_all_clients())}"
+            )
+        await query.edit_message_text(
+            f"✅ Бэкап создан и отправлен.\n\nФайл также сохранён на сервере:\n`{backup_path}`",
+            reply_markup=back_kb(), parse_mode="Markdown"
+        )
+    except Exception as e:
+        await query.edit_message_text(f"❌ Ошибка при создании бэкапа: {e}", reply_markup=back_kb())
 
 def back_kb(target="back"):
     return InlineKeyboardMarkup([[InlineKeyboardButton("◀️ В меню", callback_data=target)]])
@@ -3119,33 +2239,25 @@ async def check_repo_updates(context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"check_repo_updates: новый коммит {short_sha}, уведомление отправлено")
 
 async def do_repo_update(query, sha: str):
-    """Скачивает актуальные bot.py и vpn.sh из репозитория и перезапускает бота."""
+    """Обновляет все файлы проекта через setup.sh --update и перезапускает бота."""
     short_sha = sha[:7]
     await query.edit_message_text(
-        f"⏳ Обновляю файлы из репозитория (коммит `{short_sha}`)...",
+        f"⏳ Обновляю все файлы проекта (коммит `{short_sha}`)...",
         parse_mode="Markdown",
     )
-    REPO_RAW = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{REPO_BRANCH}"
     try:
-        # Скачиваем оба файла
-        r_bot = subprocess.run(
-            ["curl", "-s", "--max-time", "30", f"{REPO_RAW}/bot.py", "-o", "/root/bot.py"],
-            capture_output=True,
+        result = subprocess.run(
+            ["bash", "/root/setup.sh", "--update"],
+            capture_output=True, text=True, timeout=120,
         )
-        r_vpn = subprocess.run(
-            ["curl", "-s", "--max-time", "30", f"{REPO_RAW}/vpn.sh", "-o", "/root/vpn.sh"],
-            capture_output=True,
-        )
-        if r_bot.returncode != 0 or r_vpn.returncode != 0:
-            raise RuntimeError("curl вернул ненулевой код")
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or "setup.sh --update вернул ненулевой код")
 
-        subprocess.run(["chmod", "+x", "/root/vpn.sh"], check=True)
         _write_last_commit(sha)
-
         await query.edit_message_text(
             f"✅ *Обновление выполнено!*\n\n"
             f"📦 Коммит: `{short_sha}`\n"
-            f"📄 `bot.py` и `vpn.sh` обновлены.\n\n"
+            f"📄 Все файлы проекта обновлены.\n\n"
             f"⏳ Бот перезапускается...",
             parse_mode="Markdown",
         )
@@ -3154,7 +2266,7 @@ async def do_repo_update(query, sha: str):
     except Exception as e:
         await query.edit_message_text(
             f"❌ Ошибка при обновлении: `{e}`\n\n"
-            f"Зайдите на сервер и обновите вручную через `vpn.sh` → Обновление.",
+            f"Зайдите на сервер: `bash /root/setup.sh --update`",
             parse_mode="Markdown",
         )
 
