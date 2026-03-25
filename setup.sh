@@ -167,6 +167,7 @@ Restart=always
 RestartSec=5
 User=root
 WorkingDirectory=${AWG_DIR}
+Environment=PYTHONPATH=/root
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=awg-tma
