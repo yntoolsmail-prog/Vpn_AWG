@@ -778,13 +778,24 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             # conf_<name> — старый формат или прямой вызов → выбор эндпоинта
             await show_conf_ep_select(query, rest, user_id)
-    # ── QR: выбор эндпоинта ──
+    # ── QR: выбор эндпоинта / исключений ──
     elif data.startswith("qr_"):
         rest = data[3:]
         if rest.startswith("ep_"):
+            # qr_ep_<epkey>_<n> → экран выбора исключений
             parts = rest[3:].split("_", 1)
             if len(parts) == 2:
+                await show_qr_excl_select(query, parts[1], user_id, parts[0])
+        elif rest.startswith("send_"):
+            # qr_send_<epkey>_noexcl_<n> → без исключений
+            parts = rest[5:].split("_noexcl_", 1)
+            if len(parts) == 2:
                 await do_send_qr(query, parts[1], parts[0])
+        elif rest.startswith("excl_"):
+            # qr_excl_<epkey>_<n> → меню исключений (mode=qr)
+            parts = rest[5:].split("_", 1)
+            if len(parts) == 2:
+                await show_sites_menu(query, parts[1], user_id, context, ep_key=parts[0], mode="qr")
         else:
             await show_qr_ep_select(query, rest, user_id)
     # ── Поделиться: выбор эндпоинта ──
@@ -837,10 +848,10 @@ async def show_my_devices(query, user_id: int):
         pub   = get_client_pub(name)
         stats = peers.get(pub, {}) if pub else {}
         hs    = fmt_handshake(stats.get("handshake", 0))
-        rx    = fmt_bytes(stats.get("rx", 0))
-        tx    = fmt_bytes(stats.get("tx", 0))
+        dl    = fmt_bytes(stats.get("tx", 0))  # tx сервера = клиент скачал (↓)
+        ul    = fmt_bytes(stats.get("rx", 0))  # rx сервера = клиент отдал (↑)
         short = name.split(".", 1)[1] if "." in name else name
-        lines.append(f"• {short} | {hs} | ↓{rx} ↑{tx}")
+        lines.append(f"• {short} | {hs} | ↓{dl} ↑{ul}")
 
     kb = [[InlineKeyboardButton(f"📋 {name.split('.', 1)[1] if '.' in name else name}",
            callback_data=f"device_{name}")] for name in clients]
@@ -860,8 +871,8 @@ async def show_device(query, name: str, user_id: int):
 
     short = name.split(".", 1)[1] if "." in name else name
     hs    = fmt_handshake(stats.get("handshake", 0))
-    rx    = fmt_bytes(stats.get("rx", 0))
-    tx    = fmt_bytes(stats.get("tx", 0))
+    dl    = fmt_bytes(stats.get("tx", 0))  # tx сервера = клиент скачал (↓)
+    ul    = fmt_bytes(stats.get("rx", 0))  # rx сервера = клиент отдал (↑)
     ep    = stats.get("endpoint", "—")
 
     info = (
@@ -869,7 +880,7 @@ async def show_device(query, name: str, user_id: int):
         f"👤 Пользователь: {name.split('.')[0]}\n\n"
         f"🕐 Хендшейк: {hs}\n"
         f"📍 Endpoint: {ep}\n"
-        f"📶 Трафик: ↓{rx} ↑{tx}"
+        f"📶 Трафик: ↓{dl} ↑{ul}"
     )
     back_target = "my_devices" if user_id != ADMIN_ID else "all_clients"
     kb = [
@@ -898,9 +909,9 @@ async def show_all_clients(query):
         pub   = get_client_pub(name)
         stats = peers.get(pub, {}) if pub else {}
         hs    = fmt_handshake(stats.get("handshake", 0))
-        rx    = fmt_bytes(stats.get("rx", 0))
-        tx    = fmt_bytes(stats.get("tx", 0))
-        lines.append(f"• {name} | {hs} | ↓{rx} ↑{tx}")
+        dl    = fmt_bytes(stats.get("tx", 0))  # tx сервера = клиент скачал (↓)
+        ul    = fmt_bytes(stats.get("rx", 0))  # rx сервера = клиент отдал (↑)
+        lines.append(f"• {name} | {hs} | ↓{dl} ↑{ul}")
 
     kb = [[InlineKeyboardButton(f"📋 {name}", callback_data=f"device_{name}")] for name in clients]
     kb.append([InlineKeyboardButton("◀️ В меню", callback_data="back")])
@@ -1104,6 +1115,28 @@ async def show_conf_excl_select(query, name: str, user_id: int, ep_key: str):
         parse_mode="Markdown"
     )
 
+# ── Экран выбора исключений для QR ───────────────────────────────────────────
+
+async def show_qr_excl_select(query, name: str, user_id: int, ep_key: str):
+    """После выбора эндпоинта для QR предлагаем: пропустить или настроить исключения."""
+    short = name.split(".", 1)[1] if "." in name else name
+    ep    = _resolve_endpoint(ep_key)
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("⚡ Пропустить (весь трафик через VPN)",
+                              callback_data=f"qr_send_{ep_key}_noexcl_{name}")],
+        [InlineKeyboardButton("🌐 Настроить исключения сайтов",
+                              callback_data=f"qr_excl_{ep_key}_{name}")],
+        [InlineKeyboardButton("◀️ Назад", callback_data=f"device_{name}")],
+    ])
+    await query.edit_message_text(
+        f"📱 QR-код для *{short}*
+🌐 Эндпоинт: `{ep}`
+
+Выберите режим трафика:",
+        reply_markup=kb,
+        parse_mode="Markdown"
+    )
+
 # ── Финальная отправка .conf ──────────────────────────────────────────────────
 
 async def do_send_conf(query, name: str, ep_key: str, allowed_ips: str = "0.0.0.0/0"):
@@ -1128,25 +1161,34 @@ async def do_send_conf(query, name: str, ep_key: str, allowed_ips: str = "0.0.0.
 
 # ── Финальная отправка QR ─────────────────────────────────────────────────────
 
-async def do_send_qr(query, name: str, ep_key: str):
-    """Генерирует .conf в памяти → QR → отправляет, без файлов на диске."""
+async def do_send_qr(query, name: str, ep_key: str, allowed_ips: str = "0.0.0.0/0"):
+    """Генерирует .conf в памяти → QR → отправляет. Сначала .conf файл, потом QR."""
     short   = name.split(".", 1)[1] if "." in name else name
     ep      = _resolve_endpoint(ep_key)
-    content = _conf_for_endpoint(name, ep_key)
+    content = _conf_for_endpoint(name, ep_key, allowed_ips)
     ep_label = {"main": "Основной", "backup": "Резервный", "ip": "По IP"}.get(ep_key, ep_key)
 
     # Пишем во временный файл только для qrencode — сразу удаляем
     tmp_conf = f"/tmp/qr_{name}_{ep_key}.conf"
     qr_path  = f"/tmp/qr_{name}_{ep_key}.png"
+    excl_note = "" if allowed_ips == "0.0.0.0/0" else "\n🌐 С исключениями сайтов"
     try:
         with open(tmp_conf, "wb") as f:
             f.write(content)
+        # Сначала .conf файл, затем QR
+        safe_name = name.replace(".", "_")
+        await query.message.reply_document(
+            document=open(tmp_conf, "rb"),
+            filename=f"{safe_name}_{ep_key}.conf",
+            caption=f"📄 .conf для AmneziaWG — *{short}* ({ep_label}){excl_note}",
+            parse_mode="Markdown"
+        )
         subprocess.run(["qrencode", "-o", qr_path, "-r", tmp_conf], check=True)
         await query.message.reply_photo(
             photo=open(qr_path, "rb"),
             caption=(
                 f"📱 QR для AmneziaWG — *{short}* ({ep_label})\n"
-                f"🌐 Endpoint: `{ep}:{SERVER_PORT}`"
+                f"🌐 Endpoint: `{ep}:{SERVER_PORT}`{excl_note}"
             ),
             parse_mode="Markdown"
         )
@@ -1248,8 +1290,8 @@ async def show_status(query):
     ram_used  = int(mem[2]); ram_total = int(mem[1])
     disk      = subprocess.check_output(["df", "-h", "/"], text=True).split("\n")[1].split()
     load      = open("/proc/loadavg").read().split()[:3]
-    total_rx  = sum(p.get("rx", 0) for p in peers.values())
-    total_tx  = sum(p.get("tx", 0) for p in peers.values())
+    total_dl  = sum(p.get("tx", 0) for p in peers.values())  # tx сервера = клиенты скачали (↓)
+    total_ul  = sum(p.get("rx", 0) for p in peers.values())  # rx сервера = клиенты отдали (↑)
     users     = load_users()
 
     text = (
@@ -1263,7 +1305,7 @@ async def show_status(query):
         f"👤 Клиентов: {len(get_all_clients())}\n"
         f"👥 Пользователей: {len(users['approved'])}\n"
         f"🟢 Онлайн: {online}\n"
-        f"📶 Трафик (с перезагрузки): ↓{fmt_bytes(total_rx)} ↑{fmt_bytes(total_tx)}"
+        f"📶 Трафик (с перезагрузки): ↓{fmt_bytes(total_dl)} ↑{fmt_bytes(total_ul)}"
     )
 
     is_admin = (query.from_user.id == ADMIN_ID)
@@ -1796,8 +1838,8 @@ def _sites_text(name: str, ep_key: str) -> str:
     )
 
 
-async def show_sites_menu(query, name: str, user_id: int, context, ep_key: str = "main"):
-    """Меню исключений. ep_key передаётся из conf_excl_<ep_key>_<n>."""
+async def show_sites_menu(query, name: str, user_id: int, context, ep_key: str = "main", mode: str = "conf"):
+    """Меню исключений. ep_key передаётся из conf_excl_<ep_key>_<n>. mode: 'conf' | 'qr'."""
     user_prefix = get_user_name(user_id) + "."
     if user_id != ADMIN_ID and not name.startswith(user_prefix):
         await query.answer("⛔ Это не ваше устройство.", show_alert=True)
@@ -1806,6 +1848,7 @@ async def show_sites_menu(query, name: str, user_id: int, context, ep_key: str =
     context.user_data["sites_device"]   = name
     context.user_data["sites_selected"] = set(DEFAULT_SELECTED)
     context.user_data["sites_ep_key"]   = ep_key
+    context.user_data["sites_mode"]     = mode
     context.user_data["sites_expanded"] = set()  # все категории свёрнуты
 
     await query.edit_message_text(
@@ -1910,7 +1953,11 @@ async def apply_sites(query, user_id: int, context):
     context.user_data.pop("sites_ep_key", None)
     context.user_data.pop("sites_expanded", None)
 
-    await do_send_conf(query, name, ep_key, allowed_ips)
+    mode = context.user_data.pop("sites_mode", "conf")
+    if mode == "qr":
+        await do_send_qr(query, name, ep_key, allowed_ips)
+    else:
+        await do_send_conf(query, name, ep_key, allowed_ips)
 
 
 
