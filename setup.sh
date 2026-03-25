@@ -23,6 +23,7 @@ AWG_DIR="/etc/amnezia/amneziawg"
 
 # Список всех файлов проекта — используется в --update
 PROJECT_FILES=(
+    "setup.sh:/root/setup.sh"
     "bot.py:/root/bot.py"
     "awg_core.py:/root/awg_core.py"
     "sites_data.py:/root/sites_data.py"
@@ -1053,7 +1054,9 @@ curl -fsSL "${REPO_RAW}/vpn.sh"        -o /root/vpn.sh        || err "Не уд�
 curl -fsSL "${REPO_RAW}/bot.py"        -o /root/bot.py        || err "Не удалось скачать bot.py"
 curl -fsSL "${REPO_RAW}/awg_core.py"   -o /root/awg_core.py   || err "Не удалось скачать awg_core.py"
 curl -fsSL "${REPO_RAW}/sites_data.py" -o /root/sites_data.py || err "Не удалось скачать sites_data.py"
-chmod +x /root/vpn.sh
+# Сохраняем setup.sh в /root/ — нужен для --update и --tma
+cp "$0" /root/setup.sh 2>/dev/null ||     curl -fsSL "${REPO_RAW}/setup.sh" -o /root/setup.sh       || err "Не удалось сохранить setup.sh"
+chmod +x /root/vpn.sh /root/setup.sh
 
 # ── Шаг 11: Python зависимости ───────────────────────────────────────────────
 log "Установка python-telegram-bot..."
