@@ -11,6 +11,7 @@
 set -e
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 log()  { echo -e "${GREEN}[+]${NC} $1"; }
+ok()   { echo -e "${GREEN}[✓]${NC} $1"; }
 warn() { echo -e "${YELLOW}[!]${NC} $1"; }
 err()  { echo -e "${RED}[✗]${NC} $1"; exit 1; }
 info() { echo -e "${CYAN}[i]${NC} $1"; }
@@ -252,8 +253,25 @@ EOF2
     log "TMA установлена!"
     info "URL: ${TMA_URL}"
     if [[ "$USE_SSL" -eq 1 ]]; then
-        echo -e "  Следующий шаг — кнопка в Telegram:"
-        echo -e "  @BotFather → /mybots → Bot Settings → Menu Button → ${CYAN}${TMA_URL}${NC}"
+        echo ""
+        echo -e "  ${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo -e "  ${BOLD}  Настройка кнопки «Монитор» в Telegram (BotFather)${NC}"
+        echo -e "  ${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo ""
+        echo -e "  ${CYAN}1.${NC} Открой Telegram и найди ${YELLOW}@BotFather${NC}"
+        echo -e "  ${CYAN}2.${NC} Отправь команду: ${YELLOW}/mybots${NC}"
+        echo -e "  ${CYAN}3.${NC} Выбери своего бота из списка"
+        echo -e "  ${CYAN}4.${NC} Нажми ${YELLOW}Bot Settings${NC}"
+        echo -e "  ${CYAN}5.${NC} Нажми ${YELLOW}Menu Button${NC}"
+        echo -e "  ${CYAN}6.${NC} Нажми ${YELLOW}Configure menu button${NC}"
+        echo -e "  ${CYAN}7.${NC} Отправь URL веб-приложения:"
+        echo -e "     ${GREEN}${TMA_URL}${NC}"
+        echo -e "  ${CYAN}8.${NC} Отправь текст кнопки (название), например:"
+        echo -e "     ${GREEN}Монитор${NC}"
+        echo ""
+        echo -e "  ${YELLOW}Готово!${NC} Кнопка появится рядом с полем ввода в боте."
+        echo -e "  При нажатии Telegram откроет веб-панель прямо внутри себя."
+        echo -e "  ${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     fi
     echo ""
 }
