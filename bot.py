@@ -1129,10 +1129,7 @@ async def show_qr_excl_select(query, name: str, user_id: int, ep_key: str):
         [InlineKeyboardButton("◀️ Назад", callback_data=f"device_{name}")],
     ])
     await query.edit_message_text(
-        f"📱 QR-код для *{short}*
-🌐 Эндпоинт: `{ep}`
-
-Выберите режим трафика:",
+        f"📱 QR-код для *{short}*\n🌐 Эндпоинт: `{ep}`\n\nВыберите режим трафика:",
         reply_markup=kb,
         parse_mode="Markdown"
     )
