@@ -312,11 +312,11 @@ if [[ "${1}" == "--update" ]]; then
         if curl -fsSL "${REPO_RAW}/${src_file}" -o "${dst_file}.new"; then
             mv "${dst_file}.new" "$dst_file"
             [[ "$dst_file" == *.sh ]] && chmod +x "$dst_file"
-            ((UPDATED++))
+            UPDATED=$((UPDATED+1))
         else
             warn "Не удалось обновить ${src_file}"
             rm -f "${dst_file}.new"
-            ((FAILED++))
+            FAILED=$((FAILED+1))
         fi
     done
 
@@ -327,12 +327,12 @@ if [[ "${1}" == "--update" ]]; then
         # (bash читает скрипт блоками — к этому моменту весь код уже в памяти)
         mv /root/setup.sh.new /root/setup.sh
         chmod +x /root/setup.sh
-        ((UPDATED++))
+        UPDATED=$((UPDATED+1))
         ok "setup.sh обновлён"
     else
         warn "Не удалось обновить setup.sh"
         rm -f /root/setup.sh.new
-        ((FAILED++))
+        FAILED=$((FAILED+1))
     fi
 
     echo ""
