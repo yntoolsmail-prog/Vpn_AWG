@@ -23,7 +23,6 @@ AWG_DIR="/etc/amnezia/amneziawg"
 
 # Список всех файлов проекта — используется в --update
 PROJECT_FILES=(
-    "setup.sh:/root/setup.sh"
     "bot.py:/root/bot.py"
     "awg_core.py:/root/awg_core.py"
     "sites_data.py:/root/sites_data.py"
@@ -320,6 +319,21 @@ if [[ "${1}" == "--update" ]]; then
             ((FAILED++))
         fi
     done
+
+    # Обновляем setup.sh последним — нельзя перезаписывать запущенный скрипт раньше времени
+    log "Обновляю setup.sh..."
+    if curl -fsSL "${REPO_RAW}/setup.sh" -o /root/setup.sh.new; then
+        # Атомарная замена: mv не ломает уже запущенный bash-процесс
+        # (bash читает скрипт блоками — к этому моменту весь код уже в памяти)
+        mv /root/setup.sh.new /root/setup.sh
+        chmod +x /root/setup.sh
+        ((UPDATED++))
+        ok "setup.sh обновлён"
+    else
+        warn "Не удалось обновить setup.sh"
+        rm -f /root/setup.sh.new
+        ((FAILED++))
+    fi
 
     echo ""
     log "Перезапускаю сервисы..."
