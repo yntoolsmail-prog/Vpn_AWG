@@ -18,8 +18,50 @@ info() { echo -e "${CYAN}[i]${NC} $1"; }
 
 [[ $EUID -ne 0 ]] && err "Запускать от root: sudo bash setup.sh"
 
-REPO_RAW="https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main"
+REPO_ORG="yntoolsmail-prog"
+REPO_NAME="Vpn_AWG"
 AWG_DIR="/etc/amnezia/amneziawg"
+
+# ── Выбор ветки репозитория ───────────────────────────────────────────────────
+# При update/tma: берём сохранённую ветку из server.env (молча).
+# При свежей установке: получаем список веток через API и даём выбор.
+REPO_BRANCH="main"
+
+if [[ "${1}" == "--update" || "${1}" == "--tma" ]]; then
+    _saved=$(grep "^REPO_BRANCH=" "${AWG_DIR}/server.env" 2>/dev/null | cut -d= -f2)
+    [[ -n "$_saved" ]] && REPO_BRANCH="$_saved"
+else
+    _api=$(curl -fsSL --max-time 8 \
+        "https://api.github.com/repos/${REPO_ORG}/${REPO_NAME}/branches" 2>/dev/null)
+    _branches=()
+    while IFS= read -r _b; do
+        [[ -n "$_b" ]] && _branches+=("$_b")
+    done < <(printf '%s' "$_api" | grep '"name"' | sed 's/.*"name": "\(.*\)".*/\1/')
+
+    if [[ ${#_branches[@]} -gt 1 ]]; then
+        echo ""
+        echo -e "  ${BOLD}Выберите ветку репозитория:${NC}"
+        for _i in "${!_branches[@]}"; do
+            if [[ "${_branches[$_i]}" == "main" ]]; then
+                echo -e "  ${CYAN}$((_i+1)).${NC} ${_branches[$_i]}  ${GREEN}← стабильная, рекомендуется${NC}"
+            else
+                echo -e "  ${CYAN}$((_i+1)).${NC} ${_branches[$_i]}"
+            fi
+        done
+        echo ""
+        read -p "  Выбор [1]: " _CHOICE
+        _CHOICE="${_CHOICE:-1}"
+        if [[ "$_CHOICE" =~ ^[0-9]+$ ]] && (( _CHOICE >= 1 && _CHOICE <= ${#_branches[@]} )); then
+            REPO_BRANCH="${_branches[$((_CHOICE-1))]}"
+        fi
+        [[ "$REPO_BRANCH" != "main" ]] && warn "Установка из ветки: ${REPO_BRANCH}"
+    elif [[ ${#_branches[@]} -eq 1 ]]; then
+        REPO_BRANCH="${_branches[0]}"
+    fi
+    # Если API недоступен — молча остаёмся на main
+fi
+
+REPO_RAW="https://raw.githubusercontent.com/${REPO_ORG}/${REPO_NAME}/${REPO_BRANCH}"
 
 # Список всех файлов проекта — используется в --update
 PROJECT_FILES=(
@@ -1060,6 +1102,8 @@ printf "JC=%s\nJMIN=%s\nJMAX=%s\nS1=%s\nS2=%s\nH1=%s\nH2=%s\nH3=%s\nH4=%s\n" \
 printf "PRIMARY_DNS=1.1.1.1\nSECONDARY_DNS=1.0.0.1\n" \
     >> /etc/amnezia/amneziawg/server.env
 printf "TIMEZONE=%s\n" "$TIMEZONE" \
+    >> /etc/amnezia/amneziawg/server.env
+printf "REPO_BRANCH=%s\n" "$REPO_BRANCH" \
     >> /etc/amnezia/amneziawg/server.env
 
 # ── Шаг 10: Скачиваем скрипты ─────────────────────────────────────────────────
