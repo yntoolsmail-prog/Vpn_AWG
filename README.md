@@ -37,13 +37,7 @@ AmneziaWG нативно в kernelspace (300+ мбит) с управление�
 ## Установка
 
 ```bash
-bash <(curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/setup.sh)
-```
-```bash
-bash <(curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/tma_setup.sh)
-```
-```bash
-bash <(curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/tma_setup.sh) --update
+bash <(curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/claude/review-repo-errors-MNIC4/setup.sh)
 ```
 
 Установщик автоматически:
@@ -234,42 +228,6 @@ apt-get update && apt-get upgrade -y && systemctl restart awg-bot
 Конфиги, ключи и данные клиентов не затрагиваются.
 
 </details>
-
-<details>
-<summary><sub>🧪 Тестовая ветка — установка и обновление</sub></summary>
-
-Для работы с тестовой веткой `claude/review-repo-errors-MNIC4`.
-
-**Установка:**
-```bash
-bash <(curl -s "https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/claude/review-repo-errors-MNIC4/setup.sh")
-```
-
-**Обновить бота (самое частое):**
-```bash
-curl -s "https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/claude/review-repo-errors-MNIC4/bot.py" -o /root/bot.py
-curl -s "https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/claude/review-repo-errors-MNIC4/awg_core.py" -o /root/awg_core.py
-curl -s "https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/claude/review-repo-errors-MNIC4/vpn.sh" -o /root/vpn.sh
-chmod +x /root/vpn.sh && systemctl restart awg-bot
-```
-
-**Обновить TMA-сервер:**
-```bash
-curl -s "https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/claude/review-repo-errors-MNIC4/tma_server.py" -o /root/tma_server.py
-systemctl restart awg-tma 2>/dev/null || true
-```
-
-**Проверить что бот запустился:**
-```bash
-systemctl status awg-bot
-journalctl -u awg-bot -n 30 --no-pager
-```
-
-> После проверки — смержить в `main` и переключить установки обратно на основную ветку.
-
-</details>
-
----
 
 <details>
 <summary><sub>Для владельца репозитория — amnezia.gpg.asc</sub></summary>
