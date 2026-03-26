@@ -1276,37 +1276,20 @@ async def show_status(query):
     peers  = get_awg_dump()
     now    = int(time.time())
     online = sum(1 for p in peers.values() if p.get("handshake") and now - p["handshake"] < 180)
-
-    try:    uptime = subprocess.check_output(["uptime", "-p"], text=True).strip()
-    except: uptime = "—"
-
-    try:
-        mem = subprocess.check_output(["free", "-m"], text=True).split("\n")[1].split()
-        ram_used, ram_total = int(mem[2]), int(mem[1])
-    except Exception:
-        ram_used = ram_total = 0
-
-    try:
-        disk = subprocess.check_output(["df", "-h", "/"], text=True).split("\n")[1].split()
-    except Exception:
-        disk = ["—", "—", "—", "—", "—%"]
-
-    try:
-        load = open("/proc/loadavg").read().split()[:3]
-    except Exception:
-        load = ["0", "0", "0"]
+    sys    = get_system_stats()
     total_dl  = sum(p.get("tx", 0) for p in peers.values())  # tx сервера = клиенты скачали (↓)
     total_ul  = sum(p.get("rx", 0) for p in peers.values())  # rx сервера = клиенты отдали (↑)
     users     = load_users()
 
+    load = sys["load"]
     text = (
         f"📊 Статус сервера\n\n"
         f"🟢 AWG: работает\n"
         f"🖥 IP: {SERVER_IP}:{SERVER_PORT}\n"
-        f"⏱ Uptime: {uptime}\n\n"
+        f"⏱ Uptime: {sys['uptime']}\n\n"
         f"📈 Load: {load[0]} {load[1]} {load[2]}\n"
-        f"💾 RAM: {ram_used}/{ram_total} MB\n"
-        f"💿 Диск: {disk[2]}/{disk[1]} ({disk[4]})\n\n"
+        f"💾 RAM: {sys['ram_used']}/{sys['ram_total']} MB\n"
+        f"💿 Диск: {sys['disk_used']}/{sys['disk_total']} ({sys['disk_pct']}%)\n\n"
         f"👤 Клиентов: {len(get_all_clients())}\n"
         f"👥 Пользователей: {len(users['approved'])}\n"
         f"🟢 Онлайн: {online}\n"

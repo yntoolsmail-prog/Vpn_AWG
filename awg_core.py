@@ -628,35 +628,56 @@ def get_vnstat_monthly() -> list[dict]:
         return []
 
 # ── Статистика ─────────────────────────────────────────────────────────────────
-def collect_stats_full() -> dict:
-    """Полная статистика — только для ADMIN_ID"""
-    peers = get_awg_dump()
-    now   = int(time.time())
-    iface = get_host_iface()
-    peak  = load_bw_peak()
-
-    online = sum(1 for p in peers.values()
-                 if p.get("handshake") and now - p["handshake"] < 180)
-
+def get_system_stats() -> dict:
+    """Системные метрики: uptime, RAM, диск, load average.
+    Единая точка сбора — используется bot.py, tma_server.py и будущими блоками."""
     try:    uptime = subprocess.check_output(["uptime", "-p"], text=True).strip()
     except: uptime = "—"
 
     try:
         mem = subprocess.check_output(["free", "-m"], text=True).split("\n")[1].split()
         ram_used, ram_total = int(mem[2]), int(mem[1])
-    except:
+    except Exception:
         ram_used = ram_total = 0
 
     try:
         disk = subprocess.check_output(["df", "-h", "/"], text=True).split("\n")[1].split()
         disk_used, disk_total = disk[2], disk[1]
         disk_pct = int(disk[4].replace("%", ""))
-    except:
+    except Exception:
         disk_used = disk_total = "—"
         disk_pct  = 0
 
     try:    load = open("/proc/loadavg").read().split()[:3]
     except: load = ["0", "0", "0"]
+
+    return {
+        "uptime":     uptime,
+        "ram_used":   ram_used,
+        "ram_total":  ram_total,
+        "disk_used":  disk_used,
+        "disk_total": disk_total,
+        "disk_pct":   disk_pct,
+        "load":       load,
+    }
+
+
+def collect_stats_full() -> dict:
+    """Полная статистика — только для ADMIN_ID"""
+    peers = get_awg_dump()
+    now   = int(time.time())
+    iface = get_host_iface()
+    peak  = load_bw_peak()
+    sys   = get_system_stats()
+
+    online = sum(1 for p in peers.values()
+                 if p.get("handshake") and now - p["handshake"] < 180)
+
+    uptime     = sys["uptime"]
+    ram_used   = sys["ram_used"];  ram_total  = sys["ram_total"]
+    disk_used  = sys["disk_used"]; disk_total = sys["disk_total"]
+    disk_pct   = sys["disk_pct"]
+    load       = sys["load"]
 
     # Текущая скорость из последней записи пиков
     last_bw = peak.get("last", {})
@@ -750,8 +771,7 @@ def collect_stats_basic() -> dict:
     now    = int(time.time())
     online = sum(1 for p in peers.values()
                  if p.get("handshake") and now - p["handshake"] < 180)
-    try:    uptime = subprocess.check_output(["uptime", "-p"], text=True).strip()
-    except: uptime = "—"
+    uptime = get_system_stats()["uptime"]
     return {
         "awg_status":      "running",
         "server_endpoint": SERVER_ENDPOINT,

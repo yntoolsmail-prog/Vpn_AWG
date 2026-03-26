@@ -240,25 +240,22 @@ apt-get update && apt-get upgrade -y && systemctl restart awg-bot
 
 Для работы с тестовой веткой `claude/review-repo-errors-MNIC4`.
 
-**Установка (setup.sh из тестовой ветки):**
+**Установка:**
 ```bash
-BRANCH=claude/review-repo-errors-MNIC4
-bash <(curl -s "https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/${BRANCH}/setup.sh")
+bash <(curl -s "https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/claude/review-repo-errors-MNIC4/setup.sh")
 ```
 
-**Обновить только бота и скрипт (самое частое):**
+**Обновить бота (самое частое):**
 ```bash
-BRANCH=claude/review-repo-errors-MNIC4
-curl -s "https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/${BRANCH}/bot.py" -o /root/bot.py
-curl -s "https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/${BRANCH}/awg_core.py" -o /root/awg_core.py
-curl -s "https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/${BRANCH}/vpn.sh" -o /root/vpn.sh
+curl -s "https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/claude/review-repo-errors-MNIC4/bot.py" -o /root/bot.py
+curl -s "https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/claude/review-repo-errors-MNIC4/awg_core.py" -o /root/awg_core.py
+curl -s "https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/claude/review-repo-errors-MNIC4/vpn.sh" -o /root/vpn.sh
 chmod +x /root/vpn.sh && systemctl restart awg-bot
 ```
 
 **Обновить TMA-сервер:**
 ```bash
-BRANCH=claude/review-repo-errors-MNIC4
-curl -s "https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/${BRANCH}/tma_server.py" -o /root/tma_server.py
+curl -s "https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/claude/review-repo-errors-MNIC4/tma_server.py" -o /root/tma_server.py
 systemctl restart awg-tma 2>/dev/null || true
 ```
 
