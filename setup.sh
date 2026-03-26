@@ -32,7 +32,7 @@ if [[ "${1}" == "--tma" ]]; then
     [[ -n "$_saved_branch" ]] && REPO_BRANCH="$_saved_branch"
 else
     _api=$(curl -fsSL --max-time 8 \
-        "https://api.github.com/repos/${REPO_ORG}/${REPO_NAME}/branches" 2>/dev/null)
+        "https://api.github.com/repos/${REPO_ORG}/${REPO_NAME}/branches" 2>/dev/null) || true
     _branches=()
     while IFS= read -r _b; do
         [[ -n "$_b" ]] && _branches+=("$_b")
@@ -1130,7 +1130,7 @@ printf "REPO_BRANCH=%s\n" "$REPO_BRANCH" \
     >> /etc/amnezia/amneziawg/server.env
 
 # ── Шаг 10: Скачиваем скрипты ─────────────────────────────────────────────────
-log "Загрузка скриптов управления..."
+log "Загрузка скриптов управления (ветка: ${REPO_BRANCH})..."
 curl -fsSL "${REPO_RAW}/vpn.sh"        -o /root/vpn.sh        || err "Не удалось скачать vpn.sh"
 curl -fsSL "${REPO_RAW}/bot.py"        -o /root/bot.py        || err "Не удалось скачать bot.py"
 curl -fsSL "${REPO_RAW}/awg_core.py"   -o /root/awg_core.py   || err "Не удалось скачать awg_core.py"
