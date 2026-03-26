@@ -1234,9 +1234,6 @@ async def do_send_share(query, name: str, ep_key: str):
 # ══════════════════════════════════════════════════════════════════════════════
 # УДАЛЕНИЕ УСТРОЙСТВА
 # ══════════════════════════════════════════════════════════════════════════════
-# ══════════════════════════════════════════════════════════════════════════════
-# УДАЛЕНИЕ УСТРОЙСТВА
-# ══════════════════════════════════════════════════════════════════════════════
 
 async def do_delete(query, name: str, user_id: int):
     user_prefix = get_user_name(user_id) + "."
@@ -1283,10 +1280,21 @@ async def show_status(query):
     try:    uptime = subprocess.check_output(["uptime", "-p"], text=True).strip()
     except: uptime = "—"
 
-    mem       = subprocess.check_output(["free", "-m"], text=True).split("\n")[1].split()
-    ram_used  = int(mem[2]); ram_total = int(mem[1])
-    disk      = subprocess.check_output(["df", "-h", "/"], text=True).split("\n")[1].split()
-    load      = open("/proc/loadavg").read().split()[:3]
+    try:
+        mem = subprocess.check_output(["free", "-m"], text=True).split("\n")[1].split()
+        ram_used, ram_total = int(mem[2]), int(mem[1])
+    except Exception:
+        ram_used = ram_total = 0
+
+    try:
+        disk = subprocess.check_output(["df", "-h", "/"], text=True).split("\n")[1].split()
+    except Exception:
+        disk = ["—", "—", "—", "—", "—%"]
+
+    try:
+        load = open("/proc/loadavg").read().split()[:3]
+    except Exception:
+        load = ["0", "0", "0"]
     total_dl  = sum(p.get("tx", 0) for p in peers.values())  # tx сервера = клиенты скачали (↓)
     total_ul  = sum(p.get("rx", 0) for p in peers.values())  # rx сервера = клиенты отдали (↑)
     users     = load_users()
@@ -2122,6 +2130,15 @@ async def excl_receive_domain(update: Update, context: ContextTypes.DEFAULT_TYPE
     return ConversationHandler.END
 
 
+async def excl_back_to_my_devices(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Возврат к списку устройств из диалога excl_calc"""
+    query = update.callback_query
+    await query.answer()
+    context.user_data.pop("excl_allowed_ips", None)
+    await show_my_devices(query, query.from_user.id)
+    return ConversationHandler.END
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # ДОБАВЛЕНИЕ УСТРОЙСТВА (ConversationHandler)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2530,7 +2547,7 @@ def main():
             ],
             WAITING_EXCL_DOMAIN: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, excl_receive_domain),
-                CallbackQueryHandler(lambda u, c: (show_my_devices(u.callback_query, u.callback_query.from_user.id), ConversationHandler.END)[1], pattern="^my_devices_back$"),
+                CallbackQueryHandler(excl_back_to_my_devices, pattern="^my_devices_back$"),
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
