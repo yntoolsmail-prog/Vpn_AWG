@@ -45,7 +45,9 @@ else
         # Находим индекс текущей ветки для дефолта
         _default_idx=1
         for _i in "${!_branches[@]}"; do
-            [[ "${_branches[$_i]}" == "$_current" ]] && _default_idx=$((_i+1))
+            if [[ "${_branches[$_i]}" == "$_current" ]]; then
+                _default_idx=$((_i+1))
+            fi
         done
 
         echo ""
@@ -56,8 +58,12 @@ else
         fi
         for _i in "${!_branches[@]}"; do
             _label=""
-            [[ "${_branches[$_i]}" == "main" ]]    && _label="  ${GREEN}← стабильная${NC}"
-            [[ "${_branches[$_i]}" == "$_current" ]] && _label+="  ${CYAN}← текущая${NC}"
+            if [[ "${_branches[$_i]}" == "main" ]]; then
+                _label="  ${GREEN}← стабильная${NC}"
+            fi
+            if [[ "${_branches[$_i]}" == "$_current" ]]; then
+                _label+="  ${CYAN}← текущая${NC}"
+            fi
             echo -e "  ${CYAN}$((_i+1)).${NC} ${_branches[$_i]}${_label}"
         done
         echo ""
