@@ -222,7 +222,7 @@ systemctl restart awg-bot
 bash /root/vpn.sh  # → Обновление
 ```
 
-**Вручную:**
+**Вручную (из ветки `main`):**
 ```bash
 curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/bot.py -o /root/bot.py
 curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/vpn.sh -o /root/vpn.sh
@@ -232,6 +232,43 @@ apt-get update && apt-get upgrade -y && systemctl restart awg-bot
 ```
 
 Конфиги, ключи и данные клиентов не затрагиваются.
+
+</details>
+
+<details>
+<summary><sub>🧪 Тестовая ветка — установка и обновление</sub></summary>
+
+Для работы с тестовой веткой `claude/review-repo-errors-MNIC4`.
+
+**Установка (setup.sh из тестовой ветки):**
+```bash
+BRANCH=claude/review-repo-errors-MNIC4
+bash <(curl -s "https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/${BRANCH}/setup.sh")
+```
+
+**Обновить только бота и скрипт (самое частое):**
+```bash
+BRANCH=claude/review-repo-errors-MNIC4
+curl -s "https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/${BRANCH}/bot.py" -o /root/bot.py
+curl -s "https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/${BRANCH}/awg_core.py" -o /root/awg_core.py
+curl -s "https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/${BRANCH}/vpn.sh" -o /root/vpn.sh
+chmod +x /root/vpn.sh && systemctl restart awg-bot
+```
+
+**Обновить TMA-сервер:**
+```bash
+BRANCH=claude/review-repo-errors-MNIC4
+curl -s "https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/${BRANCH}/tma_server.py" -o /root/tma_server.py
+systemctl restart awg-tma 2>/dev/null || true
+```
+
+**Проверить что бот запустился:**
+```bash
+systemctl status awg-bot
+journalctl -u awg-bot -n 30 --no-pager
+```
+
+> После проверки — смержить в `main` и переключить установки обратно на основную ветку.
 
 </details>
 
