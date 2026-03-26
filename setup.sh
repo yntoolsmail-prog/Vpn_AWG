@@ -23,13 +23,13 @@ REPO_NAME="Vpn_AWG"
 AWG_DIR="/etc/amnezia/amneziawg"
 
 # ── Выбор ветки репозитория ───────────────────────────────────────────────────
-# При update/tma: берём сохранённую ветку из server.env (молча).
-# При свежей установке: получаем список веток через API и даём выбор.
+# При --tma: берём сохранённую ветку молча (переключение ветки там не нужно).
+# При установке и --update: показываем меню; дефолт — текущая ветка если есть.
 REPO_BRANCH="main"
+_saved_branch=$(grep "^REPO_BRANCH=" "${AWG_DIR}/server.env" 2>/dev/null | cut -d= -f2)
 
-if [[ "${1}" == "--update" || "${1}" == "--tma" ]]; then
-    _saved=$(grep "^REPO_BRANCH=" "${AWG_DIR}/server.env" 2>/dev/null | cut -d= -f2)
-    [[ -n "$_saved" ]] && REPO_BRANCH="$_saved"
+if [[ "${1}" == "--tma" ]]; then
+    [[ -n "$_saved_branch" ]] && REPO_BRANCH="$_saved_branch"
 else
     _api=$(curl -fsSL --max-time 8 \
         "https://api.github.com/repos/${REPO_ORG}/${REPO_NAME}/branches" 2>/dev/null)
@@ -38,27 +38,43 @@ else
         [[ -n "$_b" ]] && _branches+=("$_b")
     done < <(printf '%s' "$_api" | grep '"name"' | sed 's/.*"name": "\(.*\)".*/\1/')
 
+    # Текущая ветка (для подсказки дефолта при --update)
+    _current="${_saved_branch:-main}"
+
     if [[ ${#_branches[@]} -gt 1 ]]; then
-        echo ""
-        echo -e "  ${BOLD}Выберите ветку репозитория:${NC}"
+        # Находим индекс текущей ветки для дефолта
+        _default_idx=1
         for _i in "${!_branches[@]}"; do
-            if [[ "${_branches[$_i]}" == "main" ]]; then
-                echo -e "  ${CYAN}$((_i+1)).${NC} ${_branches[$_i]}  ${GREEN}← стабильная, рекомендуется${NC}"
-            else
-                echo -e "  ${CYAN}$((_i+1)).${NC} ${_branches[$_i]}"
-            fi
+            [[ "${_branches[$_i]}" == "$_current" ]] && _default_idx=$((_i+1))
+        done
+
+        echo ""
+        if [[ "${1}" == "--update" ]]; then
+            echo -e "  ${BOLD}Обновить из ветки:${NC}  (сейчас: ${CYAN}${_current}${NC})"
+        else
+            echo -e "  ${BOLD}Выберите ветку репозитория:${NC}"
+        fi
+        for _i in "${!_branches[@]}"; do
+            _label=""
+            [[ "${_branches[$_i]}" == "main" ]]    && _label="  ${GREEN}← стабильная${NC}"
+            [[ "${_branches[$_i]}" == "$_current" ]] && _label+="  ${CYAN}← текущая${NC}"
+            echo -e "  ${CYAN}$((_i+1)).${NC} ${_branches[$_i]}${_label}"
         done
         echo ""
-        read -p "  Выбор [1]: " _CHOICE
-        _CHOICE="${_CHOICE:-1}"
+        read -p "  Выбор [${_default_idx}]: " _CHOICE
+        _CHOICE="${_CHOICE:-${_default_idx}}"
         if [[ "$_CHOICE" =~ ^[0-9]+$ ]] && (( _CHOICE >= 1 && _CHOICE <= ${#_branches[@]} )); then
             REPO_BRANCH="${_branches[$((_CHOICE-1))]}"
+        else
+            REPO_BRANCH="$_current"
         fi
-        [[ "$REPO_BRANCH" != "main" ]] && warn "Установка из ветки: ${REPO_BRANCH}"
+        [[ "$REPO_BRANCH" != "main" ]] && warn "Используется ветка: ${REPO_BRANCH}"
     elif [[ ${#_branches[@]} -eq 1 ]]; then
         REPO_BRANCH="${_branches[0]}"
+    else
+        # API недоступен — берём сохранённую или main
+        REPO_BRANCH="$_current"
     fi
-    # Если API недоступен — молча остаёмся на main
 fi
 
 REPO_RAW="https://raw.githubusercontent.com/${REPO_ORG}/${REPO_NAME}/${REPO_BRANCH}"
@@ -377,13 +393,20 @@ if [[ "${1}" == "--update" ]]; then
         FAILED=$((FAILED+1))
     fi
 
+    # Сохраняем выбранную ветку в server.env
+    if grep -q "^REPO_BRANCH=" "${AWG_DIR}/server.env" 2>/dev/null; then
+        sed -i "s|^REPO_BRANCH=.*|REPO_BRANCH=${REPO_BRANCH}|" "${AWG_DIR}/server.env"
+    else
+        printf "REPO_BRANCH=%s\n" "$REPO_BRANCH" >> "${AWG_DIR}/server.env"
+    fi
+
     echo ""
     log "Перезапускаю сервисы..."
     systemctl restart awg-bot 2>/dev/null && ok "awg-bot перезапущен" || warn "awg-bot не запущен"
     systemctl is-active --quiet awg-tma 2>/dev/null && systemctl restart awg-tma && ok "awg-tma перезапущен" || true
 
     echo ""
-    echo -e "  ${GREEN}${BOLD}✓ Обновление завершено${NC}  (обновлено: ${UPDATED}, ошибок: ${FAILED})"
+    echo -e "  ${GREEN}${BOLD}✓ Обновление завершено${NC}  (обновлено: ${UPDATED}, ошибок: ${FAILED}, ветка: ${REPO_BRANCH})"
     echo ""
     exit 0
 fi
