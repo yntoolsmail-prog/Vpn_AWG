@@ -518,6 +518,18 @@
 
   /* ── Spinner ── */
   .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--border-hi); border-top-color: var(--green); border-radius: 50%; animation: spin .7s linear infinite; vertical-align: middle; margin-right: 6px; }
+
+  /* ── Pending block ── */
+  .pending-block { background: var(--amber-dim); border: 1px solid var(--amber); border-radius: 12px; padding: 12px 14px; margin-bottom: 8px; }
+  .pending-head  { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--amber); margin-bottom: 10px; }
+  .pending-row   { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #ffc04022; gap: 8px; }
+  .pending-row:last-child { border-bottom: none; padding-bottom: 0; }
+  .pending-name  { font-size: 14px; font-weight: 500; }
+  .pending-meta  { font-size: 11px; color: var(--text-dim); margin-top: 1px; }
+  .pending-btns  { display: flex; gap: 6px; flex-shrink: 0; }
+
+  /* ── User avatar ── */
+  .u-avatar { width: 36px; height: 36px; border-radius: 50%; background: var(--surface2); border: 1px solid var(--border-hi); display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 700; color: var(--text-mid); flex-shrink: 0; }
 </style>
 </head>
 <body>
@@ -659,6 +671,19 @@
     <div style="text-align:center;font-size:11px;color:var(--text-dim);margin-bottom:4px">Отсканируйте в приложении AmneziaVPN</div>
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeModal('modal-qr')">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ МОДАЛКА: Детали пользователя (admin) ══ -->
+<div class="modal-overlay hidden" id="modal-user" onclick="closeModal('modal-user')">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-handle"></div>
+    <div class="modal-title" id="modal-user-title"></div>
+    <div id="modal-user-body"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('modal-user')">Закрыть</button>
+      <button class="btn btn-red" id="btn-user-del">🗑 Удалить</button>
     </div>
   </div>
 </div>
@@ -935,8 +960,139 @@ function toggleSite(el) {
   el.classList.toggle('on');
 }
 
-// ─── STUBS (реализуются в этапах 4–5) ────────────────────────────────────────
-async function loadUsers()    { /* этап 4 */ }
+// ─── ПОЛЬЗОВАТЕЛИ (admin) ────────────────────────────────────────────────────
+async function loadUsers() {
+  const el = document.getElementById('users-content');
+  el.innerHTML = '<div class="placeholder"><span class="spinner"></span>Загрузка...</div>';
+  try {
+    const [rPending, rApproved] = await Promise.all([
+      API('/api/users/pending'),
+      API('/api/users'),
+    ]);
+    const pending  = rPending.ok  ? await rPending.json()  : [];
+    const approved = rApproved.ok ? await rApproved.json() : [];
+    renderUsers(pending, approved);
+  } catch(e) {
+    el.innerHTML = `<div class="error-card">⚠ ${e.message}</div>`;
+  }
+}
+
+function renderUsers(pending, approved) {
+  const el  = document.getElementById('users-content');
+  const sub = document.getElementById('users-subtitle');
+  if (sub) sub.textContent = `${approved.length} активных · ${pending.length} ожидают`;
+  setBadge('nav-users', pending.length);
+
+  let html = '';
+
+  // ── Ожидают одобрения ──
+  if (pending.length) {
+    const rows = pending.map(u => {
+      const ago = _timeAgo(u.requested_at);
+      return `<div class="pending-row">
+        <div>
+          <div class="pending-name">${_esc(u.display || u.name)}</div>
+          <div class="pending-meta">ID ${u.id} · ${ago}</div>
+        </div>
+        <div class="pending-btns">
+          <button class="btn btn-green btn-sm" onclick="approveUser('${u.id}')">✓</button>
+          <button class="btn btn-red   btn-sm" onclick="rejectUser('${u.id}','${_esc(u.name)}')">✕</button>
+        </div>
+      </div>`;
+    }).join('');
+    html += `<div class="pending-block">
+      <div class="pending-head">⏳ Ожидают одобрения · ${pending.length}</div>
+      ${rows}
+    </div>`;
+  }
+
+  // ── Активные пользователи ──
+  if (approved.length) {
+    html += `<div class="section-title">активные · ${approved.length}</div>
+    <div class="row-card">`;
+    html += approved.map(u => `
+      <div class="row" onclick="openUserDetail(${JSON.stringify(u)})">
+        <div class="u-avatar">${(u.display || u.name)[0].toUpperCase()}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:14px;font-weight:500">${_esc(u.display || u.name)}</div>
+          <div style="font-size:11px;color:var(--text-dim);margin-top:2px">
+            ${u.devices} устр. ·
+            <span style="color:var(--blue)">↓${u.download}</span>
+            <span style="color:var(--green)">↑${u.upload}</span>
+          </div>
+        </div>
+        <div style="font-size:18px;color:var(--text-dim)">›</div>
+      </div>`).join('');
+    html += '</div>';
+  }
+
+  if (!pending.length && !approved.length) {
+    html = '<div class="placeholder"><div class="placeholder-icon">👥</div><div>Нет пользователей</div></div>';
+  }
+
+  el.innerHTML = html;
+}
+
+// ── Approve / Reject ──
+async function approveUser(uid) {
+  const resp = await API(`/api/users/pending/${uid}/approve`, { method: 'POST' });
+  if (resp.ok) { _loaded.users = false; loadUsers(); }
+  else { const e = await resp.json(); tg?.showAlert?.('Ошибка: ' + e.error); }
+}
+
+async function rejectUser(uid, name) {
+  const ok = tg?.showConfirm
+    ? await new Promise(r => tg.showConfirm(`Отклонить заявку ${name}?`, r))
+    : confirm(`Отклонить заявку ${name}?`);
+  if (!ok) return;
+  const resp = await API(`/api/users/pending/${uid}/reject`, { method: 'POST' });
+  if (resp.ok) { _loaded.users = false; loadUsers(); }
+  else { const e = await resp.json(); tg?.showAlert?.('Ошибка: ' + e.error); }
+}
+
+// ── Детали пользователя ──
+function openUserDetail(u) {
+  const display = u.display || u.name;
+  document.getElementById('modal-user-title').textContent = display;
+  document.getElementById('modal-user-body').innerHTML = `
+    <div class="info-row"><span class="info-label">Telegram ID</span><span>${u.id}</span></div>
+    <div class="info-row"><span class="info-label">Логин</span><span>${_esc(u.name)}</span></div>
+    <div class="info-row"><span class="info-label">Устройств</span><span>${u.devices}</span></div>
+    <div class="info-row"><span class="info-label">Скачал</span><span style="color:var(--blue)">${u.download}</span></div>
+    <div class="info-row" style="margin-bottom:4px"><span class="info-label">Отдал</span><span style="color:var(--green)">${u.upload}</span></div>`;
+  document.getElementById('btn-user-del').onclick = () => deleteUser(u.id, display);
+  openModal('modal-user');
+}
+
+async function deleteUser(uid, display) {
+  const ok = tg?.showConfirm
+    ? await new Promise(r => tg.showConfirm(`Удалить ${display} и все его устройства?`, r))
+    : confirm(`Удалить ${display} и все устройства?`);
+  if (!ok) return;
+  const resp = await API(`/api/users/${uid}`, { method: 'DELETE' });
+  if (resp.ok) {
+    closeModal('modal-user');
+    _loaded.users = false;
+    loadUsers();
+    tg?.showAlert?.(`${display} удалён`);
+  } else {
+    const e = await resp.json();
+    tg?.showAlert?.('Ошибка: ' + e.error) || alert('Ошибка: ' + e.error);
+  }
+}
+
+// ── Утилиты ──
+function _esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function _timeAgo(ts) {
+  if (!ts) return '—';
+  const d = Math.floor((Date.now()/1000 - ts));
+  if (d < 60)   return d + 'с назад';
+  if (d < 3600) return Math.floor(d/60) + ' мин назад';
+  if (d < 86400) return Math.floor(d/3600) + ' ч назад';
+  return Math.floor(d/86400) + ' д назад';
+}
+
+// ─── НАСТРОЙКИ: stub (этап 5) ─────────────────────────────────────────────────
 async function loadSettings() { /* этап 5 */ }
 
 
