@@ -28,7 +28,7 @@ from awg_core import (
     create_backup, create_client, fmt_bytes,
     get_all_clients, get_awg_dump, get_client_keys, get_client_pub,
     get_maintenance, get_system_stats, get_user_clients, get_user_name,
-    is_approved, load_users, make_wg_conf, remove_client_from_awg,
+    is_approved, load_users, make_vpn_link, make_wg_conf, remove_client_from_awg,
     save_users, set_maintenance,
 )
 from sites_data import CATEGORIES, DEFAULT_SELECTED, SITES
@@ -216,34 +216,30 @@ def list_all_devices(user_id):
 @app.route("/api/devices", methods=["POST"])
 @require_auth
 def create_device(user_id):
-    """Создать новое устройство."""
-    body      = request.get_json(silent=True) or {}
-    dev_name  = (body.get("name") or "").strip()
-    selected  = set(body.get("sites", [])) | DEFAULT_SELECTED
-    endpoint  = body.get("endpoint") or SERVER_ENDPOINT
+    """Создать новое устройство (чистый конфиг, без исключений)."""
+    body     = request.get_json(silent=True) or {}
+    dev_name = (body.get("name") or "").strip()
+    endpoint = body.get("endpoint") or SERVER_ENDPOINT
 
     if not dev_name or not re.match(r"^[A-Za-z0-9_-]+$", dev_name):
         return jsonify({"error": "Некорректное имя устройства"}), 400
 
-    username    = get_user_name(user_id)
-    full_name   = f"{username}.{dev_name}"
+    username  = get_user_name(user_id)
+    full_name = f"{username}.{dev_name}"
 
-    # Проверить — не занято ли имя
     if os.path.exists(f"{CLIENTS_DIR}/{full_name}.conf"):
         return jsonify({"error": "Устройство с таким именем уже существует"}), 409
 
-    # Создаём клиента (async)
     async def _create():
         lock = asyncio.Lock()
         return await create_client(full_name, lock)
 
     try:
-        keys        = _run_async(_create())
-        allowed_ips = build_allowed_ips(selected)
-        # Перезаписываем .conf с нужным эндпоинтом и AllowedIPs
+        keys = _run_async(_create())
+        # Чистый конфиг: AllowedIPs = 0.0.0.0/0, без исключений
         conf_text = make_wg_conf(
             keys["priv"], keys["ip"], keys["psk"], keys["obfs"],
-            endpoint=endpoint, allowed_ips=allowed_ips,
+            endpoint=endpoint, allowed_ips="0.0.0.0/0",
         )
         with open(f"{CLIENTS_DIR}/{full_name}.conf", "w") as f:
             f.write(conf_text)
@@ -287,6 +283,18 @@ def device_config(user_id, name):
     )
 
 
+@app.route("/api/endpoints")
+@require_auth
+def api_endpoints(user_id):
+    """Список доступных эндпоинтов для выбора при создании устройства."""
+    eps = [{"key": "main", "label": f"Домен · {SERVER_ENDPOINT}", "value": SERVER_ENDPOINT}]
+    if SERVER_IP and SERVER_IP != SERVER_ENDPOINT:
+        eps.append({"key": "ip", "label": f"IP · {SERVER_IP}", "value": SERVER_IP})
+    if SERVER_ENDPOINT_BACKUP:
+        eps.append({"key": "backup", "label": f"Резервный · {SERVER_ENDPOINT_BACKUP}", "value": SERVER_ENDPOINT_BACKUP})
+    return jsonify(eps)
+
+
 @app.route("/api/devices/<path:name>/qr")
 @require_auth
 def device_qr(user_id, name):
@@ -306,6 +314,28 @@ def device_qr(user_id, name):
         return jsonify({"qr": f"data:image/png;base64,{b64}"})
     except Exception as e:
         return jsonify({"error": f"qrencode: {e}"}), 500
+
+
+@app.route("/api/devices/<path:name>/vpnlink")
+@require_auth
+def device_vpnlink(user_id, name):
+    """Ссылка vpn:// для приложения AmneziaVPN."""
+    username = get_user_name(user_id)
+    if user_id != ADMIN_ID and not name.startswith(username + "."):
+        return jsonify({"error": "Нет доступа"}), 403
+    keys = get_client_keys(name)
+    if not keys:
+        return jsonify({"error": "Не найдено"}), 404
+    conf_text = _get_conf_text(name)
+    endpoint  = _endpoint_for(conf_text) if conf_text else SERVER_ENDPOINT
+    try:
+        link = make_vpn_link(
+            keys["priv"], keys["pub"], keys["ip"], keys["psk"], keys["obfs"],
+            name=name, endpoint=endpoint,
+        )
+        return jsonify({"link": link})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/devices/<path:name>/sites", methods=["GET"])
@@ -335,15 +365,16 @@ def device_sites_put(user_id, name):
     if user_id != ADMIN_ID and not name.startswith(username + "."):
         return jsonify({"error": "Нет доступа"}), 403
 
-    body     = request.get_json(silent=True) or {}
-    selected = set(body.get("sites", [])) | DEFAULT_SELECTED
-    keys     = get_client_keys(name)
+    body           = request.get_json(silent=True) or {}
+    selected       = set(body.get("sites", [])) | DEFAULT_SELECTED
+    custom_domains = body.get("custom_domains", [])
+    keys           = get_client_keys(name)
     if not keys:
         return jsonify({"error": "Устройство не найдено"}), 404
 
     conf_text   = _get_conf_text(name)
     endpoint    = _endpoint_for(conf_text) if conf_text else SERVER_ENDPOINT
-    allowed_ips = build_allowed_ips(selected)
+    allowed_ips = build_allowed_ips(selected, extra_domains=custom_domains)
     new_conf    = make_wg_conf(
         keys["priv"], keys["ip"], keys["psk"], keys["obfs"],
         endpoint=endpoint, allowed_ips=allowed_ips,

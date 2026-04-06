@@ -653,10 +653,11 @@
     <div class="modal-actions">
       <button class="btn btn-ghost" id="btn-conf">⬇ .conf</button>
       <button class="btn btn-ghost" id="btn-qr">📱 QR</button>
-      <button class="btn btn-ghost" id="btn-sites">🔧 Сайты</button>
+      <button class="btn btn-ghost" id="btn-vpnlink">🔗 AmneziaVPN</button>
     </div>
     <div class="modal-actions">
-      <button class="btn btn-red" id="btn-del">🗑 Удалить устройство</button>
+      <button class="btn btn-ghost" id="btn-sites">🔧 Исключения</button>
+      <button class="btn btn-red" id="btn-del">🗑 Удалить</button>
     </div>
   </div>
 </div>
@@ -672,12 +673,43 @@
              oninput="this.value=this.value.replace(/[^A-Za-z0-9_-]/g,'')">
     </div>
     <div class="field">
-      <div class="field-label">Исключить из VPN</div>
-      <div id="new-dev-sites"></div>
+      <div class="field-label" style="display:flex;align-items:center;gap:6px">
+        Тип подключения
+        <span style="cursor:pointer;font-size:15px;line-height:1;color:var(--text-dim)"
+              onclick="openModal('modal-endpoint-help')" title="Что это?">ℹ️</span>
+      </div>
+      <div id="new-dev-endpoints" style="display:flex;flex-direction:column;gap:6px;margin-top:6px">
+        <div style="color:var(--text-dim);font-size:12px"><span class="spinner"></span> Загрузка…</div>
+      </div>
     </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeModal('modal-create')">Отмена</button>
       <button class="btn btn-green" id="btn-create-submit" onclick="submitCreateDevice()">Создать</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ МОДАЛКА: Справка по типу подключения ══ -->
+<div class="modal-overlay hidden" id="modal-endpoint-help" onclick="closeModal('modal-endpoint-help')">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-handle"></div>
+    <div class="modal-title">Тип подключения</div>
+    <div style="font-size:13px;color:var(--text-mid);line-height:1.7;margin-bottom:16px">
+      <p style="margin-bottom:10px">
+        <strong style="color:var(--green)">Домен</strong> — подключение через доменное имя сервера.
+        Работает в большинстве случаев. Если домен заблокирован у провайдера — VPN может не соединиться.
+      </p>
+      <p style="margin-bottom:10px">
+        <strong style="color:var(--blue)">IP-адрес</strong> — прямое подключение по IP без DNS.
+        Устойчивее к блокировкам по домену, но сам IP тоже может быть заблокирован.
+      </p>
+      <p>
+        <strong style="color:var(--amber)">Резервный</strong> — альтернативный адрес.
+        Используйте если основной не работает.
+      </p>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('modal-endpoint-help')">Понятно</button>
     </div>
   </div>
 </div>
@@ -716,6 +748,23 @@
     <input type="hidden" id="sites-modal-name">
     <div class="field-label" style="margin-bottom:8px">Сайты вне VPN (работают напрямую)</div>
     <div id="edit-sites-list"></div>
+    <!-- Добавить свой сайт -->
+    <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">
+      <div class="field-label" style="margin-bottom:6px">Свой сайт или IP</div>
+      <div style="display:flex;gap:6px">
+        <input id="custom-domain-input" type="text"
+               placeholder="example.com или 1.2.3.4/24"
+               style="flex:1;background:var(--surface2);border:1px solid var(--border-hi);
+                      color:var(--text);font-family:inherit;font-size:13px;
+                      padding:9px 11px;border-radius:8px;outline:none;
+                      transition:border-color .15s"
+               onfocus="this.style.borderColor='var(--green)'"
+               onblur="this.style.borderColor='var(--border-hi)'"
+               onkeydown="if(event.key==='Enter')addCustomDomain()">
+        <button class="btn btn-green" onclick="addCustomDomain()" style="padding:9px 14px">+</button>
+      </div>
+      <div id="custom-domains-list" style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px"></div>
+    </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeModal('modal-sites')">Отмена</button>
       <button class="btn btn-green" id="btn-sites-submit" onclick="submitSites()">Сохранить</button>
@@ -844,23 +893,54 @@ function openDeviceDetail(d) {
       <span><span style="color:var(--blue)">↓${d.client_download}</span>
             &nbsp;<span style="color:var(--green)">↑${d.client_upload}</span></span></div>`;
 
-  document.getElementById('btn-conf').onclick  = () => downloadConf(d.name);
-  document.getElementById('btn-qr').onclick    = () => showQR(d.name);
-  document.getElementById('btn-sites').onclick = () => openSitesModal(d.name);
-  document.getElementById('btn-del').onclick   = () => deleteDevice(d.name, devName);
+  document.getElementById('btn-conf').onclick    = () => downloadConf(d.name);
+  document.getElementById('btn-qr').onclick      = () => showQR(d.name);
+  document.getElementById('btn-vpnlink').onclick = () => showVpnLink(d.name);
+  document.getElementById('btn-sites').onclick   = () => openSitesModal(d.name);
+  document.getElementById('btn-del').onclick     = () => deleteDevice(d.name, devName);
   openModal('modal-device');
 }
 
 // ── Скачать .conf ──
 async function downloadConf(name) {
-  const resp = await API(`/api/devices/${encodeURIComponent(name)}/config`);
-  if (!resp.ok) { tg?.showAlert?.('Ошибка скачивания') || alert('Ошибка'); return; }
-  const text    = await resp.text();
-  const devName = name.includes('.') ? name.split('.').slice(1).join('.') : name;
-  const a = document.createElement('a');
-  a.href = 'data:text/plain,' + encodeURIComponent(text);
-  a.download = devName + '.conf';
-  a.click();
+  try {
+    const resp = await API(`/api/devices/${encodeURIComponent(name)}/config`);
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const text    = await resp.text();
+    const devName = name.includes('.') ? name.split('.').slice(1).join('.') : name;
+    const blob = new Blob([text], { type: 'text/plain' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = devName + '.conf';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  } catch(e) {
+    tg?.showAlert?.('Ошибка скачивания: ' + e.message) || alert('Ошибка: ' + e.message);
+  }
+}
+
+// ── AmneziaVPN ссылка ──
+async function showVpnLink(name) {
+  closeModal('modal-device');
+  try {
+    const resp = await API(`/api/devices/${encodeURIComponent(name)}/vpnlink`);
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || 'Ошибка');
+    // Копируем ссылку в буфер обмена
+    if (navigator.clipboard) {
+      await navigator.clipboard.writeText(data.link);
+      tg?.showAlert?.('Ссылка скопирована!\nОткройте AmneziaVPN и выберите «Добавить по ссылке»');
+    } else {
+      // Fallback — показываем ссылку
+      tg?.showAlert?.('Ссылка AmneziaVPN:\n' + data.link.slice(0, 80) + '…') ||
+        prompt('Скопируйте ссылку:', data.link);
+    }
+  } catch(e) {
+    tg?.showAlert?.('Ошибка: ' + e.message) || alert('Ошибка: ' + e.message);
+  }
 }
 
 // ── QR код ──
@@ -896,13 +976,41 @@ async function deleteDevice(name, displayName) {
 }
 
 // ── Создать устройство ──
+let _endpoints = null;
+
 async function openCreateDevice() {
-  if (!_sites) {
-    try { const r = await API('/api/sites'); _sites = await r.json(); } catch(e) { _sites = []; }
-  }
   document.getElementById('new-dev-name').value = '';
-  document.getElementById('new-dev-sites').innerHTML = renderSitesGrid(_sites, true);
   openModal('modal-create');
+
+  // Загружаем эндпоинты
+  if (!_endpoints) {
+    try { const r = await API('/api/endpoints'); _endpoints = await r.json(); } catch(e) { _endpoints = []; }
+  }
+  renderEndpointSelector(_endpoints);
+}
+
+function renderEndpointSelector(eps) {
+  const el = document.getElementById('new-dev-endpoints');
+  if (!eps || !eps.length) {
+    el.innerHTML = '<div style="color:var(--text-dim);font-size:12px">Нет доступных эндпоинтов</div>';
+    return;
+  }
+  el.innerHTML = eps.map((ep, i) => `
+    <label style="display:flex;align-items:center;gap:10px;padding:9px 12px;
+                  background:var(--surface2);border:1px solid ${i===0?'var(--green)':'var(--border)'};
+                  border-radius:8px;cursor:pointer;transition:border-color .15s"
+           onclick="selectEndpoint(this)">
+      <input type="radio" name="endpoint" value="${_esc(ep.value)}"
+             style="accent-color:var(--green)" ${i===0?'checked':''}>
+      <span style="font-size:13px">${_esc(ep.label)}</span>
+    </label>`).join('');
+}
+
+function selectEndpoint(labelEl) {
+  document.querySelectorAll('#new-dev-endpoints label').forEach(l => {
+    l.style.borderColor = 'var(--border)';
+  });
+  labelEl.style.borderColor = 'var(--green)';
 }
 
 async function submitCreateDevice() {
@@ -910,13 +1018,18 @@ async function submitCreateDevice() {
   const name = nameInput.value.trim();
   if (!name) { nameInput.focus(); return; }
 
-  const selected = [...document.querySelectorAll('#new-dev-sites .site-item.on')].map(e => e.dataset.key);
+  const endpointEl = document.querySelector('#new-dev-endpoints input[name="endpoint"]:checked');
+  const endpoint   = endpointEl ? endpointEl.value : '';
+
   const btn = document.getElementById('btn-create-submit');
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span>Создание…';
 
   try {
-    const resp = await API('/api/devices', { method: 'POST', body: JSON.stringify({ name, sites: selected }) });
+    const resp = await API('/api/devices', {
+      method: 'POST',
+      body: JSON.stringify({ name, endpoint }),
+    });
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || 'Ошибка');
     closeModal('modal-create');
@@ -931,16 +1044,52 @@ async function submitCreateDevice() {
 }
 
 // ── Сайты: редактирование ──
+let _customDomains = [];
+
 async function openSitesModal(name) {
   closeModal('modal-device');
   if (!_sites) {
     try { const r = await API('/api/sites'); _sites = await r.json(); } catch(e) { _sites = []; }
   }
   const devName = name.includes('.') ? name.split('.').slice(1).join('.') : name;
-  document.getElementById('sites-modal-title').textContent = devName + ' · сайты';
+  document.getElementById('sites-modal-title').textContent = devName + ' · исключения';
   document.getElementById('sites-modal-name').value = name;
-  document.getElementById('edit-sites-list').innerHTML = renderSitesGrid(_sites, true);
+  // Сайты по умолчанию все OFF (кроме locked)
+  document.getElementById('edit-sites-list').innerHTML = renderSitesGrid(_sites, false);
+  // Сброс кастомных доменов
+  _customDomains = [];
+  document.getElementById('custom-domain-input').value = '';
+  renderCustomDomains();
   openModal('modal-sites');
+}
+
+function addCustomDomain() {
+  const inp = document.getElementById('custom-domain-input');
+  const val = inp.value.trim();
+  if (!val) return;
+  if (!_customDomains.includes(val)) {
+    _customDomains.push(val);
+    renderCustomDomains();
+  }
+  inp.value = '';
+  inp.focus();
+}
+
+function removeCustomDomain(idx) {
+  _customDomains.splice(idx, 1);
+  renderCustomDomains();
+}
+
+function renderCustomDomains() {
+  const el = document.getElementById('custom-domains-list');
+  if (!_customDomains.length) { el.innerHTML = ''; return; }
+  el.innerHTML = _customDomains.map((d, i) => `
+    <span style="display:inline-flex;align-items:center;gap:4px;padding:4px 8px;
+                 background:var(--green-dim);border:1px solid var(--green);
+                 border-radius:6px;font-size:11px;color:var(--green)">
+      ${_esc(d)}
+      <span style="cursor:pointer;opacity:.7;margin-left:2px" onclick="removeCustomDomain(${i})">✕</span>
+    </span>`).join('');
 }
 
 async function submitSites() {
@@ -951,7 +1100,8 @@ async function submitSites() {
   btn.innerHTML  = '<span class="spinner"></span>Сохранение…';
   try {
     const resp = await API(`/api/devices/${encodeURIComponent(name)}/sites`, {
-      method: 'PUT', body: JSON.stringify({ sites: selected }),
+      method: 'PUT',
+      body: JSON.stringify({ sites: selected, custom_domains: _customDomains }),
     });
     if (!resp.ok) { const e = await resp.json(); throw new Error(e.error); }
     closeModal('modal-sites');
@@ -969,10 +1119,10 @@ function renderSitesGrid(sitesData, defaultOn) {
     <div class="cat-label">${cat.category}</div>
     <div class="sites-grid">
       ${cat.sites.map(s => `
-        <div class="site-item ${defaultOn || s.locked ? 'on' : ''} ${s.locked ? 'locked' : ''}"
+        <div class="site-item ${(defaultOn && !s.locked) || s.locked ? 'on' : ''} ${s.locked ? 'locked' : ''}"
              data-key="${s.key}" onclick="toggleSite(this)">
           <div class="site-cb"></div>
-          <span>${s.emoji} ${s.name}</span>
+          <span>${s.emoji} ${_esc(s.name)}</span>
         </div>`).join('')}
     </div>`).join('');
 }
@@ -1265,10 +1415,13 @@ async function addAuthHeader(evt, encName) {
 
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
-function fmtHandshake(sec) {
-  if (!sec) return { text: "никогда", cls: "" };
-  if (sec < 180)   return { text: sec + "с", cls: "online" };
-  if (sec < 600)   return { text: Math.round(sec/60) + " мин", cls: "recent" };
+function fmtHandshake(tsUnix) {
+  // tsUnix — Unix timestamp последнего хэндшейка (секунды с эпохи)
+  if (!tsUnix) return { text: "никогда", cls: "" };
+  const sec = Math.floor(Date.now() / 1000) - tsUnix;
+  if (sec < 0)     return { text: "только что", cls: "online" };
+  if (sec < 180)   return { text: sec + "с назад", cls: "online" };
+  if (sec < 600)   return { text: Math.round(sec/60) + " мин назад", cls: "recent" };
   if (sec < 3600)  return { text: Math.round(sec/60) + " мин", cls: "" };
   if (sec < 86400) return { text: Math.round(sec/3600) + " ч", cls: "" };
   return { text: Math.round(sec/86400) + " д", cls: "" };
