@@ -800,27 +800,29 @@ function renderDeviceList(devices) {
   const online = devices.filter(d => d.online).length;
   if (sub) sub.textContent = `${devices.length} устр. · ${online} онлайн`;
 
+  // Сохраняем в глобал чтобы не передавать через onclick атрибут
+  window._devicesList = devices;
+
   if (!devices.length) {
     el.innerHTML = '<div class="placeholder"><div class="placeholder-icon">📱</div><div>Нет устройств<br><span style="font-size:11px">Нажмите + чтобы добавить</span></div></div>';
     return;
   }
 
-  const rows = devices.map(d => {
+  const rows = devices.map((d, i) => {
     const hs      = fmtHandshake(d.handshake);
     const dotClr  = d.online ? 'var(--green)' : hs.cls === 'recent' ? 'var(--amber)' : 'var(--text-dim)';
     const devName = d.name.includes('.') ? d.name.split('.').slice(1).join('.') : d.name;
-    const enc     = encodeURIComponent(JSON.stringify(d));
-    return `<div class="row" onclick='openDeviceDetail(${JSON.stringify(d)})'>
+    return `<div class="row" onclick="openDeviceDetail(window._devicesList[${i}])">
       <div style="flex:1;min-width:0">
         <div style="font-size:14px;font-weight:500">
-          <span style="color:${dotClr}">●</span> ${devName}
+          <span style="color:${dotClr}">●</span> ${_esc(devName)}
         </div>
         <div style="font-size:11px;color:var(--text-dim);margin-top:2px">
-          <span style="color:var(--blue)">↓${d.client_download}</span>
-          &nbsp;<span style="color:var(--green)">↑${d.client_upload}</span>
+          <span style="color:var(--blue)">↓${_esc(d.client_download)}</span>
+          &nbsp;<span style="color:var(--green)">↑${_esc(d.client_upload)}</span>
         </div>
       </div>
-      <div style="text-align:right;flex-shrink:0;font-size:12px;color:${dotClr}">${hs.text}</div>
+      <div style="text-align:right;flex-shrink:0;font-size:12px;color:${dotClr}">${_esc(hs.text)}</div>
     </div>`;
   }).join('');
 
@@ -1028,17 +1030,18 @@ function renderUsers(pending, approved) {
 
   // ── Активные пользователи ──
   if (approved.length) {
+    window._usersList = approved;
     html += `<div class="section-title">активные · ${approved.length}</div>
     <div class="row-card">`;
-    html += approved.map(u => `
-      <div class="row" onclick="openUserDetail(${JSON.stringify(u)})">
-        <div class="u-avatar">${(u.display || u.name)[0].toUpperCase()}</div>
+    html += approved.map((u, i) => `
+      <div class="row" onclick="openUserDetail(window._usersList[${i}])">
+        <div class="u-avatar">${_esc((u.display || u.name)[0].toUpperCase())}</div>
         <div style="flex:1;min-width:0">
           <div style="font-size:14px;font-weight:500">${_esc(u.display || u.name)}</div>
           <div style="font-size:11px;color:var(--text-dim);margin-top:2px">
             ${u.devices} устр. ·
-            <span style="color:var(--blue)">↓${u.download}</span>
-            <span style="color:var(--green)">↑${u.upload}</span>
+            <span style="color:var(--blue)">↓${_esc(u.download)}</span>
+            <span style="color:var(--green)">↑${_esc(u.upload)}</span>
           </div>
         </div>
         <div style="font-size:18px;color:var(--text-dim)">›</div>
