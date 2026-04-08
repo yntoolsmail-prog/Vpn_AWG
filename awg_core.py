@@ -5,7 +5,7 @@
 # Version: 1.0
 
 import os, subprocess, logging, json, zlib, base64, struct, time
-import tarfile, socket, ipaddress
+import tarfile, socket, ipaddress, threading
 
 from sites_data import SITES, CATEGORIES, DEFAULT_SELECTED, ALL_SELECTABLE
 
@@ -20,6 +20,10 @@ BW_LOG_FILE      = "/var/log/awg-bw.log"
 BW_PEAK_FILE     = "/etc/amnezia/amneziawg/bw_peak.json"
 
 logger = logging.getLogger(__name__)
+
+# Глобальный lock для create_client — защита от гонки при одновременном создании.
+# threading.Lock работает и в sync (Flask/threaded) и в async (bot.py) контексте.
+_AWG_LOCK = threading.Lock()
 
 # ── Загрузка конфигов ──────────────────────────────────────────────────────────
 def load_env(path: str) -> dict:
@@ -273,6 +277,31 @@ def make_vpn_link(priv, pub, ip, psk, obfs, name, endpoint: str = None) -> str:
     p = struct.pack(">I", len(b)) + zlib.compress(b)
     return "vpn://" + base64.urlsafe_b64encode(p).decode().rstrip("=")
 
+def _remove_peer_from_conf(name: str):
+    """Удаляет блок # Client: name … [Peer] … из awg0.conf.
+    Останавливает скип на следующем '# Client:' или на секции не-[Peer]."""
+    try:
+        with open(AWG_CONF, encoding="utf-8", errors="replace") as f:
+            lines = f.read().split("\n")
+    except FileNotFoundError:
+        return
+    new_lines, skip = [], False
+    for line in lines:
+        stripped = line.strip()
+        if stripped == f"# Client: {name}":
+            skip = True
+        elif skip and (
+            stripped.startswith("# Client:")
+            or (stripped.startswith("[") and stripped != "[Peer]")
+        ):
+            skip = False
+            new_lines.append(line)
+        elif not skip:
+            new_lines.append(line)
+    with open(AWG_CONF, "w") as f:
+        f.write("\n".join(new_lines))
+
+
 def remove_client_from_awg(name: str):
     conf_path = f"{CLIENTS_DIR}/{name}.conf"
     if not os.path.exists(conf_path):
@@ -280,28 +309,16 @@ def remove_client_from_awg(name: str):
     pub = get_client_pub(name)
     if pub:
         subprocess.run(["awg", "set", AWG_IFACE, "peer", pub, "remove"])
-    with open(AWG_CONF, encoding="utf-8", errors="replace") as f:
-        lines = f.read().split("\n")
-    new_lines, skip = [], False
-    for line in lines:
-        if line.strip() == f"# Client: {name}":
-            skip = True
-        elif skip and line.strip().startswith("[") and line.strip() != "[Peer]":
-            skip = False
-            new_lines.append(line)
-        elif not skip:
-            new_lines.append(line)
-    with open(AWG_CONF, "w") as f:
-        f.write("\n".join(new_lines))
+    _remove_peer_from_conf(name)
     for ext in [".conf", ".pub", ".vpn", ".vpnlink"]:
         p = f"{CLIENTS_DIR}/{name}{ext}"
         if os.path.exists(p):
             os.remove(p)
 
-async def create_client(name: str, lock) -> dict:
+async def create_client(name: str) -> dict:
     """Создаёт клиента AWG с верификацией и откатом.
-    lock — asyncio.Lock() передаётся снаружи (из bot.py или tma_server.py)."""
-    async with lock:
+    Использует глобальный _AWG_LOCK для защиты от гонки."""
+    with _AWG_LOCK:
         priv = subprocess.check_output(["awg", "genkey"], text=True).strip()
         pub  = subprocess.check_output(["awg", "pubkey"], input=priv, text=True).strip()
         psk  = subprocess.check_output(["awg", "genpsk"], text=True).strip()
@@ -343,19 +360,7 @@ async def create_client(name: str, lock) -> dict:
             except Exception:
                 pass
             try:
-                with open(AWG_CONF, encoding="utf-8", errors="replace") as f:
-                    lines = f.read().split("\n")
-                new_lines, skip = [], False
-                for line in lines:
-                    if line.strip() == f"# Client: {name}":
-                        skip = True
-                    elif skip and line.strip().startswith("[") and line.strip() != "[Peer]":
-                        skip = False
-                        new_lines.append(line)
-                    elif not skip:
-                        new_lines.append(line)
-                with open(AWG_CONF, "w") as f:
-                    f.write("\n".join(new_lines))
+                _remove_peer_from_conf(name)
             except Exception:
                 pass
             for ext in [".conf", ".pub"]:

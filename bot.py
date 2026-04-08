@@ -37,9 +37,6 @@ if not os.path.exists(CONFIG_FILE):
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# Глобальный lock для create_client — исключает гонку при одновременном создании клиентов
-AWG_LOCK = asyncio.Lock()
-
 # Состояния ConversationHandler
 WAITING_REGISTER_NAME  = 10
 WAITING_DEVICE_NAME    = 11
@@ -2201,7 +2198,7 @@ async def receive_device_name(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     await update.message.reply_text(f"⏳ Создаю профиль *{device_raw}*...", parse_mode="Markdown")
     try:
-        await create_client(full_name, AWG_LOCK)
+        await create_client(full_name)
     except Exception as e:
         logger.error(f"receive_device_name: create_client failed: {e}")
         await update.message.reply_text(

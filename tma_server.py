@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # tma_server.py — HTTP-сервер для TMA (Telegram Mini App)
-# Version: 3.0  —  Flask-based, full CRUD API
+# Version: 3.1  —  Flask-based, full CRUD API
 # Запускается отдельно от bot.py.
 # Вся бизнес-логика — в awg_core.py.
 
@@ -8,12 +8,12 @@ import asyncio
 import base64
 import hashlib
 import hmac
-import io
 import json
 import logging
 import os
 import re
 import subprocess
+import tempfile
 import time
 from functools import wraps
 from urllib.parse import unquote
@@ -153,9 +153,45 @@ def _get_conf_text(name: str) -> str | None:
         return f.read()
 
 
-def _cors(resp):
-    resp.headers["Access-Control-Allow-Origin"] = "*"
-    return resp
+def _make_conf_for_endpoint(name: str, endpoint: str) -> str | None:
+    """Генерирует .conf на лету для заданного эндпоинта."""
+    keys = get_client_keys(name)
+    if not keys:
+        return None
+    return make_wg_conf(
+        keys["priv"], keys["ip"], keys["psk"], keys["obfs"],
+        endpoint=endpoint, allowed_ips="0.0.0.0/0",
+    )
+
+
+def _send_file_via_bot(chat_id: int, filename: str, content: str,
+                       caption: str = "") -> bool:
+    """Отправляет текстовый файл пользователю через Telegram sendDocument."""
+    if not BOT_TOKEN:
+        return False
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".conf",
+                                     delete=False, encoding="utf-8") as tf:
+        tf.write(content)
+        tmp_path = tf.name
+    try:
+        result = subprocess.run(
+            [
+                "curl", "-s", "-X", "POST",
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument",
+                "-F", f"chat_id={chat_id}",
+                "-F", f"caption={caption}",
+                "-F", f"document=@{tmp_path};filename={filename}",
+            ],
+            capture_output=True, timeout=15,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
 
 
 # ── Статика ───────────────────────────────────────────────────────────────────
@@ -173,7 +209,7 @@ def health():
     return jsonify({"ok": True, "ts": int(time.time())})
 
 
-# ── Статистика (совместимость с TMA v1) ──────────────────────────────────────
+# ── Статистика ────────────────────────────────────────────────────────────────
 
 @app.route("/api/stats")
 def api_stats():
@@ -188,6 +224,11 @@ def api_stats():
             return jsonify({"error": "forbidden"}), 403
         data = collect_stats_basic()
         data["is_admin"] = False
+        # Добавляем устройства пользователя в монитор
+        dump  = get_awg_dump()
+        now   = int(time.time())
+        names = get_user_clients(uid)
+        data["peers"] = [_device_info(n, dump, now) for n in names]
     return jsonify(data)
 
 
@@ -216,10 +257,9 @@ def list_all_devices(user_id):
 @app.route("/api/devices", methods=["POST"])
 @require_auth
 def create_device(user_id):
-    """Создать новое устройство (чистый конфиг, без исключений)."""
+    """Создать новое устройство."""
     body     = request.get_json(silent=True) or {}
     dev_name = (body.get("name") or "").strip()
-    endpoint = body.get("endpoint") or SERVER_ENDPOINT
 
     if not dev_name or not re.match(r"^[A-Za-z0-9_-]+$", dev_name):
         return jsonify({"error": "Некорректное имя устройства"}), 400
@@ -230,19 +270,8 @@ def create_device(user_id):
     if os.path.exists(f"{CLIENTS_DIR}/{full_name}.conf"):
         return jsonify({"error": "Устройство с таким именем уже существует"}), 409
 
-    async def _create():
-        lock = asyncio.Lock()
-        return await create_client(full_name, lock)
-
     try:
-        keys = _run_async(_create())
-        # Чистый конфиг: AllowedIPs = 0.0.0.0/0, без исключений
-        conf_text = make_wg_conf(
-            keys["priv"], keys["ip"], keys["psk"], keys["obfs"],
-            endpoint=endpoint, allowed_ips="0.0.0.0/0",
-        )
-        with open(f"{CLIENTS_DIR}/{full_name}.conf", "w") as f:
-            f.write(conf_text)
+        _run_async(create_client(full_name))
         dump = get_awg_dump()
         return jsonify(_device_info(full_name, dump, int(time.time()))), 201
     except Exception as e:
@@ -265,28 +294,10 @@ def delete_device(user_id, name):
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/devices/<path:name>/config")
-@require_auth
-def device_config(user_id, name):
-    """Скачать .conf файл устройства."""
-    username = get_user_name(user_id)
-    if user_id != ADMIN_ID and not name.startswith(username + "."):
-        return jsonify({"error": "Нет доступа"}), 403
-    conf_text = _get_conf_text(name)
-    if conf_text is None:
-        return jsonify({"error": "Не найдено"}), 404
-    dev_part = name.split(".", 1)[1] if "." in name else name
-    return Response(
-        conf_text,
-        mimetype="text/plain",
-        headers={"Content-Disposition": f'attachment; filename="{dev_part}.conf"'},
-    )
-
-
 @app.route("/api/endpoints")
 @require_auth
 def api_endpoints(user_id):
-    """Список доступных эндпоинтов для выбора при создании устройства."""
+    """Список доступных эндпоинтов."""
     eps = [{"key": "main", "label": f"Домен · {SERVER_ENDPOINT}", "value": SERVER_ENDPOINT}]
     if SERVER_IP and SERVER_IP != SERVER_ENDPOINT:
         eps.append({"key": "ip", "label": f"IP · {SERVER_IP}", "value": SERVER_IP})
@@ -298,13 +309,14 @@ def api_endpoints(user_id):
 @app.route("/api/devices/<path:name>/qr")
 @require_auth
 def device_qr(user_id, name):
-    """QR-код (.conf) в виде base64 PNG."""
+    """QR-код в виде base64 PNG. Принимает ?endpoint=X для генерации на лету."""
     username = get_user_name(user_id)
     if user_id != ADMIN_ID and not name.startswith(username + "."):
         return jsonify({"error": "Нет доступа"}), 403
-    conf_text = _get_conf_text(name)
+    endpoint  = request.args.get("endpoint") or SERVER_ENDPOINT
+    conf_text = _make_conf_for_endpoint(name, endpoint)
     if conf_text is None:
-        return jsonify({"error": "Не найдено"}), 404
+        return jsonify({"error": "Устройство не найдено"}), 404
     try:
         png_bytes = subprocess.check_output(
             ["qrencode", "-t", "PNG", "-s", "6", "-o", "-"],
@@ -319,15 +331,14 @@ def device_qr(user_id, name):
 @app.route("/api/devices/<path:name>/vpnlink")
 @require_auth
 def device_vpnlink(user_id, name):
-    """Ссылка vpn:// для приложения AmneziaVPN."""
+    """Ссылка vpn:// для AmneziaVPN. Принимает ?endpoint=X."""
     username = get_user_name(user_id)
     if user_id != ADMIN_ID and not name.startswith(username + "."):
         return jsonify({"error": "Нет доступа"}), 403
-    keys = get_client_keys(name)
+    keys     = get_client_keys(name)
     if not keys:
-        return jsonify({"error": "Не найдено"}), 404
-    conf_text = _get_conf_text(name)
-    endpoint  = _endpoint_for(conf_text) if conf_text else SERVER_ENDPOINT
+        return jsonify({"error": "Устройство не найдено"}), 404
+    endpoint = request.args.get("endpoint") or SERVER_ENDPOINT
     try:
         link = make_vpn_link(
             keys["priv"], keys["pub"], keys["ip"], keys["psk"], keys["obfs"],
@@ -336,6 +347,27 @@ def device_vpnlink(user_id, name):
         return jsonify({"link": link})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/devices/<path:name>/send", methods=["POST"])
+@require_auth
+def device_send(user_id, name):
+    """Отправляет .conf файл в Telegram-чат пользователя через бота."""
+    username = get_user_name(user_id)
+    if user_id != ADMIN_ID and not name.startswith(username + "."):
+        return jsonify({"error": "Нет доступа"}), 403
+    body      = request.get_json(silent=True) or {}
+    endpoint  = body.get("endpoint") or SERVER_ENDPOINT
+    conf_text = _make_conf_for_endpoint(name, endpoint)
+    if conf_text is None:
+        return jsonify({"error": "Устройство не найдено"}), 404
+    dev_part = name.split(".", 1)[1] if "." in name else name
+    filename = f"{dev_part}.conf"
+    caption  = f"📄 {filename}"
+    ok = _send_file_via_bot(user_id, filename, conf_text, caption)
+    if ok:
+        return jsonify({"ok": True})
+    return jsonify({"error": "Ошибка отправки через Telegram"}), 500
 
 
 @app.route("/api/devices/<path:name>/sites", methods=["GET"])
@@ -348,7 +380,6 @@ def device_sites_get(user_id, name):
     conf_text = _get_conf_text(name)
     if conf_text is None:
         return jsonify({"error": "Не найдено"}), 404
-    # Определяем текущий AllowedIPs и считаем какие сайты включены
     m = re.search(r"^AllowedIPs = (.+)$", conf_text, re.MULTILINE)
     current_allowed = m.group(1).strip() if m else "0.0.0.0/0"
     return jsonify({
@@ -387,7 +418,7 @@ def device_sites_put(user_id, name):
         return jsonify({"error": str(e)}), 500
 
 
-# ── Список сайтов для выбора ──────────────────────────────────────────────────
+# ── Список сайтов ─────────────────────────────────────────────────────────────
 
 def _sites_payload() -> list:
     """Возвращает категории со списком сайтов для UI."""
@@ -399,10 +430,10 @@ def _sites_payload() -> list:
             if not s:
                 continue
             sites.append({
-                "key":     k,
-                "name":    s["name"],
-                "emoji":   s.get("emoji", ""),
-                "locked":  k in DEFAULT_SELECTED,
+                "key":    k,
+                "name":   s["name"],
+                "emoji":  s.get("emoji", ""),
+                "locked": k in DEFAULT_SELECTED,
             })
         if sites:
             result.append({"category": cat_label, "sites": sites})
@@ -412,7 +443,6 @@ def _sites_payload() -> list:
 @app.route("/api/sites")
 @require_auth
 def api_sites(user_id):
-    """Список доступных сайтов для выбора при создании / редактировании устройства."""
     return jsonify(_sites_payload())
 
 
@@ -466,7 +496,6 @@ def users_list(user_id):
     for uid, info in approved.items():
         uname   = info.get("name", "")
         clients = [c for c in get_all_clients() if c.startswith(uname + ".")]
-        # суммарный трафик по всем устройствам
         rx_total = tx_total = 0
         for c in clients:
             pub = get_client_pub(c)
@@ -571,6 +600,35 @@ def backup_delete(user_id, filename):
     return jsonify({"ok": True})
 
 
+@app.route("/api/backups/<filename>/send", methods=["POST"])
+@require_admin
+def backup_send(user_id, filename):
+    """Отправляет бэкап в Telegram-чат администратора."""
+    if ".." in filename or "/" in filename:
+        return jsonify({"error": "Недопустимое имя файла"}), 400
+    path = os.path.join(BACKUP_DIR, filename)
+    if not os.path.exists(path):
+        return jsonify({"error": "Файл не найден"}), 404
+    if not BOT_TOKEN:
+        return jsonify({"error": "BOT_TOKEN не настроен"}), 500
+    try:
+        result = subprocess.run(
+            [
+                "curl", "-s", "-X", "POST",
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument",
+                "-F", f"chat_id={user_id}",
+                "-F", f"caption=💾 {filename}",
+                "-F", f"document=@{path};filename={filename}",
+            ],
+            capture_output=True, timeout=30,
+        )
+        if result.returncode == 0:
+            return jsonify({"ok": True})
+        return jsonify({"error": "Ошибка curl"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 # ── Обслуживание (admin) ──────────────────────────────────────────────────────
 
 @app.route("/api/maintenance")
@@ -631,4 +689,4 @@ if __name__ == "__main__":
     print(f"  Admin ID : {ADMIN_ID}")
     print(f"  TMA dir  : {TMA_DIR}")
     print(f"  Endpoints: {len([r for r in app.url_map.iter_rules()])} routes\n")
-    app.run(host=LISTEN_HOST, port=LISTEN_PORT, debug=False, threaded=False)
+    app.run(host=LISTEN_HOST, port=LISTEN_PORT, debug=False, threaded=True)
