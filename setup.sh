@@ -1157,6 +1157,12 @@ else
     err "Не удалось установить python-telegram-bot."
 fi
 
+log "Установка flask (веб-интерфейс TMA)..."
+pip3 install "flask>=3.0" --break-system-packages --ignore-installed blinker > /dev/null 2>&1 || \
+pip3 install "flask>=3.0" --ignore-installed blinker > /dev/null 2>&1 || \
+pip3 install "flask>=3.0" > /dev/null 2>&1 || \
+err "Не удалось установить flask."
+
 # ── Шаг 11.5: Мониторинг трафика и сетевые инструменты ───────────────────────
 log "Установка vnstat (статистика трафика)..."
 apt-get install -y -qq vnstat

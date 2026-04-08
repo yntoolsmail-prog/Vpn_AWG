@@ -369,7 +369,7 @@ async def create_client(name: str, lock) -> dict:
         return {"priv": priv, "pub": pub, "ip": ip, "psk": psk, "obfs": obfs}
 
 # ── Split tunneling ─────────────────────────────────────────────────────────────
-def build_allowed_ips(selected_keys) -> str:
+def build_allowed_ips(selected_keys, extra_domains=None) -> str:
     excluded: set[str] = set()
     for key in selected_keys:
         site = SITES.get(key, {})
@@ -382,6 +382,23 @@ def build_allowed_ips(selected_keys) -> str:
                     excluded.add(f"{r[4][0]}/32")
             except Exception:
                 pass
+    # Кастомные домены / IP-адреса
+    for entry in (extra_domains or []):
+        entry = entry.strip()
+        if not entry:
+            continue
+        try:
+            ipaddress.ip_network(entry, strict=False)
+            excluded.add(entry)
+            continue
+        except ValueError:
+            pass
+        try:
+            results = socket.getaddrinfo(entry, None, socket.AF_INET)
+            for r in results:
+                excluded.add(f"{r[4][0]}/32")
+        except Exception:
+            pass
     if not excluded:
         return "0.0.0.0/0"
     allowed = [ipaddress.ip_network("0.0.0.0/0")]

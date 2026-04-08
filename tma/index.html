@@ -9,35 +9,33 @@
   @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Syne:wght@400;700;800&display=swap');
 
   :root {
-    --bg: #0a0c0f;
-    --surface: #111418;
-    --surface2: #181d24;
-    --border: #1e2530;
-    --border-glow: #2a3545;
-    --green: #00e676;
-    --green-dim: #00e67622;
-    --green-mid: #00e67644;
-    --blue: #40c4ff;
-    --blue-dim: #40c4ff22;
-    --amber: #ffab00;
-    --amber-dim: #ffab0022;
-    --red: #ff5252;
-    --red-dim: #ff525222;
-    --text: #c8d6e5;
-    --text-dim: #5a6a7a;
-    --text-mid: #8a9baa;
-    --accent: #00e676;
-    --glow: 0 0 20px #00e67633;
-    --glow-blue: 0 0 20px #40c4ff33;
+    --bg: #080b0e;
+    --surface: #0f1318;
+    --surface2: #161c24;
+    --border: #253040;
+    --border-hi: #3a4d62;
+    --green: #00f080;
+    --green-dim: #00f08018;
+    --green-mid: #00f08044;
+    --blue: #48cfff;
+    --blue-dim: #48cfff18;
+    --amber: #ffc040;
+    --amber-dim: #ffc04018;
+    --red: #ff5555;
+    --red-dim: #ff555518;
+    --text: #dce8f2;
+    --text-dim: #4e6070;
+    --text-mid: #8faabb;
+    --nav-h: 62px;
   }
 
-  * { box-sizing: border-box; margin: 0; padding: 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
 
   html, body {
     background: var(--bg);
     color: var(--text);
     font-family: 'JetBrains Mono', monospace;
-    font-size: 13px;
+    font-size: 15px;
     min-height: 100vh;
     overscroll-behavior: none;
   }
@@ -47,17 +45,25 @@
     content: '';
     position: fixed;
     inset: 0;
-    background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px);
+    background: repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(0,0,0,0.02) 3px, rgba(0,0,0,0.02) 6px);
     pointer-events: none;
-    z-index: 100;
+    z-index: 200;
   }
 
   .app {
     max-width: 480px;
     margin: 0 auto;
-    padding: 12px;
-    padding-bottom: 24px;
+    padding: 12px 12px calc(var(--nav-h) + 12px);
   }
+
+  /* ── Pages ── */
+  .page { display: none; }
+  .page.active { display: block; animation: fadeIn .2s ease; }
+
+  /* Admin-only: скрыто пока не подтверждена роль */
+  .is-admin .admin-only { display: flex; }
+  .is-admin .page.admin-only { display: none; }
+  .is-admin .page.admin-only.active { display: block; }
 
   /* Header */
   .header {
@@ -87,14 +93,14 @@
   }
   .header-title {
     font-family: 'Syne', sans-serif;
-    font-size: 16px;
+    font-size: 18px;
     font-weight: 800;
     color: var(--green);
     letter-spacing: 0.05em;
     text-transform: uppercase;
   }
   .header-subtitle {
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-dim);
     letter-spacing: 0.1em;
   }
@@ -102,11 +108,11 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--green);
   }
   .dot {
-    width: 8px; height: 8px;
+    width: 9px; height: 9px;
     background: var(--green);
     border-radius: 50%;
     box-shadow: 0 0 8px var(--green);
@@ -121,7 +127,7 @@
   /* Last update */
   .last-update {
     text-align: center;
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-dim);
     margin-bottom: 10px;
     letter-spacing: 0.05em;
@@ -155,14 +161,14 @@
   .card:hover { border-color: var(--border-glow); }
 
   .card-label {
-    font-size: 9px;
+    font-size: 10px;
     color: var(--text-dim);
     letter-spacing: 0.15em;
     text-transform: uppercase;
     margin-bottom: 6px;
   }
   .card-value {
-    font-size: 22px;
+    font-size: 26px;
     font-weight: 700;
     line-height: 1;
     color: var(--text);
@@ -202,8 +208,8 @@
 
   /* Section title */
   .section-title {
-    font-size: 9px;
-    letter-spacing: 0.2em;
+    font-size: 11px;
+    letter-spacing: 0.18em;
     text-transform: uppercase;
     color: var(--text-dim);
     margin: 14px 0 8px;
@@ -234,8 +240,8 @@
     border-bottom: 1px solid var(--border);
   }
   .traffic-row:last-child { border-bottom: none; }
-  .traffic-label { font-size: 11px; color: var(--text-mid); }
-  .traffic-val   { font-size: 13px; font-weight: 500; }
+  .traffic-label { font-size: 12px; color: var(--text-mid); }
+  .traffic-val   { font-size: 14px; font-weight: 500; }
   .traffic-val .arrow-down { color: var(--blue); }
   .traffic-val .arrow-up   { color: var(--green); }
 
@@ -249,30 +255,30 @@
   }
   .peers-header {
     display: grid;
-    grid-template-columns: 1fr 90px 70px;
+    grid-template-columns: 1fr 90px 75px;
     padding: 8px 12px;
     background: var(--surface2);
     border-bottom: 1px solid var(--border);
-    font-size: 9px;
+    font-size: 10px;
     letter-spacing: 0.1em;
     text-transform: uppercase;
     color: var(--text-dim);
   }
   .peer-row {
     display: grid;
-    grid-template-columns: 1fr 90px 70px;
-    padding: 9px 12px;
+    grid-template-columns: 1fr 90px 75px;
+    padding: 10px 12px;
     border-bottom: 1px solid var(--border);
     align-items: center;
     transition: background 0.15s;
   }
   .peer-row:last-child { border-bottom: none; }
   .peer-row:hover { background: var(--surface2); }
-  .peer-name { font-size: 12px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .peer-hs   { font-size: 11px; color: var(--text-dim); }
+  .peer-name { font-size: 13px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .peer-hs   { font-size: 12px; color: var(--text-dim); }
   .peer-hs.online { color: var(--green); }
   .peer-hs.recent { color: var(--amber); }
-  .peer-traffic { font-size: 10px; color: var(--text-dim); text-align: right; }
+  .peer-traffic { font-size: 11px; color: var(--text-dim); text-align: right; }
 
   /* Monthly chart */
   .chart-card {
@@ -393,44 +399,1029 @@
   /* Uptime badge */
   .uptime-tag {
     display: inline-block;
-    padding: 2px 8px;
+    padding: 2px 10px;
     background: var(--green-dim);
     border: 1px solid var(--green);
     border-radius: 20px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--green);
     margin-top: 4px;
   }
+
+  /* ── Bottom Nav ── */
+  .nav {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    height: var(--nav-h);
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    display: flex;
+    z-index: 100;
+    padding-bottom: env(safe-area-inset-bottom, 0);
+  }
+  .nav-item {
+    flex: 1; display: none; flex-direction: column;
+    align-items: center; justify-content: center; gap: 3px;
+    cursor: pointer; color: var(--text-dim);
+    font-size: 10px; letter-spacing: .05em;
+    user-select: none; transition: color .15s;
+    position: relative; padding: 8px 4px;
+  }
+  /* Первые два таба (monitor, devices) всегда видны */
+  .nav-item:nth-child(1),
+  .nav-item:nth-child(2) { display: flex; }
+  .nav-item.active { color: var(--green); }
+  .nav-icon { font-size: 20px; line-height: 1; }
+  .nav-badge {
+    position: absolute; top: 6px; right: calc(50% - 18px);
+    background: var(--amber); color: #000;
+    font-size: 9px; font-weight: 700;
+    min-width: 16px; height: 16px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    padding: 0 4px;
+  }
+
+  /* ── FAB ── */
+  .fab {
+    position: fixed; right: 16px; bottom: calc(var(--nav-h) + 14px);
+    width: 52px; height: 52px; border-radius: 50%;
+    background: var(--green); color: var(--bg);
+    display: none; align-items: center; justify-content: center;
+    font-size: 26px; font-weight: 300; line-height: 1;
+    box-shadow: 0 0 20px #00f08044;
+    cursor: pointer; border: none;
+    transition: transform .15s;
+    z-index: 50;
+  }
+  .fab:active { transform: scale(.94); }
+
+  /* ── Placeholder (заглушки будущих страниц) ── */
+  .placeholder {
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    min-height: 220px; gap: 10px;
+    color: var(--text-dim); font-size: 13px; text-align: center;
+    border: 1px dashed var(--border); border-radius: 12px;
+    padding: 32px; margin-top: 8px;
+  }
+  .placeholder-icon { font-size: 40px; opacity: .4; }
+
+  /* ── Row card ── */
+  .row-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; margin-bottom: 8px; }
+  .row { display: flex; padding: 12px 14px; border-bottom: 1px solid var(--border); align-items: center; gap: 10px; cursor: pointer; transition: background .15s; }
+  .row:last-child { border-bottom: none; }
+  .row:active { background: var(--surface2); }
+
+  /* ── Info rows (в модалке устройства) ── */
+  .info-row { display: flex; justify-content: space-between; align-items: center; padding: 9px 12px; background: var(--surface2); border-radius: 8px; font-size: 13px; margin-bottom: 6px; }
+  .info-label { color: var(--text-mid); }
+
+  /* ── Buttons ── */
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 9px 16px; border-radius: 8px; border: 1px solid transparent; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer; transition: all .15s; white-space: nowrap; }
+  .btn-green { background: var(--green-dim); border-color: var(--green); color: var(--green); }
+  .btn-green:active { background: var(--green); color: var(--bg); }
+  .btn-red { background: var(--red-dim); border-color: var(--red); color: var(--red); }
+  .btn-red:active { background: var(--red); color: #fff; }
+  .btn-ghost { background: transparent; border-color: var(--border-hi); color: var(--text-mid); }
+  .btn-ghost:active { border-color: var(--text-mid); color: var(--text); }
+  .btn:disabled { opacity: .5; cursor: default; }
+
+  /* ── Modal ── */
+  .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.75); display: flex; align-items: flex-end; z-index: 300; animation: fadeIn .2s ease; }
+  .modal-overlay.hidden { display: none; }
+  .modal { width: 100%; max-width: 480px; margin: 0 auto; background: var(--surface); border-top: 1px solid var(--border-hi); border-radius: 14px 14px 0 0; padding: 0 16px calc(24px + env(safe-area-inset-bottom,0)); max-height: 88vh; overflow-y: auto; animation: slideUp .25s ease; }
+  @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+  .modal-handle { width: 40px; height: 4px; background: var(--border-hi); border-radius: 2px; margin: 14px auto 18px; }
+  .modal-title { font-family: 'Syne', sans-serif; font-size: 18px; font-weight: 800; color: var(--text); margin-bottom: 14px; }
+  .modal-actions { display: flex; gap: 8px; margin-top: 12px; }
+  .modal-actions .btn { flex: 1; padding: 12px; font-size: 14px; }
+
+  /* ── Form field ── */
+  .field { margin-bottom: 14px; }
+  .field-label { font-size: 11px; color: var(--text-dim); letter-spacing: .12em; text-transform: uppercase; margin-bottom: 6px; }
+  .field input { width: 100%; background: var(--surface2); border: 1px solid var(--border-hi); color: var(--text); font-family: inherit; font-size: 14px; padding: 10px 12px; border-radius: 8px; outline: none; transition: border-color .15s; }
+  .field input:focus { border-color: var(--green); }
+  .field input::placeholder { color: var(--text-dim); }
+
+  /* ── Sites grid ── */
+  .cat-label { font-size: 10px; color: var(--text-dim); letter-spacing: .12em; text-transform: uppercase; margin: 12px 0 6px; }
+  .sites-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .site-item { display: flex; align-items: center; gap: 7px; padding: 8px 10px; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; font-size: 12px; user-select: none; transition: border-color .15s; }
+  .site-item.on { border-color: var(--green); background: var(--green-dim); }
+  .site-item.locked { opacity: .55; cursor: default; }
+  .site-cb { width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0; border: 1px solid var(--border-hi); display: flex; align-items: center; justify-content: center; font-size: 9px; color: var(--bg); }
+  .site-item.on .site-cb { background: var(--green); border-color: var(--green); }
+  .site-item.on .site-cb::after { content: '✓'; }
+
+  /* ── QR image ── */
+  .qr-wrap { display: flex; justify-content: center; padding: 12px 0; }
+  .qr-wrap img { width: 220px; height: 220px; border-radius: 8px; background: #fff; padding: 8px; }
+
+  /* ── Spinner ── */
+  .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--border-hi); border-top-color: var(--green); border-radius: 50%; animation: spin .7s linear infinite; vertical-align: middle; margin-right: 6px; }
+
+  /* ── Pending block ── */
+  .pending-block { background: var(--amber-dim); border: 1px solid var(--amber); border-radius: 12px; padding: 12px 14px; margin-bottom: 8px; }
+  .pending-head  { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--amber); margin-bottom: 10px; }
+  .pending-row   { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #ffc04022; gap: 8px; }
+  .pending-row:last-child { border-bottom: none; padding-bottom: 0; }
+  .pending-name  { font-size: 14px; font-weight: 500; }
+  .pending-meta  { font-size: 11px; color: var(--text-dim); margin-top: 1px; }
+  .pending-btns  { display: flex; gap: 6px; flex-shrink: 0; }
+
+  /* ── User avatar ── */
+  .u-avatar { width: 36px; height: 36px; border-radius: 50%; background: var(--surface2); border: 1px solid var(--border-hi); display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 700; color: var(--text-mid); flex-shrink: 0; }
+
+  /* ── Settings rows ── */
+  .setting-row { display: flex; align-items: center; justify-content: space-between; padding: 13px 14px; border-bottom: 1px solid var(--border); gap: 10px; }
+  .setting-row:last-child { border-bottom: none; }
+  .setting-label { font-size: 14px; color: var(--text); }
+  .setting-sub   { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+  .setting-val   { font-size: 13px; color: var(--text-mid); text-align: right; flex-shrink: 0; max-width: 55%; word-break: break-all; }
+
+  /* ── Toggle switch ── */
+  .toggle { width: 46px; height: 26px; border-radius: 13px; background: var(--surface2); border: 1px solid var(--border-hi); position: relative; cursor: pointer; transition: background .2s, border-color .2s; flex-shrink: 0; }
+  .toggle.on { background: var(--green); border-color: var(--green); }
+  .toggle::after { content: ''; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: var(--text-mid); transition: left .2s, background .2s; box-shadow: 0 1px 3px rgba(0,0,0,.4); }
+  .toggle.on::after { left: 23px; background: var(--bg); }
+
+  /* ── Backup row ── */
+  .backup-row { display: flex; align-items: center; padding: 11px 14px; border-bottom: 1px solid var(--border); gap: 10px; }
+  .backup-row:last-child { border-bottom: none; }
+  .backup-name { font-size: 13px; font-weight: 500; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .backup-meta { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+  .backup-btns { display: flex; gap: 6px; flex-shrink: 0; }
 </style>
 </head>
 <body>
-<div class="app" id="app">
+<div class="app">
 
-  <div class="header">
-    <div class="header-left">
-      <div class="header-title">AWG Monitor</div>
-      <div class="header-subtitle">AmneziaWG · Client Stats</div>
+  <!-- ══ МОНИТОР ══ -->
+  <div class="page active" id="page-monitor">
+    <div class="header">
+      <div class="header-left">
+        <div class="header-title">AWG Monitor</div>
+        <div class="header-subtitle">AmneziaWG · Client Stats</div>
+      </div>
+      <div class="status-dot" id="status-indicator">
+        <div class="dot" id="status-dot"></div>
+        <span id="status-text">online</span>
+      </div>
     </div>
-    <div class="status-dot" id="status-indicator">
-      <div class="dot" id="status-dot"></div>
-      <span id="status-text">online</span>
+    <div class="last-update" id="last-update">обновлено: <span>—</span></div>
+    <div id="content"></div>
+  </div>
+
+  <!-- ══ УСТРОЙСТВА ══ -->
+  <div class="page" id="page-devices">
+    <div class="header">
+      <div class="header-left">
+        <div class="header-title">Устройства</div>
+        <div class="header-subtitle" id="dev-subtitle">мои устройства</div>
+      </div>
+    </div>
+    <div id="devices-content">
+      <div class="placeholder">
+        <div class="placeholder-icon">📱</div>
+        <div>Загрузка...</div>
+      </div>
     </div>
   </div>
 
-  <div class="last-update" id="last-update">обновлено: <span>—</span></div>
-  <div id="content"></div>
+  <!-- ══ ПОЛЬЗОВАТЕЛИ (admin) ══ -->
+  <div class="page admin-only" id="page-users">
+    <div class="header">
+      <div class="header-left">
+        <div class="header-title">Пользователи</div>
+        <div class="header-subtitle" id="users-subtitle">управление доступом</div>
+      </div>
+    </div>
+    <div id="users-content">
+      <div class="placeholder">
+        <div class="placeholder-icon">👥</div>
+        <div>Загрузка...</div>
+      </div>
+    </div>
+  </div>
 
+  <!-- ══ НАСТРОЙКИ (admin) ══ -->
+  <div class="page admin-only" id="page-settings">
+    <div class="header">
+      <div class="header-left">
+        <div class="header-title">Настройки</div>
+        <div class="header-subtitle">сервер · обслуживание · бэкапы</div>
+      </div>
+    </div>
+    <div id="settings-content">
+      <div class="placeholder">
+        <div class="placeholder-icon">⚙️</div>
+        <div>Загрузка...</div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- .app -->
+
+<!-- ── FAB ── -->
+<button class="fab" id="fab">+</button>
+
+<!-- ── BOTTOM NAV ── -->
+<nav class="nav">
+  <div class="nav-item active" id="nav-monitor" onclick="goto('monitor')">
+    <span class="nav-icon">📊</span>
+    <span>Монитор</span>
+  </div>
+  <div class="nav-item" id="nav-devices" onclick="goto('devices')">
+    <span class="nav-icon">📱</span>
+    <span>Устройства</span>
+  </div>
+  <div class="nav-item admin-only" id="nav-users" onclick="goto('users')">
+    <span class="nav-icon">👥</span>
+    <span>Юзеры</span>
+  </div>
+  <div class="nav-item admin-only" id="nav-settings" onclick="goto('settings')">
+    <span class="nav-icon">⚙️</span>
+    <span>Настройки</span>
+  </div>
+</nav>
+
+<!-- ══ МОДАЛКА: Детали устройства ══ -->
+<div class="modal-overlay hidden" id="modal-device" onclick="closeModal('modal-device')">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-handle"></div>
+    <div class="modal-title" id="modal-device-title"></div>
+    <div id="modal-device-body"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="btn-conf">⬇ .conf</button>
+      <button class="btn btn-ghost" id="btn-qr">📱 QR</button>
+      <button class="btn btn-ghost" id="btn-vpnlink">🔗 AmneziaVPN</button>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="btn-sites">🔧 Исключения</button>
+      <button class="btn btn-red" id="btn-del">🗑 Удалить</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ МОДАЛКА: Создать устройство ══ -->
+<div class="modal-overlay hidden" id="modal-create" onclick="closeModal('modal-create')">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-handle"></div>
+    <div class="modal-title">Новое устройство</div>
+    <div class="field">
+      <div class="field-label">Название</div>
+      <input id="new-dev-name" type="text" placeholder="Phone, Laptop, TV…" maxlength="32"
+             oninput="this.value=this.value.replace(/[^A-Za-z0-9_-]/g,'')">
+    </div>
+    <div class="field">
+      <div class="field-label" style="display:flex;align-items:center;gap:6px">
+        Тип подключения
+        <span style="cursor:pointer;font-size:15px;line-height:1;color:var(--text-dim)"
+              onclick="openModal('modal-endpoint-help')" title="Что это?">ℹ️</span>
+      </div>
+      <div id="new-dev-endpoints" style="display:flex;flex-direction:column;gap:6px;margin-top:6px">
+        <div style="color:var(--text-dim);font-size:12px"><span class="spinner"></span> Загрузка…</div>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('modal-create')">Отмена</button>
+      <button class="btn btn-green" id="btn-create-submit" onclick="submitCreateDevice()">Создать</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ МОДАЛКА: Справка по типу подключения ══ -->
+<div class="modal-overlay hidden" id="modal-endpoint-help" onclick="closeModal('modal-endpoint-help')">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-handle"></div>
+    <div class="modal-title">Тип подключения</div>
+    <div style="font-size:13px;color:var(--text-mid);line-height:1.7;margin-bottom:16px">
+      <p style="margin-bottom:10px">
+        <strong style="color:var(--green)">Домен</strong> — подключение через доменное имя сервера.
+        Работает в большинстве случаев. Если домен заблокирован у провайдера — VPN может не соединиться.
+      </p>
+      <p style="margin-bottom:10px">
+        <strong style="color:var(--blue)">IP-адрес</strong> — прямое подключение по IP без DNS.
+        Устойчивее к блокировкам по домену, но сам IP тоже может быть заблокирован.
+      </p>
+      <p>
+        <strong style="color:var(--amber)">Резервный</strong> — альтернативный адрес.
+        Используйте если основной не работает.
+      </p>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('modal-endpoint-help')">Понятно</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ МОДАЛКА: QR код ══ -->
+<div class="modal-overlay hidden" id="modal-qr" onclick="closeModal('modal-qr')">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-handle"></div>
+    <div class="modal-title">QR код</div>
+    <div class="qr-wrap"><img id="qr-img" src="" alt=""></div>
+    <div style="text-align:center;font-size:11px;color:var(--text-dim);margin-bottom:4px">Отсканируйте в приложении AmneziaVPN</div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('modal-qr')">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ МОДАЛКА: Детали пользователя (admin) ══ -->
+<div class="modal-overlay hidden" id="modal-user" onclick="closeModal('modal-user')">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-handle"></div>
+    <div class="modal-title" id="modal-user-title"></div>
+    <div id="modal-user-body"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('modal-user')">Закрыть</button>
+      <button class="btn btn-red" id="btn-user-del">🗑 Удалить</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ МОДАЛКА: Настройка сайтов ══ -->
+<div class="modal-overlay hidden" id="modal-sites" onclick="closeModal('modal-sites')">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-handle"></div>
+    <div class="modal-title" id="sites-modal-title"></div>
+    <input type="hidden" id="sites-modal-name">
+    <div class="field-label" style="margin-bottom:8px">Сайты вне VPN (работают напрямую)</div>
+    <div id="edit-sites-list"></div>
+    <!-- Добавить свой сайт -->
+    <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">
+      <div class="field-label" style="margin-bottom:6px">Свой сайт или IP</div>
+      <div style="display:flex;gap:6px">
+        <input id="custom-domain-input" type="text"
+               placeholder="example.com или 1.2.3.4/24"
+               style="flex:1;background:var(--surface2);border:1px solid var(--border-hi);
+                      color:var(--text);font-family:inherit;font-size:13px;
+                      padding:9px 11px;border-radius:8px;outline:none;
+                      transition:border-color .15s"
+               onfocus="this.style.borderColor='var(--green)'"
+               onblur="this.style.borderColor='var(--border-hi)'"
+               onkeydown="if(event.key==='Enter')addCustomDomain()">
+        <button class="btn btn-green" onclick="addCustomDomain()" style="padding:9px 14px">+</button>
+      </div>
+      <div id="custom-domains-list" style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('modal-sites')">Отмена</button>
+      <button class="btn btn-green" id="btn-sites-submit" onclick="submitSites()">Сохранить</button>
+    </div>
+  </div>
 </div>
 
 <script>
+// ─── INIT ─────────────────────────────────────────────────────────────────────
 const tg = window.Telegram?.WebApp;
 if (tg) { tg.ready(); tg.expand(); }
 
+const INIT_DATA = tg?.initData || '';
+const API = (path, opts = {}) => fetch(path, {
+  headers: { 'X-Init-Data': INIT_DATA, 'Content-Type': 'application/json', ...(opts.headers || {}) },
+  ...opts,
+});
+
+// ─── NAVIGATION ───────────────────────────────────────────────────────────────
+let currentTab = 'monitor';
+const _loaded = {};  // какие страницы уже загружались
+
+function goto(tab) {
+  if (currentTab === tab) return;
+  currentTab = tab;
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('page-' + tab).classList.add('active');
+  document.getElementById('nav-' + tab).classList.add('active');
+  document.getElementById('fab').style.display = (tab === 'devices') ? 'flex' : 'none';
+  if (!_loaded[tab]) { _loaded[tab] = true; _pageLoad(tab); }
+}
+
+function _pageLoad(tab) {
+  if (tab === 'devices')  loadDevices();
+  if (tab === 'users')    loadUsers();
+  if (tab === 'settings') loadSettings();
+}
+
+function revealAdminUI() {
+  // Показываем admin-only nav-items и pages (pages управляются .page.active)
+  document.querySelectorAll('.nav-item.admin-only').forEach(el => el.style.display = 'flex');
+}
+
+function setBadge(navId, count) {
+  const item = document.getElementById(navId);
+  if (!item) return;
+  let badge = item.querySelector('.nav-badge');
+  if (count > 0) {
+    if (!badge) { badge = document.createElement('span'); badge.className = 'nav-badge'; item.appendChild(badge); }
+    badge.textContent = count;
+    badge.style.display = 'flex';
+  } else if (badge) {
+    badge.style.display = 'none';
+  }
+}
+
+// ─── MODAL HELPERS ────────────────────────────────────────────────────────────
+function openModal(id)  { document.getElementById(id).classList.remove('hidden'); }
+function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+
+document.getElementById('fab').onclick = () => openCreateDevice();
+
+// ─── УСТРОЙСТВА ───────────────────────────────────────────────────────────────
+let _sites = null;
+
+async function loadDevices() {
+  const el = document.getElementById('devices-content');
+  el.innerHTML = '<div class="placeholder"><span class="spinner"></span>Загрузка...</div>';
+  try {
+    const resp = await API('/api/devices');
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    renderDeviceList(await resp.json());
+  } catch(e) {
+    el.innerHTML = `<div class="error-card">⚠ ${e.message}</div>`;
+  }
+}
+
+function renderDeviceList(devices) {
+  const el  = document.getElementById('devices-content');
+  const sub = document.getElementById('dev-subtitle');
+  const online = devices.filter(d => d.online).length;
+  if (sub) sub.textContent = `${devices.length} устр. · ${online} онлайн`;
+
+  // Сохраняем в глобал чтобы не передавать через onclick атрибут
+  window._devicesList = devices;
+
+  if (!devices.length) {
+    el.innerHTML = '<div class="placeholder"><div class="placeholder-icon">📱</div><div>Нет устройств<br><span style="font-size:11px">Нажмите + чтобы добавить</span></div></div>';
+    return;
+  }
+
+  const rows = devices.map((d, i) => {
+    const hs      = fmtHandshake(d.handshake);
+    const dotClr  = d.online ? 'var(--green)' : hs.cls === 'recent' ? 'var(--amber)' : 'var(--text-dim)';
+    const devName = d.name.includes('.') ? d.name.split('.').slice(1).join('.') : d.name;
+    return `<div class="row" onclick="openDeviceDetail(window._devicesList[${i}])">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:14px;font-weight:500">
+          <span style="color:${dotClr}">●</span> ${_esc(devName)}
+        </div>
+        <div style="font-size:11px;color:var(--text-dim);margin-top:2px">
+          <span style="color:var(--blue)">↓${_esc(d.client_download)}</span>
+          &nbsp;<span style="color:var(--green)">↑${_esc(d.client_upload)}</span>
+        </div>
+      </div>
+      <div style="text-align:right;flex-shrink:0;font-size:12px;color:${dotClr}">${_esc(hs.text)}</div>
+    </div>`;
+  }).join('');
+
+  el.innerHTML = `<div class="row-card">${rows}</div>`;
+}
+
+// ── Детали устройства ──
+function openDeviceDetail(d) {
+  const devName = d.name.includes('.') ? d.name.split('.').slice(1).join('.') : d.name;
+  const hs      = fmtHandshake(d.handshake);
+  const stColor = d.online ? 'var(--green)' : hs.cls === 'recent' ? 'var(--amber)' : 'var(--text-dim)';
+  const stText  = d.online ? `онлайн · ${hs.text}` : `оффлайн · ${hs.text}`;
+
+  document.getElementById('modal-device-title').textContent = devName;
+  document.getElementById('modal-device-body').innerHTML = `
+    <div class="info-row"><span class="info-label">Статус</span>
+      <span style="color:${stColor}">● ${stText}</span></div>
+    <div class="info-row"><span class="info-label">Трафик</span>
+      <span><span style="color:var(--blue)">↓${d.client_download}</span>
+            &nbsp;<span style="color:var(--green)">↑${d.client_upload}</span></span></div>`;
+
+  document.getElementById('btn-conf').onclick    = () => downloadConf(d.name);
+  document.getElementById('btn-qr').onclick      = () => showQR(d.name);
+  document.getElementById('btn-vpnlink').onclick = () => showVpnLink(d.name);
+  document.getElementById('btn-sites').onclick   = () => openSitesModal(d.name);
+  document.getElementById('btn-del').onclick     = () => deleteDevice(d.name, devName);
+  openModal('modal-device');
+}
+
+// ── Скачать .conf ──
+async function downloadConf(name) {
+  try {
+    const resp = await API(`/api/devices/${encodeURIComponent(name)}/config`);
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const text    = await resp.text();
+    const devName = name.includes('.') ? name.split('.').slice(1).join('.') : name;
+    const blob = new Blob([text], { type: 'text/plain' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = devName + '.conf';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  } catch(e) {
+    tg?.showAlert?.('Ошибка скачивания: ' + e.message) || alert('Ошибка: ' + e.message);
+  }
+}
+
+// ── AmneziaVPN ссылка ──
+async function showVpnLink(name) {
+  closeModal('modal-device');
+  try {
+    const resp = await API(`/api/devices/${encodeURIComponent(name)}/vpnlink`);
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || 'Ошибка');
+    // Копируем ссылку в буфер обмена
+    if (navigator.clipboard) {
+      await navigator.clipboard.writeText(data.link);
+      tg?.showAlert?.('Ссылка скопирована!\nОткройте AmneziaVPN и выберите «Добавить по ссылке»');
+    } else {
+      // Fallback — показываем ссылку
+      tg?.showAlert?.('Ссылка AmneziaVPN:\n' + data.link.slice(0, 80) + '…') ||
+        prompt('Скопируйте ссылку:', data.link);
+    }
+  } catch(e) {
+    tg?.showAlert?.('Ошибка: ' + e.message) || alert('Ошибка: ' + e.message);
+  }
+}
+
+// ── QR код ──
+async function showQR(name) {
+  closeModal('modal-device');
+  const img = document.getElementById('qr-img');
+  img.src = ''; img.style.opacity = '.3';
+  openModal('modal-qr');
+  try {
+    const resp = await API(`/api/devices/${encodeURIComponent(name)}/qr`);
+    const data = await resp.json();
+    img.src = data.qr; img.style.opacity = '1';
+  } catch(e) { img.alt = 'Ошибка: ' + e.message; }
+}
+
+// ── Удалить устройство ──
+async function deleteDevice(name, displayName) {
+  const ok = tg?.showConfirm
+    ? await new Promise(r => tg.showConfirm(`Удалить устройство ${displayName}?`, r))
+    : confirm(`Удалить устройство ${displayName}?`);
+  if (!ok) return;
+
+  const resp = await API(`/api/devices/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  if (resp.ok) {
+    closeModal('modal-device');
+    _loaded.devices = false;
+    loadDevices();
+    tg?.showAlert?.(`${displayName} удалено`) ;
+  } else {
+    const e = await resp.json();
+    tg?.showAlert?.('Ошибка: ' + e.error) || alert('Ошибка: ' + e.error);
+  }
+}
+
+// ── Создать устройство ──
+let _endpoints = null;
+
+async function openCreateDevice() {
+  document.getElementById('new-dev-name').value = '';
+  openModal('modal-create');
+
+  // Загружаем эндпоинты
+  if (!_endpoints) {
+    try { const r = await API('/api/endpoints'); _endpoints = await r.json(); } catch(e) { _endpoints = []; }
+  }
+  renderEndpointSelector(_endpoints);
+}
+
+function renderEndpointSelector(eps) {
+  const el = document.getElementById('new-dev-endpoints');
+  if (!eps || !eps.length) {
+    el.innerHTML = '<div style="color:var(--text-dim);font-size:12px">Нет доступных эндпоинтов</div>';
+    return;
+  }
+  el.innerHTML = eps.map((ep, i) => `
+    <label style="display:flex;align-items:center;gap:10px;padding:9px 12px;
+                  background:var(--surface2);border:1px solid ${i===0?'var(--green)':'var(--border)'};
+                  border-radius:8px;cursor:pointer;transition:border-color .15s"
+           onclick="selectEndpoint(this)">
+      <input type="radio" name="endpoint" value="${_esc(ep.value)}"
+             style="accent-color:var(--green)" ${i===0?'checked':''}>
+      <span style="font-size:13px">${_esc(ep.label)}</span>
+    </label>`).join('');
+}
+
+function selectEndpoint(labelEl) {
+  document.querySelectorAll('#new-dev-endpoints label').forEach(l => {
+    l.style.borderColor = 'var(--border)';
+  });
+  labelEl.style.borderColor = 'var(--green)';
+}
+
+async function submitCreateDevice() {
+  const nameInput = document.getElementById('new-dev-name');
+  const name = nameInput.value.trim();
+  if (!name) { nameInput.focus(); return; }
+
+  const endpointEl = document.querySelector('#new-dev-endpoints input[name="endpoint"]:checked');
+  const endpoint   = endpointEl ? endpointEl.value : '';
+
+  const btn = document.getElementById('btn-create-submit');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Создание…';
+
+  try {
+    const resp = await API('/api/devices', {
+      method: 'POST',
+      body: JSON.stringify({ name, endpoint }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || 'Ошибка');
+    closeModal('modal-create');
+    _loaded.devices = false;
+    loadDevices();
+    tg?.showAlert?.(`Устройство ${name} создано!`);
+  } catch(e) {
+    tg?.showAlert?.('Ошибка: ' + e.message) || alert('Ошибка: ' + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Создать';
+  }
+}
+
+// ── Сайты: редактирование ──
+let _customDomains = [];
+
+async function openSitesModal(name) {
+  closeModal('modal-device');
+  if (!_sites) {
+    try { const r = await API('/api/sites'); _sites = await r.json(); } catch(e) { _sites = []; }
+  }
+  const devName = name.includes('.') ? name.split('.').slice(1).join('.') : name;
+  document.getElementById('sites-modal-title').textContent = devName + ' · исключения';
+  document.getElementById('sites-modal-name').value = name;
+  // Сайты по умолчанию все OFF (кроме locked)
+  document.getElementById('edit-sites-list').innerHTML = renderSitesGrid(_sites, false);
+  // Сброс кастомных доменов
+  _customDomains = [];
+  document.getElementById('custom-domain-input').value = '';
+  renderCustomDomains();
+  openModal('modal-sites');
+}
+
+function addCustomDomain() {
+  const inp = document.getElementById('custom-domain-input');
+  const val = inp.value.trim();
+  if (!val) return;
+  if (!_customDomains.includes(val)) {
+    _customDomains.push(val);
+    renderCustomDomains();
+  }
+  inp.value = '';
+  inp.focus();
+}
+
+function removeCustomDomain(idx) {
+  _customDomains.splice(idx, 1);
+  renderCustomDomains();
+}
+
+function renderCustomDomains() {
+  const el = document.getElementById('custom-domains-list');
+  if (!_customDomains.length) { el.innerHTML = ''; return; }
+  el.innerHTML = _customDomains.map((d, i) => `
+    <span style="display:inline-flex;align-items:center;gap:4px;padding:4px 8px;
+                 background:var(--green-dim);border:1px solid var(--green);
+                 border-radius:6px;font-size:11px;color:var(--green)">
+      ${_esc(d)}
+      <span style="cursor:pointer;opacity:.7;margin-left:2px" onclick="removeCustomDomain(${i})">✕</span>
+    </span>`).join('');
+}
+
+async function submitSites() {
+  const name     = document.getElementById('sites-modal-name').value;
+  const selected = [...document.querySelectorAll('#edit-sites-list .site-item.on')].map(e => e.dataset.key);
+  const btn      = document.getElementById('btn-sites-submit');
+  btn.disabled   = true;
+  btn.innerHTML  = '<span class="spinner"></span>Сохранение…';
+  try {
+    const resp = await API(`/api/devices/${encodeURIComponent(name)}/sites`, {
+      method: 'PUT',
+      body: JSON.stringify({ sites: selected, custom_domains: _customDomains }),
+    });
+    if (!resp.ok) { const e = await resp.json(); throw new Error(e.error); }
+    closeModal('modal-sites');
+    tg?.showAlert?.('Сохранено! Переподключитесь к VPN.');
+  } catch(e) {
+    tg?.showAlert?.('Ошибка: ' + e.message) || alert('Ошибка: ' + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = 'Сохранить';
+  }
+}
+
+// ── Общий рендер грида сайтов ──
+function renderSitesGrid(sitesData, defaultOn) {
+  return sitesData.map(cat => `
+    <div class="cat-label">${cat.category}</div>
+    <div class="sites-grid">
+      ${cat.sites.map(s => `
+        <div class="site-item ${(defaultOn && !s.locked) || s.locked ? 'on' : ''} ${s.locked ? 'locked' : ''}"
+             data-key="${s.key}" onclick="toggleSite(this)">
+          <div class="site-cb"></div>
+          <span>${s.emoji} ${_esc(s.name)}</span>
+        </div>`).join('')}
+    </div>`).join('');
+}
+
+function toggleSite(el) {
+  if (el.classList.contains('locked')) return;
+  el.classList.toggle('on');
+}
+
+// ─── ПОЛЬЗОВАТЕЛИ (admin) ────────────────────────────────────────────────────
+async function loadUsers() {
+  const el = document.getElementById('users-content');
+  el.innerHTML = '<div class="placeholder"><span class="spinner"></span>Загрузка...</div>';
+  try {
+    const [rPending, rApproved] = await Promise.all([
+      API('/api/users/pending'),
+      API('/api/users'),
+    ]);
+    const pending  = rPending.ok  ? await rPending.json()  : [];
+    const approved = rApproved.ok ? await rApproved.json() : [];
+    renderUsers(pending, approved);
+  } catch(e) {
+    el.innerHTML = `<div class="error-card">⚠ ${e.message}</div>`;
+  }
+}
+
+function renderUsers(pending, approved) {
+  const el  = document.getElementById('users-content');
+  const sub = document.getElementById('users-subtitle');
+  if (sub) sub.textContent = `${approved.length} активных · ${pending.length} ожидают`;
+  setBadge('nav-users', pending.length);
+
+  let html = '';
+
+  // ── Ожидают одобрения ──
+  if (pending.length) {
+    const rows = pending.map(u => {
+      const ago = _timeAgo(u.requested_at);
+      return `<div class="pending-row">
+        <div>
+          <div class="pending-name">${_esc(u.display || u.name)}</div>
+          <div class="pending-meta">ID ${u.id} · ${ago}</div>
+        </div>
+        <div class="pending-btns">
+          <button class="btn btn-green btn-sm" onclick="approveUser('${u.id}')">✓</button>
+          <button class="btn btn-red   btn-sm" onclick="rejectUser('${u.id}','${_esc(u.name)}')">✕</button>
+        </div>
+      </div>`;
+    }).join('');
+    html += `<div class="pending-block">
+      <div class="pending-head">⏳ Ожидают одобрения · ${pending.length}</div>
+      ${rows}
+    </div>`;
+  }
+
+  // ── Активные пользователи ──
+  if (approved.length) {
+    window._usersList = approved;
+    html += `<div class="section-title">активные · ${approved.length}</div>
+    <div class="row-card">`;
+    html += approved.map((u, i) => `
+      <div class="row" onclick="openUserDetail(window._usersList[${i}])">
+        <div class="u-avatar">${_esc((u.display || u.name)[0].toUpperCase())}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:14px;font-weight:500">${_esc(u.display || u.name)}</div>
+          <div style="font-size:11px;color:var(--text-dim);margin-top:2px">
+            ${u.devices} устр. ·
+            <span style="color:var(--blue)">↓${_esc(u.download)}</span>
+            <span style="color:var(--green)">↑${_esc(u.upload)}</span>
+          </div>
+        </div>
+        <div style="font-size:18px;color:var(--text-dim)">›</div>
+      </div>`).join('');
+    html += '</div>';
+  }
+
+  if (!pending.length && !approved.length) {
+    html = '<div class="placeholder"><div class="placeholder-icon">👥</div><div>Нет пользователей</div></div>';
+  }
+
+  el.innerHTML = html;
+}
+
+// ── Approve / Reject ──
+async function approveUser(uid) {
+  const resp = await API(`/api/users/pending/${uid}/approve`, { method: 'POST' });
+  if (resp.ok) { _loaded.users = false; loadUsers(); }
+  else { const e = await resp.json(); tg?.showAlert?.('Ошибка: ' + e.error); }
+}
+
+async function rejectUser(uid, name) {
+  const ok = tg?.showConfirm
+    ? await new Promise(r => tg.showConfirm(`Отклонить заявку ${name}?`, r))
+    : confirm(`Отклонить заявку ${name}?`);
+  if (!ok) return;
+  const resp = await API(`/api/users/pending/${uid}/reject`, { method: 'POST' });
+  if (resp.ok) { _loaded.users = false; loadUsers(); }
+  else { const e = await resp.json(); tg?.showAlert?.('Ошибка: ' + e.error); }
+}
+
+// ── Детали пользователя ──
+function openUserDetail(u) {
+  const display = u.display || u.name;
+  document.getElementById('modal-user-title').textContent = display;
+  document.getElementById('modal-user-body').innerHTML = `
+    <div class="info-row"><span class="info-label">Telegram ID</span><span>${u.id}</span></div>
+    <div class="info-row"><span class="info-label">Логин</span><span>${_esc(u.name)}</span></div>
+    <div class="info-row"><span class="info-label">Устройств</span><span>${u.devices}</span></div>
+    <div class="info-row"><span class="info-label">Скачал</span><span style="color:var(--blue)">${u.download}</span></div>
+    <div class="info-row" style="margin-bottom:4px"><span class="info-label">Отдал</span><span style="color:var(--green)">${u.upload}</span></div>`;
+  document.getElementById('btn-user-del').onclick = () => deleteUser(u.id, display);
+  openModal('modal-user');
+}
+
+async function deleteUser(uid, display) {
+  const ok = tg?.showConfirm
+    ? await new Promise(r => tg.showConfirm(`Удалить ${display} и все его устройства?`, r))
+    : confirm(`Удалить ${display} и все устройства?`);
+  if (!ok) return;
+  const resp = await API(`/api/users/${uid}`, { method: 'DELETE' });
+  if (resp.ok) {
+    closeModal('modal-user');
+    _loaded.users = false;
+    loadUsers();
+    tg?.showAlert?.(`${display} удалён`);
+  } else {
+    const e = await resp.json();
+    tg?.showAlert?.('Ошибка: ' + e.error) || alert('Ошибка: ' + e.error);
+  }
+}
+
+// ── Утилиты ──
+function _esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function _timeAgo(ts) {
+  if (!ts) return '—';
+  const d = Math.floor((Date.now()/1000 - ts));
+  if (d < 60)   return d + 'с назад';
+  if (d < 3600) return Math.floor(d/60) + ' мин назад';
+  if (d < 86400) return Math.floor(d/3600) + ' ч назад';
+  return Math.floor(d/86400) + ' д назад';
+}
+
+// ─── НАСТРОЙКИ (admin) ───────────────────────────────────────────────────────
+async function loadSettings() {
+  const el = document.getElementById('settings-content');
+  el.innerHTML = '<div class="placeholder"><span class="spinner"></span>Загрузка...</div>';
+  try {
+    const [rSettings, rMaint, rBackups] = await Promise.all([
+      API('/api/settings'),
+      API('/api/maintenance'),
+      API('/api/backups'),
+    ]);
+    const settings = rSettings.ok ? await rSettings.json() : {};
+    const maint    = rMaint.ok    ? await rMaint.json()    : {};
+    const backups  = rBackups.ok  ? await rBackups.json()  : [];
+    renderSettings(settings, maint, backups);
+  } catch(e) {
+    el.innerHTML = `<div class="error-card">⚠ ${e.message}</div>`;
+  }
+}
+
+function renderSettings(s, maint, backups) {
+  const el = document.getElementById('settings-content');
+
+  // ── Сервер ──
+  const serverBlock = `
+    <div class="section-title">сервер</div>
+    <div class="row-card" style="margin-bottom:8px">
+      <div class="setting-row">
+        <div><div class="setting-label">Endpoint</div><div class="setting-sub">основной</div></div>
+        <div class="setting-val">${_esc(s.endpoint || '—')}:${s.port || '—'}</div>
+      </div>
+      ${s.endpoint_backup ? `<div class="setting-row">
+        <div><div class="setting-label">Резервный</div></div>
+        <div class="setting-val">${_esc(s.endpoint_backup)}</div>
+      </div>` : ''}
+      <div class="setting-row">
+        <div><div class="setting-label">DNS</div></div>
+        <div class="setting-val">${_esc(s.dns_primary || '—')}</div>
+      </div>
+      <div class="setting-row">
+        <div><div class="setting-label">Устройств</div></div>
+        <div class="setting-val" style="color:var(--green)">${s.total_devices ?? '—'}</div>
+      </div>
+      <div class="setting-row">
+        <div><div class="setting-label">Uptime</div></div>
+        <div class="setting-val" style="color:var(--blue)">${_esc(s.uptime || '—')}</div>
+      </div>
+    </div>`;
+
+  // ── Обслуживание ──
+  const maintOn = !!maint.enabled;
+  const maintBlock = `
+    <div class="section-title">обслуживание</div>
+    <div class="row-card" style="margin-bottom:8px">
+      <div class="setting-row">
+        <div>
+          <div class="setting-label">Режим обслуживания</div>
+          <div class="setting-sub">отключить новые подключения</div>
+        </div>
+        <div class="toggle ${maintOn ? 'on' : ''}" id="maint-toggle" onclick="toggleMaintenance(this)"></div>
+      </div>
+    </div>`;
+
+  // ── Бэкапы ──
+  const backupRows = backups.length
+    ? backups.map(b => `
+      <div class="backup-row">
+        <div style="flex:1;min-width:0">
+          <div class="backup-name">${_esc(b.name)}</div>
+          <div class="backup-meta">${_esc(b.size_fmt)} · ${_esc(b.date)}</div>
+        </div>
+        <div class="backup-btns">
+          <a class="btn btn-ghost btn-sm" href="/api/backups/${encodeURIComponent(b.name)}"
+             download="${_esc(b.name)}"
+             onclick="addAuthHeader(event,'${encodeURIComponent(b.name)}')">⬇</a>
+          <button class="btn btn-red btn-sm" onclick="deleteBackup('${encodeURIComponent(b.name)}','${_esc(b.name)}')">🗑</button>
+        </div>
+      </div>`).join('')
+    : '<div style="padding:14px;color:var(--text-dim);font-size:13px">Нет бэкапов</div>';
+
+  const backupBlock = `
+    <div class="section-title">резервные копии</div>
+    <div class="row-card" style="margin-bottom:8px" id="backup-list">${backupRows}</div>
+    <button class="btn btn-green" style="width:100%;padding:12px;font-size:14px"
+            id="btn-backup-create" onclick="createBackup()">+ Создать бэкап</button>`;
+
+  el.innerHTML = serverBlock + maintBlock + backupBlock;
+}
+
+// ── Maintenance toggle ──
+async function toggleMaintenance(el) {
+  const newState = !el.classList.contains('on');
+  el.classList.toggle('on');
+  const resp = await API('/api/maintenance', {
+    method: 'POST',
+    body: JSON.stringify({ enabled: newState }),
+  });
+  if (!resp.ok) {
+    el.classList.toggle('on'); // откат
+    tg?.showAlert?.('Ошибка сохранения');
+  }
+}
+
+// ── Создать бэкап ──
+async function createBackup() {
+  const btn = document.getElementById('btn-backup-create');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Создание…';
+  try {
+    const resp = await API('/api/backups', { method: 'POST' });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error);
+    tg?.showAlert?.(`Бэкап создан: ${data.name} (${data.size_fmt})`);
+    _loaded.settings = false;
+    loadSettings();
+  } catch(e) {
+    tg?.showAlert?.('Ошибка: ' + e.message) || alert('Ошибка: ' + e.message);
+    btn.disabled = false; btn.textContent = '+ Создать бэкап';
+  }
+}
+
+// ── Удалить бэкап ──
+async function deleteBackup(encName, displayName) {
+  const ok = tg?.showConfirm
+    ? await new Promise(r => tg.showConfirm(`Удалить ${displayName}?`, r))
+    : confirm(`Удалить ${displayName}?`);
+  if (!ok) return;
+  const resp = await API(`/api/backups/${encName}`, { method: 'DELETE' });
+  if (resp.ok) { _loaded.settings = false; loadSettings(); }
+  else { const e = await resp.json(); tg?.showAlert?.('Ошибка: ' + e.error); }
+}
+
+// ── Скачать бэкап (с авторизацией) ──
+async function addAuthHeader(evt, encName) {
+  evt.preventDefault();
+  try {
+    const resp = await API(`/api/backups/${encName}`);
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const blob = await resp.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = decodeURIComponent(encName);
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  } catch(e) {
+    tg?.showAlert?.('Ошибка скачивания: ' + e.message);
+  }
+}
+
+
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
-function fmtHandshake(sec) {
-  if (!sec) return { text: "никогда", cls: "" };
-  if (sec < 180)   return { text: sec + "с", cls: "online" };
-  if (sec < 600)   return { text: Math.round(sec/60) + " мин", cls: "recent" };
+function fmtHandshake(tsUnix) {
+  // tsUnix — Unix timestamp последнего хэндшейка (секунды с эпохи)
+  if (!tsUnix) return { text: "никогда", cls: "" };
+  const sec = Math.floor(Date.now() / 1000) - tsUnix;
+  if (sec < 0)     return { text: "только что", cls: "online" };
+  if (sec < 180)   return { text: sec + "с назад", cls: "online" };
+  if (sec < 600)   return { text: Math.round(sec/60) + " мин назад", cls: "recent" };
   if (sec < 3600)  return { text: Math.round(sec/60) + " мин", cls: "" };
   if (sec < 86400) return { text: Math.round(sec/3600) + " ч", cls: "" };
   return { text: Math.round(sec/86400) + " д", cls: "" };
@@ -681,15 +1672,14 @@ let domBuilt = false;
 let lastIsAdmin = null;
 
 function render(d) {
-  // Перестраиваем DOM только если первый раз или сменился тип пользователя
   if (!domBuilt || lastIsAdmin !== d.is_admin) {
     buildDOM(d);
     domBuilt = true;
     lastIsAdmin = d.is_admin;
+    if (d.is_admin) revealAdminUI();
   }
   updateValues(d);
 
-  // Статус-индикатор
   const dot = document.getElementById('status-dot');
   const txt = document.getElementById('status-text');
   if (d.awg_status === 'running') {
@@ -703,25 +1693,24 @@ function render(d) {
 
 // ─── LOAD ─────────────────────────────────────────────────────────────────────
 async function loadData() {
+  if (currentTab !== 'monitor') return;
   try {
-    const resp = await fetch("/api/stats", {
-      headers: { "X-Init-Data": tg?.initData || "" }
-    });
+    const resp = await API('/api/stats');
     if (resp.status === 401) {
       document.getElementById('content').innerHTML =
-        '<div class="error-card">⛔ Нет доступа<br><span style="font-size:10px;opacity:0.7">Откройте через Telegram-бота</span></div>';
+        '<div class="error-card">⛔ Нет доступа<br><span style="font-size:11px;opacity:0.7">Откройте через Telegram-бота</span></div>';
       return;
     }
     if (resp.status === 403) {
       document.getElementById('content').innerHTML =
-        '<div class="error-card">⛔ Нет доступа<br><span style="font-size:10px;opacity:0.7">Вы не зарегистрированы</span></div>';
+        '<div class="error-card">⛔ Аккаунт не зарегистрирован<br><span style="font-size:11px;opacity:0.7">Отправьте /start боту</span></div>';
       return;
     }
-    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
     render(await resp.json());
   } catch(e) {
     document.getElementById('content').innerHTML =
-      '<div class="error-card">⚠ Нет связи<br><span style="font-size:10px;opacity:0.7">' + e.message + '</span></div>';
+      '<div class="error-card">⚠ Нет связи<br><span style="font-size:11px;opacity:0.7">' + e.message + '</span></div>';
   }
 }
 
