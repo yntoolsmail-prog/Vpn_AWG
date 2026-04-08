@@ -1138,7 +1138,7 @@ async def do_send_conf(query, name: str, ep_key: str, allowed_ips: str = "0.0.0.
     short    = name.split(".", 1)[1] if "." in name else name
     ep       = _resolve_endpoint(ep_key)
     content  = _conf_for_endpoint(name, ep_key, allowed_ips)
-    filename = f"{short}.conf"  # без дефисов — AmneziaWG их не любит
+    filename = f"{name}.conf"
     ep_label = {"main": "Основной", "backup": "Резервный", "ip": "По IP"}.get(ep_key, ep_key)
     excl_note = "" if allowed_ips == "0.0.0.0/0" else "\n🌐 С исключениями сайтов"
     await query.message.reply_document(
@@ -1219,7 +1219,7 @@ async def do_send_share(query, name: str, ep_key: str):
     )
     await query.message.reply_document(
         document=vpn_bytes,
-        filename=f"{short}.vpn",
+        filename=f"{name}.vpn",
         caption=(
             f"📤 Файл для AmneziaVPN — *{short}* ({ep_label})\n"
             f"Вставьте в приложении: + → Открыть файл"

@@ -377,8 +377,7 @@ def device_send(user_id, name):
     conf_text   = _make_conf_for_endpoint(name, endpoint, allowed_ips)
     if conf_text is None:
         return jsonify({"error": "Устройство не найдено"}), 404
-    dev_part = name.split(".", 1)[1] if "." in name else name
-    filename = f"{dev_part}.conf"
+    filename = f"{name}.conf"
     caption  = f"📄 {filename}"
     ok = _send_file_via_bot(user_id, filename, conf_text, caption)
     if ok:

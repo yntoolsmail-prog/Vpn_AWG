@@ -481,6 +481,8 @@
   .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 9px 16px; border-radius: 8px; border: 1px solid transparent; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer; transition: all .15s; white-space: nowrap; }
   .btn-green { background: var(--green-dim); border-color: var(--green); color: var(--green); }
   .btn-green:active { background: var(--green); color: var(--bg); }
+  .btn-blue { background: var(--blue-dim); border-color: var(--blue); color: var(--blue); }
+  .btn-blue:active { background: var(--blue); color: var(--bg); }
   .btn-red { background: var(--red-dim); border-color: var(--red); color: var(--red); }
   .btn-red:active { background: var(--red); color: #fff; }
   .btn-ghost { background: transparent; border-color: var(--border-hi); color: var(--text-mid); }
@@ -631,52 +633,82 @@
     </div>
     <div style="padding:0 4px 100px">
 
-      <!-- Шаги подключения -->
-      <div class="section-title">Как подключиться</div>
+      <!-- Подключение через AmneziaWG -->
+      <div class="section-title">Подключение через AmneziaWG</div>
       <div class="row-card" style="flex-direction:column;align-items:flex-start;gap:10px;line-height:1.6;font-size:13px">
-        <div><strong>1.</strong> Установите приложение <strong>AmneziaVPN</strong>
-             (рекомендуется) или <strong>AmneziaWG</strong> на ваш гаджет.</div>
-        <div><strong>2.</strong> Перейдите на вкладку «Устройства» и нажмите <strong>+</strong>.
-             Введите название (например, Phone).</div>
-        <div><strong>3.</strong> Откройте созданное устройство → нажмите
-             <strong>.conf в Telegram</strong> — файл придёт в этот чат.
-             Или нажмите <strong>QR-код</strong> и отсканируйте в приложении.</div>
-        <div><strong>4.</strong> В AmneziaWG: Добавить → из файла. В AmneziaVPN: нажмите
-             «+» → добавить по файлу или QR.</div>
+        <div><strong>1.</strong> Установите <strong>AmneziaWG</strong>:
+             Android — Play Market, iOS — App Store, Windows/Mac — amnezia.org.</div>
+        <div><strong>2.</strong> Здесь: «Устройства» → <strong>+</strong> → введите название гаджета.</div>
+        <div><strong>3.</strong> Откройте устройство → нажмите <strong>.conf в Telegram</strong>.
+             Файл придёт в бот. Или нажмите <strong>QR-код</strong> и отсканируйте.</div>
+        <div><strong>4.</strong> В AmneziaWG: нажмите <strong>+</strong> → «Добавить из файла» или «Сканировать QR».
+             Выберите полученный файл.</div>
+        <div><strong>5.</strong> Включите тоннель — готово!</div>
+      </div>
+
+      <!-- Подключение через AmneziaVPN -->
+      <div class="section-title" style="margin-top:16px">Подключение через AmneziaVPN</div>
+      <div class="row-card" style="flex-direction:column;align-items:flex-start;gap:10px;line-height:1.6;font-size:13px">
+        <div><strong>1.</strong> Установите <strong>AmneziaVPN</strong>:
+             Android — Play Market, iOS — App Store, Mac — App Store.</div>
+        <div><strong>2.</strong> Здесь: «Устройства» → откройте устройство → нажмите кнопку
+             <strong style="color:var(--blue)">🔗 AmneziaVPN</strong>.</div>
+        <div><strong>3.</strong> Ссылка скопируется в буфер обмена.</div>
+        <div><strong>4.</strong> В AmneziaVPN: нажмите <strong>+</strong> →
+             в поле «Введите ключ» вставьте скопированную ссылку → нажмите «Добавить».</div>
         <div><strong>5.</strong> Включите VPN — готово!</div>
+        <div style="font-size:11px;color:var(--text-dim)">
+          Ключ — это длинная строка начинающаяся с <em>vpn://</em>. Именно её нужно вставить в поле.
+          QR-код для AmneziaVPN не подходит.
+        </div>
       </div>
 
-      <!-- Приложения -->
-      <div class="section-title" style="margin-top:16px">AmneziaWG vs AmneziaVPN</div>
-      <div class="row-card" style="flex-direction:column;align-items:flex-start;gap:8px;font-size:13px;line-height:1.6">
-        <div><strong>AmneziaWG</strong> — быстрый и простой клиент WireGuard с обфускацией.
-             Рекомендуется для большинства пользователей.</div>
-        <div><strong>AmneziaVPN</strong> — более функциональный клиент с поддержкой ссылки vpn://.
-             Позволяет настроить раздельный туннелинг прямо в приложении.</div>
-      </div>
-
-      <!-- Установка по платформам -->
-      <div class="section-title" style="margin-top:16px">Установка по платформам</div>
-      <div class="row-card" style="flex-direction:column;align-items:flex-start;gap:12px;font-size:13px">
+      <!-- DNS -->
+      <div class="section-title" style="margin-top:16px">🌐 DNS — почему это важно</div>
+      <div class="row-card" style="flex-direction:column;align-items:flex-start;gap:10px;font-size:13px;line-height:1.6">
         <div>
-          <strong>Android</strong><br>
-          Play Market → <em>AmneziaVPN</em> или <em>AmneziaWG</em>.<br>
-          После установки: Настройки → DNS → укажите <code style="background:var(--surface2);padding:1px 5px;border-radius:4px">1.1.1.1</code>.
+          Если VPN вдруг перестал подключаться — скорее всего сменился IP сервера, а ваш
+          роутер или провайдер ещё не узнал об этом. DNS на устройстве кэширует старый адрес.<br>
+          <strong>Решение: настроить быстрый DNS прямо на вашем устройстве</strong> (не в приложении VPN).
+        </div>
+        <div style="background:var(--surface2);border-radius:8px;padding:10px 12px;width:100%;box-sizing:border-box">
+          <strong>Основной:</strong>
+          <code style="background:var(--bg);padding:1px 6px;border-radius:4px">1.1.1.1</code>
+          (Cloudflare)&nbsp;&nbsp;
+          <strong>Резервный:</strong>
+          <code style="background:var(--bg);padding:1px 6px;border-radius:4px">1.0.0.1</code>
         </div>
         <div>
-          <strong>iOS / iPhone</strong><br>
-          App Store → <em>AmneziaVPN</em> или <em>AmneziaWG</em>.<br>
-          После установки: Настройки → DNS → <code style="background:var(--surface2);padding:1px 5px;border-radius:4px">1.1.1.1</code>.
+          <strong>📱 Android:</strong><br>
+          Настройки → Подключения → Другие настройки → Частный DNS →
+          ввести <code style="background:var(--surface2);padding:1px 5px;border-radius:4px">one.one.one.one</code><br>
+          <em>Или:</em> удержать Wi-Fi сеть → Изменить → Дополнительно →
+          DNS 1: <code style="background:var(--surface2);padding:1px 5px;border-radius:4px">1.1.1.1</code>,
+          DNS 2: <code style="background:var(--surface2);padding:1px 5px;border-radius:4px">1.0.0.1</code>
         </div>
         <div>
-          <strong>Windows</strong><br>
-          Скачайте AmneziaWG с официального сайта amnezia.org.<br>
-          Добавить туннель → импорт из файла.
+          <strong>🍎 iPhone / iPad:</strong><br>
+          Настройки → Wi-Fi → (i) рядом с сетью → Настроить DNS → Вручную →
+          удалить старые → добавить
+          <code style="background:var(--surface2);padding:1px 5px;border-radius:4px">1.1.1.1</code> и
+          <code style="background:var(--surface2);padding:1px 5px;border-radius:4px">1.0.0.1</code>
         </div>
         <div>
-          <strong>macOS</strong><br>
-          App Store → <em>AmneziaVPN</em>.<br>
-          Или скачайте с amnezia.org и добавьте конфиг.
+          <strong>💻 Windows:</strong><br>
+          Панель управления → Центр управления сетями → Изменить параметры адаптера →
+          ПКМ на Wi-Fi → Свойства → IP версии 4 → Свойства → вручную:
+          <code style="background:var(--surface2);padding:1px 5px;border-radius:4px">1.1.1.1</code> и
+          <code style="background:var(--surface2);padding:1px 5px;border-radius:4px">1.0.0.1</code>
+        </div>
+        <div>
+          <strong>🖥 macOS:</strong><br>
+          Системные настройки → Сеть → Wi-Fi → Дополнительно → DNS →
+          <code style="background:var(--surface2);padding:1px 5px;border-radius:4px">+</code> →
+          добавить <code style="background:var(--surface2);padding:1px 5px;border-radius:4px">1.1.1.1</code> и
+          <code style="background:var(--surface2);padding:1px 5px;border-radius:4px">1.0.0.1</code>
+        </div>
+        <div style="font-size:11px;color:var(--text-dim)">
+          После настройки DNS изменения IP-адресов будут доходить за 2–5 минут вместо нескольких часов.
         </div>
       </div>
 
@@ -684,10 +716,10 @@
       <div class="section-title" style="margin-top:16px">Важно</div>
       <div class="row-card" style="flex-direction:column;align-items:flex-start;gap:8px;font-size:13px;line-height:1.6">
         <div>⚠️ <strong>Одно устройство = один профиль.</strong>
-             Не используйте один .conf на нескольких гаджетах одновременно —
-             подключение будет нестабильным. Создайте отдельное устройство для каждого гаджета.</div>
-        <div>🔧 <strong>Исключения</strong> — позволяют пропускать часть сайтов мимо VPN
-             (например, банки и госуслуги). Настраиваются в карточке устройства → «Исключения».</div>
+             Не используйте один конфиг на нескольких гаджетах — подключение будет нестабильным.
+             Создайте отдельное устройство для каждого гаджета.</div>
+        <div>🔧 <strong>Исключения</strong> — настраиваются в карточке устройства → «Исключения».
+             Позволяют пропускать банки, госуслуги и другие сайты напрямую, минуя VPN.</div>
         <div>🔄 При смене конфига не забудьте <strong>переподключиться</strong> к VPN.</div>
       </div>
 
@@ -742,11 +774,11 @@
     </div>
     <!-- Actions -->
     <div class="modal-actions">
-      <button class="btn btn-green" id="btn-conf">📄 .conf в Telegram</button>
+      <button class="btn btn-ghost" id="btn-conf">📄 .conf в Telegram</button>
       <button class="btn btn-ghost" id="btn-qr">📱 QR-код</button>
     </div>
     <div class="modal-actions">
-      <button class="btn btn-ghost" id="btn-vpnlink">🔗 AmneziaVPN</button>
+      <button class="btn btn-blue" id="btn-vpnlink">🔗 AmneziaVPN</button>
       <button class="btn btn-ghost" id="btn-sites">🔧 Исключения</button>
     </div>
     <div class="modal-actions" style="margin-top:4px">
