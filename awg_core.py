@@ -18,6 +18,7 @@ BACKUP_DIR       = "/etc/amnezia/amneziawg/backups"
 MAINTENANCE_FILE = "/etc/amnezia/amneziawg/maintenance.json"
 BW_LOG_FILE      = "/var/log/awg-bw.log"
 BW_PEAK_FILE     = "/etc/amnezia/amneziawg/bw_peak.json"
+EXCL_EXT         = ".excl.json"
 
 logger = logging.getLogger(__name__)
 
@@ -310,7 +311,7 @@ def remove_client_from_awg(name: str):
     if pub:
         subprocess.run(["awg", "set", AWG_IFACE, "peer", pub, "remove"])
     _remove_peer_from_conf(name)
-    for ext in [".conf", ".pub", ".vpn", ".vpnlink"]:
+    for ext in [".conf", ".pub", ".vpn", ".vpnlink", EXCL_EXT]:
         p = f"{CLIENTS_DIR}/{name}{ext}"
         if os.path.exists(p):
             os.remove(p)
@@ -487,6 +488,24 @@ def save_bw_peak(data: dict):
             json.dump(data, f)
     except Exception:
         pass
+
+def load_client_excl(name: str) -> dict | None:
+    """Возвращает dict исключений клиента или None если файл не существует."""
+    path = f"{CLIENTS_DIR}/{name}{EXCL_EXT}"
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return None
+    except Exception:
+        logger.warning(f"load_client_excl({name}): broken file, ignoring")
+        return None
+
+def save_client_excl(name: str, data: dict):
+    """Сохраняет исключения клиента в файл .excl.json."""
+    path = f"{CLIENTS_DIR}/{name}{EXCL_EXT}"
+    with open(path, "w") as f:
+        json.dump(data, f)
 
 def _parse_log_line(line: str) -> dict | None:
     """Парсит строку лога. Возвращает dict с полями dt, awg_down, awg_up, eth_down, eth_up."""

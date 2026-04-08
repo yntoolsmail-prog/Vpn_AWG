@@ -28,8 +28,8 @@ from awg_core import (
     create_backup, create_client, fmt_bytes,
     get_all_clients, get_awg_dump, get_client_keys, get_client_pub,
     get_maintenance, get_system_stats, get_user_clients, get_user_name,
-    is_approved, load_users, make_vpn_link, make_wg_conf, remove_client_from_awg,
-    save_users, set_maintenance,
+    is_approved, load_client_excl, load_users, make_vpn_link, make_wg_conf,
+    remove_client_from_awg, save_client_excl, save_users, set_maintenance,
 )
 from sites_data import CATEGORIES, DEFAULT_SELECTED, SITES
 
@@ -153,15 +153,27 @@ def _get_conf_text(name: str) -> str | None:
         return f.read()
 
 
-def _make_conf_for_endpoint(name: str, endpoint: str) -> str | None:
-    """Генерирует .conf на лету для заданного эндпоинта."""
+def _make_conf_for_endpoint(name: str, endpoint: str, allowed_ips: str = "0.0.0.0/0") -> str | None:
+    """Генерирует .conf на лету для заданного эндпоинта и AllowedIPs."""
     keys = get_client_keys(name)
     if not keys:
         return None
     return make_wg_conf(
         keys["priv"], keys["ip"], keys["psk"], keys["obfs"],
-        endpoint=endpoint, allowed_ips="0.0.0.0/0",
+        endpoint=endpoint, allowed_ips=allowed_ips,
     )
+
+
+def _resolve_allowed_ips(name: str, use_excl: bool) -> str:
+    """Возвращает AllowedIPs для .conf: если use_excl=True и есть .excl.json — применяем исключения."""
+    if not use_excl:
+        return "0.0.0.0/0"
+    excl = load_client_excl(name)
+    if not excl:
+        return "0.0.0.0/0"
+    selected = set(excl.get("sites", [])) | set()
+    custom   = excl.get("custom_domains", [])
+    return build_allowed_ips(selected, extra_domains=custom)
 
 
 def _send_file_via_bot(chat_id: int, filename: str, content: str,
@@ -313,8 +325,10 @@ def device_qr(user_id, name):
     username = get_user_name(user_id)
     if user_id != ADMIN_ID and not name.startswith(username + "."):
         return jsonify({"error": "Нет доступа"}), 403
-    endpoint  = request.args.get("endpoint") or SERVER_ENDPOINT
-    conf_text = _make_conf_for_endpoint(name, endpoint)
+    endpoint     = request.args.get("endpoint") or SERVER_ENDPOINT
+    use_excl     = request.args.get("use_excl", "").lower() in ("1", "true")
+    allowed_ips  = _resolve_allowed_ips(name, use_excl)
+    conf_text    = _make_conf_for_endpoint(name, endpoint, allowed_ips)
     if conf_text is None:
         return jsonify({"error": "Устройство не найдено"}), 404
     try:
@@ -356,9 +370,11 @@ def device_send(user_id, name):
     username = get_user_name(user_id)
     if user_id != ADMIN_ID and not name.startswith(username + "."):
         return jsonify({"error": "Нет доступа"}), 403
-    body      = request.get_json(silent=True) or {}
-    endpoint  = body.get("endpoint") or SERVER_ENDPOINT
-    conf_text = _make_conf_for_endpoint(name, endpoint)
+    body        = request.get_json(silent=True) or {}
+    endpoint    = body.get("endpoint") or SERVER_ENDPOINT
+    use_excl    = bool(body.get("use_excl", False))
+    allowed_ips = _resolve_allowed_ips(name, use_excl)
+    conf_text   = _make_conf_for_endpoint(name, endpoint, allowed_ips)
     if conf_text is None:
         return jsonify({"error": "Устройство не найдено"}), 404
     dev_part = name.split(".", 1)[1] if "." in name else name
@@ -414,6 +430,42 @@ def device_sites_put(user_id, name):
         with open(f"{CLIENTS_DIR}/{name}.conf", "w") as f:
             f.write(new_conf)
         return jsonify({"ok": True, "allowed_ips": allowed_ips})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── Исключения клиента (.excl.json) ──────────────────────────────────────────
+
+@app.route("/api/devices/<path:name>/excl", methods=["GET"])
+@require_auth
+def device_excl_get(user_id, name):
+    """Возвращает сохранённые исключения клиента."""
+    username = get_user_name(user_id)
+    if user_id != ADMIN_ID and not name.startswith(username + "."):
+        return jsonify({"error": "Нет доступа"}), 403
+    if not os.path.exists(f"{CLIENTS_DIR}/{name}.conf"):
+        return jsonify({"error": "Не найдено"}), 404
+    excl = load_client_excl(name) or {"sites": [], "custom_domains": []}
+    return jsonify(excl)
+
+
+@app.route("/api/devices/<path:name>/excl", methods=["PUT"])
+@require_auth
+def device_excl_put(user_id, name):
+    """Сохраняет исключения клиента (не меняет сам .conf — применяется при создании QR/conf)."""
+    username = get_user_name(user_id)
+    if user_id != ADMIN_ID and not name.startswith(username + "."):
+        return jsonify({"error": "Нет доступа"}), 403
+    if not os.path.exists(f"{CLIENTS_DIR}/{name}.conf"):
+        return jsonify({"error": "Не найдено"}), 404
+    body = request.get_json(silent=True) or {}
+    data = {
+        "sites":          list(body.get("sites", [])),
+        "custom_domains": list(body.get("custom_domains", [])),
+    }
+    try:
+        save_client_excl(name, data)
+        return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

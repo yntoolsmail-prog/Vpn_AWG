@@ -429,6 +429,8 @@
   /* Первые два таба (monitor, devices) всегда видны */
   .nav-item:nth-child(1),
   .nav-item:nth-child(2) { display: flex; }
+  /* user-only скрыт по умолчанию, показывается JS для не-админов */
+  .nav-item.user-only { display: none; }
   .nav-item.active { color: var(--green); }
   .nav-icon { font-size: 20px; line-height: 1; }
   .nav-badge {
@@ -619,6 +621,79 @@
     </div>
   </div>
 
+  <!-- ══ ПОМОЩЬ (non-admin) ══ -->
+  <div class="page user-only" id="page-help">
+    <div class="header">
+      <div class="header-left">
+        <div class="header-title">Помощь</div>
+        <div class="header-subtitle">подключение · настройка · вопросы</div>
+      </div>
+    </div>
+    <div style="padding:0 4px 100px">
+
+      <!-- Шаги подключения -->
+      <div class="section-title">Как подключиться</div>
+      <div class="row-card" style="flex-direction:column;align-items:flex-start;gap:10px;line-height:1.6;font-size:13px">
+        <div><strong>1.</strong> Установите приложение <strong>AmneziaVPN</strong>
+             (рекомендуется) или <strong>AmneziaWG</strong> на ваш гаджет.</div>
+        <div><strong>2.</strong> Перейдите на вкладку «Устройства» и нажмите <strong>+</strong>.
+             Введите название (например, Phone).</div>
+        <div><strong>3.</strong> Откройте созданное устройство → нажмите
+             <strong>.conf в Telegram</strong> — файл придёт в этот чат.
+             Или нажмите <strong>QR-код</strong> и отсканируйте в приложении.</div>
+        <div><strong>4.</strong> В AmneziaWG: Добавить → из файла. В AmneziaVPN: нажмите
+             «+» → добавить по файлу или QR.</div>
+        <div><strong>5.</strong> Включите VPN — готово!</div>
+      </div>
+
+      <!-- Приложения -->
+      <div class="section-title" style="margin-top:16px">AmneziaWG vs AmneziaVPN</div>
+      <div class="row-card" style="flex-direction:column;align-items:flex-start;gap:8px;font-size:13px;line-height:1.6">
+        <div><strong>AmneziaWG</strong> — быстрый и простой клиент WireGuard с обфускацией.
+             Рекомендуется для большинства пользователей.</div>
+        <div><strong>AmneziaVPN</strong> — более функциональный клиент с поддержкой ссылки vpn://.
+             Позволяет настроить раздельный туннелинг прямо в приложении.</div>
+      </div>
+
+      <!-- Установка по платформам -->
+      <div class="section-title" style="margin-top:16px">Установка по платформам</div>
+      <div class="row-card" style="flex-direction:column;align-items:flex-start;gap:12px;font-size:13px">
+        <div>
+          <strong>Android</strong><br>
+          Play Market → <em>AmneziaVPN</em> или <em>AmneziaWG</em>.<br>
+          После установки: Настройки → DNS → укажите <code style="background:var(--surface2);padding:1px 5px;border-radius:4px">1.1.1.1</code>.
+        </div>
+        <div>
+          <strong>iOS / iPhone</strong><br>
+          App Store → <em>AmneziaVPN</em> или <em>AmneziaWG</em>.<br>
+          После установки: Настройки → DNS → <code style="background:var(--surface2);padding:1px 5px;border-radius:4px">1.1.1.1</code>.
+        </div>
+        <div>
+          <strong>Windows</strong><br>
+          Скачайте AmneziaWG с официального сайта amnezia.org.<br>
+          Добавить туннель → импорт из файла.
+        </div>
+        <div>
+          <strong>macOS</strong><br>
+          App Store → <em>AmneziaVPN</em>.<br>
+          Или скачайте с amnezia.org и добавьте конфиг.
+        </div>
+      </div>
+
+      <!-- Важное -->
+      <div class="section-title" style="margin-top:16px">Важно</div>
+      <div class="row-card" style="flex-direction:column;align-items:flex-start;gap:8px;font-size:13px;line-height:1.6">
+        <div>⚠️ <strong>Одно устройство = один профиль.</strong>
+             Не используйте один .conf на нескольких гаджетах одновременно —
+             подключение будет нестабильным. Создайте отдельное устройство для каждого гаджета.</div>
+        <div>🔧 <strong>Исключения</strong> — позволяют пропускать часть сайтов мимо VPN
+             (например, банки и госуслуги). Настраиваются в карточке устройства → «Исключения».</div>
+        <div>🔄 При смене конфига не забудьте <strong>переподключиться</strong> к VPN.</div>
+      </div>
+
+    </div>
+  </div>
+
 </div><!-- .app -->
 
 <!-- ── FAB ── -->
@@ -641,6 +716,10 @@
   <div class="nav-item admin-only" id="nav-settings" onclick="goto('settings')">
     <span class="nav-icon">⚙️</span>
     <span>Настройки</span>
+  </div>
+  <div class="nav-item user-only" id="nav-help" onclick="goto('help')">
+    <span class="nav-icon">📖</span>
+    <span>Помощь</span>
   </div>
 </nav>
 
@@ -704,16 +783,17 @@
     <div class="modal-title">Тип подключения</div>
     <div style="font-size:13px;color:var(--text-mid);line-height:1.7;margin-bottom:16px">
       <p style="margin-bottom:10px">
-        <strong style="color:var(--green)">Домен</strong> — подключение через доменное имя сервера.
-        Работает в большинстве случаев. Если домен заблокирован у провайдера — VPN может не соединиться.
+        <strong style="color:var(--green)">Домен</strong> — рекомендуемый вариант.
+        Подключается по доменному имени сервера: стабильно работает при смене IP
+        и не требует обновления конфига.
       </p>
       <p style="margin-bottom:10px">
-        <strong style="color:var(--blue)">IP-адрес</strong> — прямое подключение по IP без DNS.
-        Устойчивее к блокировкам по домену, но сам IP тоже может быть заблокирован.
+        <strong style="color:var(--blue)">IP-адрес</strong> — прямое подключение без DNS.
+        Подходит если DNS-резолвинг недоступен или очень медленный.
       </p>
       <p>
         <strong style="color:var(--amber)">Резервный</strong> — альтернативный адрес.
-        Используйте если основной не работает.
+        Используйте если основной вариант не устанавливает соединение.
       </p>
     </div>
     <div class="modal-actions">
@@ -730,6 +810,7 @@
     <div class="qr-wrap"><img id="qr-img" src="" alt=""></div>
     <div style="text-align:center;font-size:11px;color:var(--text-dim);margin-bottom:4px">Отсканируйте в приложении AmneziaVPN</div>
     <div class="modal-actions">
+      <button class="btn btn-secondary" id="btn-qr-share" onclick="shareQR()">📤 Поделиться</button>
       <button class="btn btn-ghost" onclick="closeModal('modal-qr')">Закрыть</button>
     </div>
   </div>
@@ -779,6 +860,10 @@
       </div>
       <div id="custom-domains-list" style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px"></div>
     </div>
+    <div style="font-size:11px;color:var(--text-dim);line-height:1.5;margin:10px 0 4px">
+      После сохранения включите «Применить исключения» в карточке устройства,
+      затем заново загрузите .conf или QR.
+    </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeModal('modal-sites')">Отмена</button>
       <button class="btn btn-green" id="btn-sites-submit" onclick="submitSites()">Сохранить</button>
@@ -821,6 +906,13 @@ function _pageLoad(tab) {
 function revealAdminUI() {
   // Показываем admin-only nav-items и pages (pages управляются .page.active)
   document.querySelectorAll('.nav-item.admin-only').forEach(el => el.style.display = 'flex');
+  // Скрываем user-only (Help) для админа — не нужна
+  document.querySelectorAll('.nav-item.user-only').forEach(el => el.style.display = 'none');
+}
+
+function revealUserUI() {
+  // Показываем user-only nav-items для не-админов
+  document.querySelectorAll('.nav-item.user-only').forEach(el => el.style.display = 'flex');
 }
 
 function setBadge(navId, count) {
@@ -937,19 +1029,57 @@ function _getSelectedEndpoint() {
 }
 
 // ── Детали устройства ──
-function openDeviceDetail(d) {
+let _currentExclState = null; // {sites:[], custom_domains:[]} или null
+
+async function openDeviceDetail(d) {
   const devName = d.name.includes('.') ? d.name.split('.').slice(1).join('.') : d.name;
   const hs      = fmtHandshake(d.handshake);
   const stColor = d.online ? 'var(--green)' : hs.cls === 'recent' ? 'var(--amber)' : 'var(--text-dim)';
   const stText  = d.online ? `онлайн · ${hs.text}` : `оффлайн · ${hs.text}`;
 
-  document.getElementById('modal-device-title').textContent = devName;
+  // Загружаем исключения
+  _currentExclState = null;
+  try {
+    const r = await API(`/api/devices/${encodeURIComponent(d.name)}/excl`);
+    if (r.ok) _currentExclState = await r.json();
+  } catch(e) { /* не критично */ }
+
+  const hasExcl = _currentExclState && (_currentExclState.sites?.length || _currentExclState.custom_domains?.length);
+  const exclBadge = hasExcl
+    ? `<span style="font-size:11px;background:var(--green-dim);color:var(--green);
+                    border:1px solid var(--green);border-radius:10px;padding:2px 8px;
+                    margin-left:8px">исключения ✓</span>` : '';
+
+  document.getElementById('modal-device-title').innerHTML = _esc(devName) + exclBadge;
   document.getElementById('modal-device-body').innerHTML = `
     <div class="info-row"><span class="info-label">Статус</span>
       <span style="color:${stColor}">● ${_esc(stText)}</span></div>
     <div class="info-row"><span class="info-label">Трафик</span>
       <span><span style="color:var(--blue)">↓${_esc(d.client_download)}</span>
-            &nbsp;<span style="color:var(--green)">↑${_esc(d.client_upload)}</span></span></div>`;
+            &nbsp;<span style="color:var(--green)">↑${_esc(d.client_upload)}</span></span></div>
+    ${hasExcl ? `
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;
+                  color:var(--text-mid);margin:8px 0 2px;cursor:pointer">
+      <input type="checkbox" id="chk-use-excl" checked
+             style="width:16px;height:16px;accent-color:var(--green);flex-shrink:0">
+      Применить исключения к .conf / QR
+    </label>` : ''}
+    <div style="margin-top:10px">
+      <div style="cursor:pointer;font-size:12px;color:var(--text-dim);user-select:none"
+           onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none';
+                    this.textContent=this.nextElementSibling.style.display==='none'?'💡 Как использовать ▸':'💡 Как использовать ▾'">
+        💡 Как использовать ▸
+      </div>
+      <div style="display:none;font-size:12px;color:var(--text-dim);line-height:1.6;margin-top:6px">
+        <p style="margin:0 0 6px"><strong>1.</strong> Выберите тип подключения (рекомендуем «Домен»).</p>
+        <p style="margin:0 0 6px"><strong>2.</strong> Нажмите <em>.conf в Telegram</em> — файл придёт в бот.
+           Откройте AmneziaWG → Добавить → из файла.</p>
+        <p style="margin:0 0 6px"><strong>3.</strong> Или нажмите <em>QR-код</em> — отсканируйте в AmneziaWG.</p>
+        <p style="margin:0 0 6px"><strong>4.</strong> Через <em>Исключения</em> настройте, какие сайты
+           идут через VPN. При галочке «Применить» — исключения встроены в сам конфиг.</p>
+        <p style="margin:0"><em>Одно устройство = один профиль. Для каждого гаджета создайте отдельное устройство.</em></p>
+      </div>
+    </div>`;
 
   // Сбрасываем endpoint-selector и заполняем
   const epEl = document.getElementById('modal-device-endpoints');
@@ -967,13 +1097,14 @@ function openDeviceDetail(d) {
 // ── Отправить .conf в Telegram ──
 async function sendConf(name) {
   const endpoint = _getSelectedEndpoint();
+  const useExcl  = !!(document.getElementById('chk-use-excl')?.checked);
   const btn = document.getElementById('btn-conf');
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Отправка…';
   try {
     const resp = await API(`/api/devices/${encodeURIComponent(name)}/send`, {
       method: 'POST',
-      body: JSON.stringify({ endpoint }),
+      body: JSON.stringify({ endpoint, use_excl: useExcl }),
     });
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || 'Ошибка');
@@ -1009,12 +1140,14 @@ async function showVpnLink(name) {
 // ── QR код ──
 async function showQR(name) {
   const endpoint = _getSelectedEndpoint();
+  const useExcl  = !!(document.getElementById('chk-use-excl')?.checked);
   closeModal('modal-device');
   const img = document.getElementById('qr-img');
   img.src = ''; img.style.opacity = '.3';
   openModal('modal-qr');
   try {
-    const resp = await API(`/api/devices/${encodeURIComponent(name)}/qr?endpoint=${encodeURIComponent(endpoint)}`);
+    const qs = `endpoint=${encodeURIComponent(endpoint)}&use_excl=${useExcl ? '1' : '0'}`;
+    const resp = await API(`/api/devices/${encodeURIComponent(name)}/qr?${qs}`);
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || 'Ошибка');
     img.src = data.qr;
@@ -1022,6 +1155,24 @@ async function showQR(name) {
   } catch(e) {
     img.alt = 'Ошибка: ' + e.message;
     img.style.opacity = '1';
+  }
+}
+
+// ── Поделиться QR ──
+async function shareQR() {
+  const img = document.getElementById('qr-img');
+  if (!img.src || img.style.opacity === '.3') return;
+  if (!navigator.share) {
+    tg?.showAlert?.('Функция недоступна в вашем браузере');
+    return;
+  }
+  try {
+    const resp = await fetch(img.src);
+    const blob = await resp.blob();
+    const file = new File([blob], 'vpn-qr.png', { type: 'image/png' });
+    await navigator.share({ files: [file], title: 'VPN QR-код' });
+  } catch(e) {
+    if (e.name !== 'AbortError') tg?.showAlert?.('Ошибка: ' + e.message);
   }
 }
 
@@ -1088,13 +1239,23 @@ async function openSitesModal(name) {
   if (!_sites) {
     try { const r = await API('/api/sites'); _sites = await r.json(); } catch(e) { _sites = []; }
   }
+
+  // Загружаем текущие исключения клиента
+  let savedExcl = null;
+  try {
+    const r = await API(`/api/devices/${encodeURIComponent(name)}/excl`);
+    if (r.ok) savedExcl = await r.json();
+  } catch(e) { /* не критично */ }
+  const savedSites   = new Set(savedExcl?.sites || []);
+  const savedDomains = savedExcl?.custom_domains || [];
+
   const devName = name.includes('.') ? name.split('.').slice(1).join('.') : name;
   document.getElementById('sites-modal-title').textContent = devName + ' · исключения';
   document.getElementById('sites-modal-name').value = name;
-  // Сайты по умолчанию все OFF (кроме locked)
-  document.getElementById('edit-sites-list').innerHTML = renderSitesGrid(_sites, false);
-  // Сброс кастомных доменов
-  _customDomains = [];
+  // Рендерим сетку с сохранёнными значениями
+  document.getElementById('edit-sites-list').innerHTML = renderSitesGrid(_sites, false, savedSites);
+  // Кастомные домены
+  _customDomains = [...savedDomains];
   document.getElementById('custom-domain-input').value = '';
   renderCustomDomains();
   openModal('modal-sites');
@@ -1136,13 +1297,13 @@ async function submitSites() {
   btn.disabled   = true;
   btn.innerHTML  = '<span class="spinner"></span>Сохранение…';
   try {
-    const resp = await API(`/api/devices/${encodeURIComponent(name)}/sites`, {
+    const resp = await API(`/api/devices/${encodeURIComponent(name)}/excl`, {
       method: 'PUT',
       body: JSON.stringify({ sites: selected, custom_domains: _customDomains }),
     });
     if (!resp.ok) { const e = await resp.json(); throw new Error(e.error); }
     closeModal('modal-sites');
-    tg?.showAlert?.('Сохранено! Переподключитесь к VPN.');
+    tg?.showAlert?.('✓ Исключения сохранены!\nПри следующей загрузке .conf или QR они будут применены (если включена галочка).');
   } catch(e) {
     tg?.showAlert?.('Ошибка: ' + e.message) || alert('Ошибка: ' + e.message);
   } finally {
@@ -1151,16 +1312,20 @@ async function submitSites() {
 }
 
 // ── Общий рендер грида сайтов ──
-function renderSitesGrid(sitesData, defaultOn) {
+// selectedSet — Set ключей для предварительного выбора (опционально)
+function renderSitesGrid(sitesData, defaultOn, selectedSet) {
   return sitesData.map(cat => `
     <div class="cat-label">${cat.category}</div>
     <div class="sites-grid">
-      ${cat.sites.map(s => `
-        <div class="site-item ${(defaultOn && !s.locked) || s.locked ? 'on' : ''} ${s.locked ? 'locked' : ''}"
+      ${cat.sites.map(s => {
+        const on = s.locked || (selectedSet ? selectedSet.has(s.key) : defaultOn && !s.locked);
+        return `
+        <div class="site-item ${on ? 'on' : ''} ${s.locked ? 'locked' : ''}"
              data-key="${s.key}" onclick="toggleSite(this)">
           <div class="site-cb"></div>
           <span>${s.emoji} ${_esc(s.name)}</span>
-        </div>`).join('')}
+        </div>`;
+      }).join('')}
     </div>`).join('');
 }
 
@@ -1319,21 +1484,19 @@ async function loadSettings() {
   const el = document.getElementById('settings-content');
   el.innerHTML = '<div class="placeholder"><span class="spinner"></span>Загрузка...</div>';
   try {
-    const [rSettings, rMaint, rBackups] = await Promise.all([
+    const [rSettings, rBackups] = await Promise.all([
       API('/api/settings'),
-      API('/api/maintenance'),
       API('/api/backups'),
     ]);
     const settings = rSettings.ok ? await rSettings.json() : {};
-    const maint    = rMaint.ok    ? await rMaint.json()    : {};
     const backups  = rBackups.ok  ? await rBackups.json()  : [];
-    renderSettings(settings, maint, backups);
+    renderSettings(settings, backups);
   } catch(e) {
     el.innerHTML = `<div class="error-card">⚠ ${e.message}</div>`;
   }
 }
 
-function renderSettings(s, maint, backups) {
+function renderSettings(s, backups) {
   const el = document.getElementById('settings-content');
 
   // ── Сервер ──
@@ -1362,20 +1525,6 @@ function renderSettings(s, maint, backups) {
       </div>
     </div>`;
 
-  // ── Обслуживание ──
-  const maintOn = !!maint.enabled;
-  const maintBlock = `
-    <div class="section-title">обслуживание</div>
-    <div class="row-card" style="margin-bottom:8px">
-      <div class="setting-row">
-        <div>
-          <div class="setting-label">Режим обслуживания</div>
-          <div class="setting-sub">отключить новые подключения</div>
-        </div>
-        <div class="toggle ${maintOn ? 'on' : ''}" id="maint-toggle" onclick="toggleMaintenance(this)"></div>
-      </div>
-    </div>`;
-
   // ── Бэкапы ──
   const backupRows = backups.length
     ? backups.map(b => `
@@ -1400,21 +1549,7 @@ function renderSettings(s, maint, backups) {
     <button class="btn btn-green" style="width:100%;padding:12px;font-size:14px"
             id="btn-backup-create" onclick="createBackup()">+ Создать бэкап</button>`;
 
-  el.innerHTML = serverBlock + maintBlock + backupBlock;
-}
-
-// ── Maintenance toggle ──
-async function toggleMaintenance(el) {
-  const newState = !el.classList.contains('on');
-  el.classList.toggle('on');
-  const resp = await API('/api/maintenance', {
-    method: 'POST',
-    body: JSON.stringify({ enabled: newState }),
-  });
-  if (!resp.ok) {
-    el.classList.toggle('on'); // откат
-    tg?.showAlert?.('Ошибка сохранения');
-  }
+  el.innerHTML = serverBlock + backupBlock;
 }
 
 // ── Создать бэкап ──
@@ -1727,7 +1862,7 @@ function render(d) {
     buildDOM(d);
     domBuilt = true;
     lastIsAdmin = d.is_admin;
-    if (d.is_admin) revealAdminUI();
+    if (d.is_admin) revealAdminUI(); else revealUserUI();
   }
   updateValues(d);
 

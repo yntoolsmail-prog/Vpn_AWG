@@ -1111,6 +1111,97 @@ analyze_configs() {
 }
 
 # =============================================================================
+# ПРОВЕРКА ЦЕЛОСТНОСТИ ПИРОВ
+# =============================================================================
+
+check_peer_integrity() {
+    show_header
+    echo -e "${BOLD}  Проверка целостности клиентов${NC}"
+    echo ""
+
+    # Получаем публичные ключи из runtime AWG
+    if ! ip link show "${VPN_IFACE}" &>/dev/null; then
+        echo -e "  ${RED}Интерфейс ${VPN_IFACE} не активен.${NC}"
+        press_enter; return
+    fi
+
+    local AWG_KEYS
+    AWG_KEYS=$(awg show "${VPN_IFACE}" dump 2>/dev/null | tail -n +2 | awk '{print $1}')
+    if [[ -z "$AWG_KEYS" ]]; then
+        echo -e "  ${YELLOW}AWG не вернул ни одного пира.${NC}"
+        press_enter; return
+    fi
+
+    local CONFS=( "$CLIENTS_DIR"/*.conf )
+    if [[ ! -f "${CONFS[0]}" ]]; then
+        echo -e "  ${YELLOW}Клиентских файлов не найдено.${NC}"
+        press_enter; return
+    fi
+
+    local OK=0 MISSING_IN_AWG=0 MISSING_IN_FILES=0
+    local ERRORS=()
+
+    # Проверяем: каждый .pub файл должен быть в AWG runtime
+    for PUB_FILE in "$CLIENTS_DIR"/*.pub; do
+        [[ -f "$PUB_FILE" ]] || continue
+        local CLIENT_NAME PUB_KEY
+        CLIENT_NAME=$(basename "$PUB_FILE" .pub)
+        PUB_KEY=$(cat "$PUB_FILE")
+        if echo "$AWG_KEYS" | grep -qF "$PUB_KEY"; then
+            ((OK++))
+        else
+            ((MISSING_IN_AWG++))
+            ERRORS+=("${RED}  ✗ [файл есть, AWG нет]${NC} ${CLIENT_NAME}")
+        fi
+    done
+
+    # Проверяем: каждый пир в AWG должен соответствовать .pub файлу
+    while IFS= read -r KEY; do
+        local FOUND=0
+        for PUB_FILE in "$CLIENTS_DIR"/*.pub; do
+            [[ -f "$PUB_FILE" ]] || continue
+            if [[ "$(cat "$PUB_FILE")" == "$KEY" ]]; then
+                FOUND=1; break
+            fi
+        done
+        if [[ "$FOUND" -eq 0 ]]; then
+            ((MISSING_IN_FILES++))
+            ERRORS+=("${YELLOW}  ✗ [AWG есть, файла нет]${NC} ${KEY:0:24}...")
+        fi
+    done <<< "$AWG_KEYS"
+
+    # Итоги
+    local TOTAL_FILES TOTAL_AWG
+    TOTAL_FILES=$(ls "$CLIENTS_DIR"/*.pub 2>/dev/null | wc -l)
+    TOTAL_AWG=$(echo "$AWG_KEYS" | wc -l)
+
+    echo -e "  Файлов .pub: ${CYAN}${TOTAL_FILES}${NC}   Пиров в AWG: ${CYAN}${TOTAL_AWG}${NC}"
+    echo ""
+
+    if [[ "${#ERRORS[@]}" -eq 0 ]]; then
+        echo -e "  ${GREEN}✓ Всё в порядке — файлы и AWG полностью совпадают.${NC}"
+    else
+        echo -e "  ${RED}Обнаружены расхождения (${#ERRORS[@]}):${NC}"
+        echo ""
+        for ERR in "${ERRORS[@]}"; do
+            echo -e "$ERR"
+        done
+        echo ""
+        if [[ "$MISSING_IN_AWG" -gt 0 ]]; then
+            echo -e "  ${YELLOW}[!] Клиенты выше есть в файлах, но отсутствуют в AWG."
+            echo -e "      Возможно, awg0.conf рассинхронизирован. Перезапустите AWG или"
+            echo -e "      пересоздайте клиента.${NC}"
+        fi
+        if [[ "$MISSING_IN_FILES" -gt 0 ]]; then
+            echo -e "  ${YELLOW}[!] Пиры выше есть в AWG, но .pub файл не найден."
+            echo -e "      Удалите лишний пир вручную: awg set ${VPN_IFACE} peer <pubkey> remove${NC}"
+        fi
+    fi
+    echo ""
+    press_enter
+}
+
+# =============================================================================
 # ГЛАВНОЕ МЕНЮ
 # =============================================================================
 
@@ -1142,6 +1233,7 @@ main_menu() {
         echo "  9) Полный диагностический отчёт"
         echo " 10) Анализ конфигов клиентов"
         echo " 11) Просмотр предыдущих диагностик"
+        echo " 12) Проверить целостность клиентов"
         echo ""
         echo "  0) Выход"
         echo ""
@@ -1159,6 +1251,7 @@ main_menu() {
             9)  run_diagnostics ;;
             10) analyze_configs ;;
             11) view_old_diagnostics ;;
+            12) check_peer_integrity ;;
             0|"")  echo ""; exit 0 ;;
             *)  echo -e "  ${RED}Неверный выбор${NC}"; sleep 1 ;;
         esac
