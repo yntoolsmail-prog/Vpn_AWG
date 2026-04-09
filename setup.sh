@@ -362,6 +362,11 @@ EOF2
     echo -e "  ${YELLOW}Готово!${NC} Команды появятся в кнопке «/» рядом с полем ввода."
     echo -e "  ${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
+
+    # Перезапускаем бота чтобы он подхватил TMA_URL из server.env
+    if systemctl is-active --quiet awg-bot 2>/dev/null; then
+        systemctl restart awg-bot && ok "awg-bot перезапущен с новым TMA_URL"
+    fi
 }
 
 # ── Опциональная установка TMA ────────────────────────────────────────────────
