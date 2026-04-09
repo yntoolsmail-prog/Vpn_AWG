@@ -848,6 +848,7 @@
     <div class="modal-title">QR код</div>
     <div class="qr-wrap"><img id="qr-img" src="" alt=""></div>
     <div style="text-align:center;font-size:11px;color:var(--text-dim);margin-bottom:4px">Отсканируйте в приложении AmneziaWG</div>
+    <div id="qr-note" style="text-align:center;font-size:11px;padding:4px 8px;min-height:16px"></div>
     <div class="modal-actions">
       <button class="btn btn-secondary" id="btn-qr-share" onclick="shareQR()">📤 Отправить в Telegram</button>
       <button class="btn btn-ghost" onclick="closeModal('modal-qr')">Закрыть</button>
@@ -1212,6 +1213,8 @@ async function showQR(name) {
   const img = document.getElementById('qr-img');
   img.src = ''; img.style.opacity = '.3';
   openModal('modal-qr');
+  const note = document.getElementById('qr-note');
+  if (note) note.textContent = '';
   try {
     const qs = `endpoint=${encodeURIComponent(endpoint)}&use_excl=${useExcl ? '1' : '0'}`;
     const resp = await API(`/api/devices/${encodeURIComponent(name)}/qr?${qs}`);
@@ -1219,6 +1222,10 @@ async function showQR(name) {
     if (!resp.ok) throw new Error(data.error || 'Ошибка');
     img.src = data.qr;
     img.style.opacity = '1';
+    if (data.too_large && note) {
+      note.textContent = 'ℹ️ QR без исключений — конфиг слишком большой. Используйте «.conf в Telegram».';
+      note.style.color = 'var(--yellow, #f59e0b)';
+    }
   } catch(e) {
     img.alt = 'Ошибка: ' + e.message;
     img.style.opacity = '1';
