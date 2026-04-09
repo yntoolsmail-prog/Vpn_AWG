@@ -441,13 +441,18 @@ def _tma_button() -> InlineKeyboardButton | None:
     if not TMA_URL:
         return None
     if TMA_URL.startswith("https://"):
-        return InlineKeyboardButton("🖥 Открыть панель управления", web_app=WebAppInfo(url=TMA_URL))
-    return InlineKeyboardButton("🖥 Открыть панель управления", url=TMA_URL)
+        return InlineKeyboardButton("▶️ ОТКРЫТЬ VPN 🌐", web_app=WebAppInfo(url=TMA_URL))
+    return InlineKeyboardButton("▶️ ОТКРЫТЬ VPN 🌐", url=TMA_URL)
 
 
 async def show_start_screen(msg, user_id: int, edit: bool = False):
-    """Минималистичный стартовый экран с живой статистикой и кнопкой TMA."""
+    """Стартовый экран: для пользователей — единое меню, для админа — статус + TMA."""
     is_admin = (user_id == ADMIN_ID)
+
+    # Для обычных пользователей — единое главное меню без дублирования
+    if not is_admin:
+        await main_menu(msg, user_id, edit=edit)
+        return
 
     peers  = get_awg_dump()
     now    = int(time.time())
@@ -458,26 +463,19 @@ async def show_start_screen(msg, user_id: int, edit: bool = False):
     ram_pct = round(sys_s["ram_used"] / sys_s["ram_total"] * 100) if sys_s.get("ram_total") else 0
 
     status = (
-        f"🔐 {'AmneziaWG' if is_admin else 'Семейный VPN'}\n"
+        f"🔐 AmneziaWG\n"
         f"━━━━━━━━━━━━━━\n"
         f"🟢 Онлайн: {online} из {total}\n"
         f"💾 RAM: {ram_pct}%  💿 Диск: {sys_s['disk_pct']}%\n"
         f"⬇️ {bw.get('awg_down', 0)} / ⬆️ {bw.get('awg_up', 0)} Mbit/s"
     )
 
-    if is_admin:
-        users         = load_users()
-        pending_count = len(users["pending"])
-        pending_note  = f"  🔴 Ожидают: {pending_count}" if pending_count else ""
-        greeting = (
-            f"\n\n📱 Клиентов: {total} | 👥 Польз.: {len(users['approved'])}{pending_note}"
-        )
-    else:
-        my_clients   = get_user_clients(user_id)
-        display_name = get_user_display(user_id)
-        n = len(my_clients)
-        word = "устройство" if n == 1 else ("устройства" if 2 <= n <= 4 else "устройств")
-        greeting = f"\n\n👋 Привет, {_md(display_name)}! У тебя {n} {word}."
+    users         = load_users()
+    pending_count = len(users["pending"])
+    pending_note  = f"  🔴 Ожидают: {pending_count}" if pending_count else ""
+    greeting = (
+        f"\n\n📱 Клиентов: {total} | 👥 Польз.: {len(users['approved'])}{pending_note}"
+    )
 
     text = status + greeting + "\n\n💡 Дополнительные команды — кнопка *Меню* ↓"
 
@@ -485,10 +483,7 @@ async def show_start_screen(msg, user_id: int, edit: bool = False):
     kb = []
     if tma_btn:
         kb.append([tma_btn])
-    # Кнопка "Режим бота" — только для админа (у пользователей весь UI в TMA)
-    # Если TMA не настроена — показываем как фоллбэк для всех
-    if is_admin or not tma_btn:
-        kb.append([InlineKeyboardButton("📱 Режим бота", callback_data="back")])
+    kb.append([InlineKeyboardButton("📱 Режим бота", callback_data="back")])
 
     markup = InlineKeyboardMarkup(kb)
     if edit:
@@ -613,22 +608,44 @@ async def main_menu(msg, user_id: int, edit=False):
     else:
         my_clients   = get_user_clients(user_id)
         display_name = get_user_display(user_id)
-        kb = [
-            [InlineKeyboardButton("➕ Добавить устройство",  callback_data="add")],
-            [InlineKeyboardButton("📋 Мои устройства",       callback_data="my_devices")],
-            [InlineKeyboardButton("📊 Статус сервера",       callback_data="status")],
-            [InlineKeyboardButton("📖 Инструкция",           callback_data="help")],
-        ]
+        n = len(my_clients)
+        word = "устройство" if n == 1 else ("устройства" if 2 <= n <= 4 else "устройств")
+
+        peers   = get_awg_dump()
+        now_ts  = int(time.time())
+        online  = sum(1 for p in peers.values() if p.get("handshake") and now_ts - p["handshake"] < 180)
+        total   = len(get_all_clients())
+        sys_s   = get_system_stats()
+        bw      = load_bw_peak().get("last", {})
+        ram_pct = round(sys_s["ram_used"] / sys_s["ram_total"] * 100) if sys_s.get("ram_total") else 0
+
         text = (
-            f"🔐 Семейный VPN\n\n"
+            f"🔐 Семейный VPN\n"
+            f"━━━━━━━━━━━━━━\n"
+            f"🟢 Онлайн: {online} из {total}\n"
+            f"💾 RAM: {ram_pct}%  💿 Диск: {sys_s['disk_pct']}%\n"
+            f"⬇️ {bw.get('awg_down', 0)} / ⬆️ {bw.get('awg_up', 0)} Mbit/s\n\n"
             f"👋 Привет, {_md(display_name)}!\n"
-            f"📱 Ваших устройств: {len(my_clients)}"
+            f"📱 Ваших устройств: {n} {word}"
         )
 
+        tma_btn = _tma_button()
+        kb = []
+        if tma_btn:
+            kb.append([InlineKeyboardButton("──────────────────────", callback_data="noop")])
+            kb.append([tma_btn])
+            kb.append([InlineKeyboardButton("──────────────────────", callback_data="noop")])
+        kb.append([
+            InlineKeyboardButton("➕ Добавить",  callback_data="add"),
+            InlineKeyboardButton("📋 Мои",       callback_data="my_devices"),
+            InlineKeyboardButton("📊 Статус",    callback_data="status"),
+        ])
+        kb.append([InlineKeyboardButton("📖 Инструкция 📖", callback_data="help")])
+
     if edit:
-        await msg.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
+        await msg.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
     else:
-        await msg.reply_text(text, reply_markup=InlineKeyboardMarkup(kb))
+        await msg.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ОБРАБОТЧИК КНОПОК
