@@ -28,7 +28,10 @@ AWG_DIR="/etc/amnezia/amneziawg"
 REPO_BRANCH="main"
 _saved_branch=$(grep "^REPO_BRANCH=" "${AWG_DIR}/server.env" 2>/dev/null | cut -d= -f2)
 
-if [[ "${1}" == "--tma" ]]; then
+if [[ -n "$_REEXEC_BRANCH" ]]; then
+    # Уже перезапущены из нужной ветки — пропускаем выбор
+    REPO_BRANCH="$_REEXEC_BRANCH"
+elif [[ "${1}" == "--tma" ]]; then
     [[ -n "$_saved_branch" ]] && REPO_BRANCH="$_saved_branch"
 else
     _api=$(curl -fsSL --max-time 8 \
@@ -84,6 +87,20 @@ else
 fi
 
 REPO_RAW="https://raw.githubusercontent.com/${REPO_ORG}/${REPO_NAME}/${REPO_BRANCH}"
+
+# Если пользователь выбрал ветку отличную от main и мы ещё не перезапускались —
+# скачиваем setup.sh из выбранной ветки и перезапускаемся из него.
+# Это гарантирует что логика установщика соответствует выбранной ветке.
+if [[ "$REPO_BRANCH" != "main" && -z "$_REEXEC_BRANCH" ]]; then
+    info "Загружаю setup.sh из ветки ${REPO_BRANCH}..."
+    _new_script=$(curl -fsSL --max-time 30 "${REPO_RAW}/setup.sh" 2>/dev/null)
+    if [[ -n "$_new_script" ]]; then
+        export _REEXEC_BRANCH="$REPO_BRANCH"
+        exec bash <(printf '%s' "$_new_script") "$@"
+    else
+        warn "Не удалось загрузить setup.sh из ветки. Продолжаю с текущей версией."
+    fi
+fi
 
 # Список всех файлов проекта — используется в --update
 PROJECT_FILES=(
