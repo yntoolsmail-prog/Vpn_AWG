@@ -37,7 +37,7 @@ AmneziaWG нативно в kernelspace (300+ мбит) с управление�
 ## Установка
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/claude/review-repo-errors-MNIC4/setup.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/claude/review-code-bugs-QTtoM/setup.sh)
 ```
 
 Установщик автоматически:
