@@ -46,6 +46,12 @@ WAITING_SITES_DOMAIN   = 16   # ждём домен/IP для добавлени
 
 IMG_BASE = "https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/.images"
 
+def _md(s: str) -> str:
+    """Экранирует спецсимволы Markdown v1 в пользовательских строках."""
+    for ch in ("*", "_", "`", "["):
+        s = s.replace(ch, f"\\{ch}")
+    return s
+
 
 
 
@@ -471,7 +477,7 @@ async def show_start_screen(msg, user_id: int, edit: bool = False):
         display_name = get_user_display(user_id)
         n = len(my_clients)
         word = "устройство" if n == 1 else ("устройства" if 2 <= n <= 4 else "устройств")
-        greeting = f"\n\n👋 Привет, {display_name}! У тебя {n} {word}."
+        greeting = f"\n\n👋 Привет, {_md(display_name)}! У тебя {n} {word}."
 
     text = status + greeting + "\n\n💡 Дополнительные команды — кнопка *Меню* ↓"
 
@@ -612,7 +618,7 @@ async def main_menu(msg, user_id: int, edit=False):
         ]
         text = (
             f"🔐 Семейный VPN\n\n"
-            f"👋 Привет, {display_name}!\n"
+            f"👋 Привет, {_md(display_name)}!\n"
             f"📱 Ваших устройств: {len(my_clients)}"
         )
 
