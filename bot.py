@@ -454,7 +454,7 @@ async def show_start_screen(msg, user_id: int, edit: bool = False):
         await main_menu(msg, user_id, edit=edit)
         return
 
-    peers  = get_awg_dump()
+    peers   = get_awg_dump()
     now    = int(time.time())
     online = sum(1 for p in peers.values() if p.get("handshake") and now - p["handshake"] < 180)
     total  = len(get_all_clients())
@@ -462,22 +462,19 @@ async def show_start_screen(msg, user_id: int, edit: bool = False):
     bw     = load_bw_peak().get("last", {})
     ram_pct = round(sys_s["ram_used"] / sys_s["ram_total"] * 100) if sys_s.get("ram_total") else 0
 
-    status = (
+    users         = load_users()
+    pending_count = len(users["pending"])
+    pending_note  = f"  🔴 Ожидают: {pending_count}" if pending_count else ""
+
+    text = (
         f"🔐 AmneziaWG\n"
         f"━━━━━━━━━━━━━━\n"
         f"🟢 Онлайн: {online} из {total}\n"
         f"💾 RAM: {ram_pct}%  💿 Диск: {sys_s['disk_pct']}%\n"
-        f"⬇️ {bw.get('awg_down', 0)} / ⬆️ {bw.get('awg_up', 0)} Mbit/s"
+        f"⬇️ {bw.get('awg_down', 0)} / ⬆️ {bw.get('awg_up', 0)} Mbit/s\n\n"
+        f"🖥 IP: {SERVER_IP}\n"
+        f"📱 Клиентов: {total} | 👥 Польз.: {len(users['approved'])}{pending_note}"
     )
-
-    users         = load_users()
-    pending_count = len(users["pending"])
-    pending_note  = f"  🔴 Ожидают: {pending_count}" if pending_count else ""
-    greeting = (
-        f"\n\n📱 Клиентов: {total} | 👥 Польз.: {len(users['approved'])}{pending_note}"
-    )
-
-    text = status + greeting + "\n\n💡 Дополнительные команды — кнопка *Меню* ↓"
 
     tma_btn = _tma_button()
     kb = []
@@ -582,12 +579,28 @@ async def main_menu(msg, user_id: int, edit=False):
     is_admin = (user_id == ADMIN_ID)
 
     if is_admin:
-        clients_count = len(get_all_clients())
+        peers_a  = get_awg_dump()
+        now_a    = int(time.time())
+        online_a = sum(1 for p in peers_a.values() if p.get("handshake") and now_a - p["handshake"] < 180)
+        total_a  = len(get_all_clients())
+        sys_a    = get_system_stats()
+        bw_a     = load_bw_peak().get("last", {})
+        ram_a    = round(sys_a["ram_used"] / sys_a["ram_total"] * 100) if sys_a.get("ram_total") else 0
         users         = load_users()
         pending_count = len(users["pending"])
+        pending_note  = f"  🔴 Ожидают: {pending_count}" if pending_count else ""
         pending_label = f"👥 Пользователи" + (f" 🔴{pending_count}" if pending_count else "")
+        text = (
+            f"🔐 AmneziaWG\n"
+            f"━━━━━━━━━━━━━━\n"
+            f"🟢 Онлайн: {online_a} из {total_a}\n"
+            f"💾 RAM: {ram_a}%  💿 Диск: {sys_a['disk_pct']}%\n"
+            f"⬇️ {bw_a.get('awg_down', 0)} / ⬆️ {bw_a.get('awg_up', 0)} Mbit/s\n\n"
+            f"🖥 IP: {SERVER_IP}\n"
+            f"📱 Клиентов: {total_a} | 👥 Польз.: {len(users['approved'])}{pending_note}"
+        )
         kb = [
-            [InlineKeyboardButton("➕ Добавить устройство",  callback_data="add")],
+            [InlineKeyboardButton("🧲 Добавить устройство",  callback_data="add")],
             [InlineKeyboardButton("📋 Мои устройства",       callback_data="my_devices")],
             [InlineKeyboardButton("🌍 Все клиенты",          callback_data="all_clients")],
             [InlineKeyboardButton(pending_label,             callback_data="manage_users")],
@@ -595,16 +608,6 @@ async def main_menu(msg, user_id: int, edit=False):
             [InlineKeyboardButton("🔧 Техобслуживание",      callback_data="maintenance")],
             [InlineKeyboardButton("📖 Инструкция",           callback_data="help")],
         ]
-        endpoint_line = f"🌐 {SERVER_ENDPOINT}:{SERVER_PORT}"
-        if SERVER_ENDPOINT_BACKUP:
-            endpoint_line += f"\n🔄 Резерв: {SERVER_ENDPOINT_BACKUP}:{SERVER_PORT}"
-        text = (
-            f"🔐 AmneziaWG — Панель администратора\n\n"
-            f"{endpoint_line}\n"
-            f"📱 Всего клиентов: {clients_count}\n"
-            f"👥 Пользователей: {len(users['approved'])}"
-            + (f"\n🔴 Ожидают одобрения: {pending_count}" if pending_count else "")
-        )
     else:
         my_clients   = get_user_clients(user_id)
         display_name = get_user_display(user_id)
