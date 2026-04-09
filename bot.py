@@ -41,8 +41,6 @@ logger = logging.getLogger(__name__)
 WAITING_REGISTER_NAME  = 10
 WAITING_DEVICE_NAME    = 11
 WAITING_RESTORE_FILE   = 12
-WAITING_EXCL_ALLOWED   = 13   # ждём строку AllowedIPs от пользователя
-WAITING_EXCL_DOMAIN    = 14   # ждём домен для исключения
 WAITING_TZ_INPUT       = 15   # ждём ручной ввод часового пояса
 
 IMG_BASE = "https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/.images"
@@ -520,9 +518,6 @@ async def main_menu(msg, user_id: int, edit=False):
             [InlineKeyboardButton("🌍 Все клиенты",          callback_data="all_clients")],
             [InlineKeyboardButton(pending_label,             callback_data="manage_users")],
             [InlineKeyboardButton("📊 Статус сервера",       callback_data="status")],
-            [InlineKeyboardButton("🧹 Очистить мусор",       callback_data="cleanup")],
-            [InlineKeyboardButton("💾 Бэкап",                callback_data="backup")],
-            [InlineKeyboardButton("📥 Восстановить из бэкапа", callback_data="restore")],
             [InlineKeyboardButton("🔧 Техобслуживание",      callback_data="maintenance")],
             [InlineKeyboardButton("📖 Инструкция",           callback_data="help")],
         ]
@@ -676,8 +671,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await do_bw_reset_all(query)
     elif data == "noop":
         await query.answer()
-    elif data == "cleanup" and is_admin:
-        await do_cleanup(query)
+    elif data == "diagnostics" and is_admin:
+        await do_diagnostics(query)
     elif data == "backup" and is_admin:
         await do_backup(query)
     elif data == "maintenance" and is_admin:
@@ -747,9 +742,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_help_dns(query)
     elif data == "add_cancel":
         await main_menu(query, user_id, edit=True)
-    elif data == "excl_calc_cancel":
-        context.user_data.pop("excl_allowed_ips", None)
-        await query.edit_message_caption(caption="❌ Отменено.", reply_markup=None)
     elif data == "my_devices_back":
         await show_my_devices(query, user_id)
     elif data.startswith("device_"):
@@ -758,41 +750,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("conf_"):
         rest = data[5:]  # всё после "conf_"
         if rest.startswith("ep_"):
-            # conf_ep_<epkey>_<name>  → показываем выбор исключений
+            # conf_ep_<epkey>_<name> → отправляем с сохранёнными исключениями
             parts = rest[3:].split("_", 1)   # parts[0]=epkey, parts[1]=name
-            if len(parts) == 2:
-                await show_conf_excl_select(query, parts[1], user_id, parts[0])
-        elif rest.startswith("excl_"):
-            # conf_excl_<epkey>_<name> → открываем меню исключений
-            parts = rest[5:].split("_", 1)
-            if len(parts) == 2:
-                await show_sites_menu(query, parts[1], user_id, context, ep_key=parts[0])
-        elif rest.startswith("send_"):
-            # conf_send_<epkey>_noexcl_<name> → отправляем без исключений
-            parts = rest[5:].split("_noexcl_", 1)
             if len(parts) == 2:
                 await do_send_conf(query, parts[1], parts[0])
         else:
-            # conf_<name> — старый формат или прямой вызов → выбор эндпоинта
+            # conf_<name> → выбор эндпоинта
             await show_conf_ep_select(query, rest, user_id)
-    # ── QR: выбор эндпоинта / исключений ──
+    # ── QR: выбор эндпоинта ──
     elif data.startswith("qr_"):
         rest = data[3:]
         if rest.startswith("ep_"):
-            # qr_ep_<epkey>_<n> → экран выбора исключений
+            # qr_ep_<epkey>_<n> → отправляем с сохранёнными исключениями
             parts = rest[3:].split("_", 1)
             if len(parts) == 2:
-                await show_qr_excl_select(query, parts[1], user_id, parts[0])
-        elif rest.startswith("send_"):
-            # qr_send_<epkey>_noexcl_<n> → без исключений
-            parts = rest[5:].split("_noexcl_", 1)
-            if len(parts) == 2:
                 await do_send_qr(query, parts[1], parts[0])
-        elif rest.startswith("excl_"):
-            # qr_excl_<epkey>_<n> → меню исключений (mode=qr)
-            parts = rest[5:].split("_", 1)
-            if len(parts) == 2:
-                await show_sites_menu(query, parts[1], user_id, context, ep_key=parts[0], mode="qr")
         else:
             await show_qr_ep_select(query, rest, user_id)
     # ── Поделиться: выбор эндпоинта ──
@@ -819,6 +791,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("cat_toggle_"):
         await toggle_category_handler(query, data[11:], context)
     elif data.startswith("sites_"):
+        # sites_<name> → меню исключений для устройства
         await show_sites_menu(query, data[6:], user_id, context)
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -852,7 +825,6 @@ async def show_my_devices(query, user_id: int):
 
     kb = [[InlineKeyboardButton(f"📋 {name.split('.', 1)[1] if '.' in name else name}",
            callback_data=f"device_{name}")] for name in clients]
-    kb.append([InlineKeyboardButton("🟢 Добавить сайт в исключения", callback_data="excl_calc")])
     kb.append([InlineKeyboardButton("◀️ В меню", callback_data="back")])
     await query.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(kb))
 
@@ -879,11 +851,17 @@ async def show_device(query, name: str, user_id: int):
         f"📍 Endpoint: {ep}\n"
         f"📶 Трафик: ↓{dl} ↑{ul}"
     )
+    # Статус исключений
+    saved = load_client_excl(name)
+    excl_count = len(saved.get("sites", [])) if saved else 0
+    excl_label = f"🌐 Исключения сайтов [{excl_count}]" if excl_count else "🌐 Исключения сайтов [нет]"
+
     back_target = "my_devices" if user_id != ADMIN_ID else "all_clients"
     kb = [
         [InlineKeyboardButton("📄 Скачать .conf (AmneziaWG)", callback_data=f"conf_{name}")],
         [InlineKeyboardButton("📱 QR-код (AmneziaWG)",        callback_data=f"qr_{name}")],
         [InlineKeyboardButton("📤 Поделиться кодом (AmneziaVPN)", callback_data=f"share_{name}")],
+        [InlineKeyboardButton(excl_label,                      callback_data=f"sites_{name}")],
         [InlineKeyboardButton("🗑 Удалить",                    callback_data=f"del_{name}")],
         [InlineKeyboardButton("◀️ Назад",                      callback_data=back_target)],
     ]
@@ -1046,8 +1024,8 @@ async def show_conf_ep_select(query, name: str, user_id: int):
     has_backup = bool(SERVER_ENDPOINT_BACKUP)
     has_ip     = SERVER_ENDPOINT != SERVER_IP
     if not has_backup and not has_ip:
-        # Сразу показываем выбор исключений для основного
-        await show_conf_excl_select(query, name, user_id, "main")
+        # Один эндпоинт — сразу отправляем с сохранёнными исключениями
+        await do_send_conf(query, name, "main")
         return
     short = name.split(".", 1)[1] if "." in name else name
     await query.edit_message_text(
@@ -1092,49 +1070,19 @@ async def show_share_ep_select(query, name: str, user_id: int):
         parse_mode="Markdown"
     )
 
-# ── Экран выбора: пропустить исключения / настроить исключения ────────────────
-
-async def show_conf_excl_select(query, name: str, user_id: int, ep_key: str):
-    """После выбора эндпоинта предлагаем: пропустить или настроить исключения."""
-    short = name.split(".", 1)[1] if "." in name else name
-    ep    = _resolve_endpoint(ep_key)
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⚡ Пропустить (весь трафик через VPN)",
-                              callback_data=f"conf_send_{ep_key}_noexcl_{name}")],
-        [InlineKeyboardButton("🌐 Настроить исключения сайтов",
-                              callback_data=f"conf_excl_{ep_key}_{name}")],
-        [InlineKeyboardButton("◀️ Назад", callback_data=f"device_{name}")],
-    ])
-    await query.edit_message_text(
-        f"📄 .conf для *{short}*\n🌐 Эндпоинт: `{ep}`\n\n"
-        f"Выберите режим трафика:",
-        reply_markup=kb,
-        parse_mode="Markdown"
-    )
-
-# ── Экран выбора исключений для QR ───────────────────────────────────────────
-
-async def show_qr_excl_select(query, name: str, user_id: int, ep_key: str):
-    """После выбора эндпоинта для QR предлагаем: пропустить или настроить исключения."""
-    short = name.split(".", 1)[1] if "." in name else name
-    ep    = _resolve_endpoint(ep_key)
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⚡ Пропустить (весь трафик через VPN)",
-                              callback_data=f"qr_send_{ep_key}_noexcl_{name}")],
-        [InlineKeyboardButton("🌐 Настроить исключения сайтов",
-                              callback_data=f"qr_excl_{ep_key}_{name}")],
-        [InlineKeyboardButton("◀️ Назад", callback_data=f"device_{name}")],
-    ])
-    await query.edit_message_text(
-        f"📱 QR-код для *{short}*\n🌐 Эндпоинт: `{ep}`\n\nВыберите режим трафика:",
-        reply_markup=kb,
-        parse_mode="Markdown"
-    )
-
 # ── Финальная отправка .conf ──────────────────────────────────────────────────
 
-async def do_send_conf(query, name: str, ep_key: str, allowed_ips: str = "0.0.0.0/0"):
-    """Генерирует .conf в памяти и отправляет в чат. Без дефисов в имени файла."""
+async def do_send_conf(query, name: str, ep_key: str):
+    """Генерирует .conf в памяти (с сохранёнными исключениями) и отправляет в чат."""
+    # Загружаем сохранённые исключения
+    saved = load_client_excl(name)
+    if saved and ("sites" in saved or "custom_domains" in saved):
+        sites = set(saved.get("sites", [])) | set(DEFAULT_SELECTED)
+        custom = saved.get("custom_domains", [])
+        allowed_ips = build_allowed_ips(sites, custom)
+    else:
+        allowed_ips = "0.0.0.0/0"
+
     short    = name.split(".", 1)[1] if "." in name else name
     ep       = _resolve_endpoint(ep_key)
     content  = _conf_for_endpoint(name, ep_key, allowed_ips)
@@ -1155,8 +1103,17 @@ async def do_send_conf(query, name: str, ep_key: str, allowed_ips: str = "0.0.0.
 
 # ── Финальная отправка QR ─────────────────────────────────────────────────────
 
-async def do_send_qr(query, name: str, ep_key: str, allowed_ips: str = "0.0.0.0/0"):
-    """Генерирует .conf в памяти → QR → отправляет. Сначала .conf файл, потом QR."""
+async def do_send_qr(query, name: str, ep_key: str):
+    """Генерирует .conf в памяти (с сохранёнными исключениями) → QR → отправляет."""
+    # Загружаем сохранённые исключения
+    saved = load_client_excl(name)
+    if saved and ("sites" in saved or "custom_domains" in saved):
+        sites = set(saved.get("sites", [])) | set(DEFAULT_SELECTED)
+        custom = saved.get("custom_domains", [])
+        allowed_ips = build_allowed_ips(sites, custom)
+    else:
+        allowed_ips = "0.0.0.0/0"
+
     short   = name.split(".", 1)[1] if "." in name else name
     ep      = _resolve_endpoint(ep_key)
     content = _conf_for_endpoint(name, ep_key, allowed_ips)
@@ -1301,23 +1258,55 @@ async def show_status(query):
     kb_rows.append([InlineKeyboardButton("◀️ В меню", callback_data="back")])
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb_rows))
 
-async def do_cleanup(query):
+async def do_diagnostics(query):
+    """Диагностика конфигов: orphan peers, orphan files, orphan excl.json."""
+    await query.edit_message_text("⏳ Проверяю конфиги...")
+
     peers      = get_awg_dump()
-    known_pubs = {get_client_pub(n) for n in get_all_clients()} - {None}
-    trash      = [pub for pub in peers if pub not in known_pubs]
+    clients    = get_all_clients()
+    known_pubs = {get_client_pub(n) for n in clients} - {None}
+    report     = []
+    removed_peers = 0
+    removed_excl  = 0
 
-    if not trash:
-        await query.edit_message_text("✅ Мусора нет — всё чисто!", reply_markup=back_kb())
-        return
+    # 1. Пиры в AWG без файлов в CLIENTS_DIR
+    orphan_peers = [pub for pub in peers if pub not in known_pubs]
+    if orphan_peers:
+        for pub in orphan_peers:
+            if subprocess.run(["awg", "set", AWG_IFACE, "peer", pub, "remove"]).returncode == 0:
+                removed_peers += 1
+        report.append(f"🔴 Пиров без конфига: {len(orphan_peers)} → удалено {removed_peers}")
+    else:
+        report.append("✅ Пиры в AWG — всё в порядке")
 
-    removed = sum(
-        1 for pub in trash
-        if subprocess.run(["awg", "set", AWG_IFACE, "peer", pub, "remove"]).returncode == 0
-    )
-    await query.edit_message_text(
-        f"🧹 Очистка завершена\n\nУдалено мусорных пиров: {removed}",
-        reply_markup=back_kb()
-    )
+    # 2. Файлы .conf без пира в AWG
+    if os.path.isdir(CLIENTS_DIR):
+        conf_files = [f[:-5] for f in os.listdir(CLIENTS_DIR) if f.endswith(".conf")]
+        orphan_files = [n for n in conf_files if get_client_pub(n) not in peers]
+        if orphan_files:
+            report.append(f"⚠️ Конфиги без пира в AWG ({len(orphan_files)}):\n" +
+                          "\n".join(f"  • {n}" for n in orphan_files))
+        else:
+            report.append("✅ Конфиги — всё в порядке")
+
+        # 3. Orphan .excl.json без соответствующего .conf
+        excl_files = [f[:-len(EXCL_EXT)] for f in os.listdir(CLIENTS_DIR) if f.endswith(EXCL_EXT)]
+        orphan_excl = [n for n in excl_files if not os.path.exists(f"{CLIENTS_DIR}/{n}.conf")]
+        if orphan_excl:
+            for n in orphan_excl:
+                try:
+                    os.remove(f"{CLIENTS_DIR}/{n}{EXCL_EXT}")
+                    removed_excl += 1
+                except Exception:
+                    pass
+            report.append(f"🗑 Мусорных excl.json: {len(orphan_excl)} → удалено {removed_excl}")
+        else:
+            report.append("✅ Файлы исключений — всё в порядке")
+
+    text = "🔍 Диагностика конфигов\n\n" + "\n".join(report)
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([
+        [InlineKeyboardButton("◀️ Техобслуживание", callback_data="maintenance")]
+    ]))
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ВОССТАНОВЛЕНИЕ ИЗ БЭКАПА
@@ -1549,7 +1538,10 @@ async def show_maintenance(query):
         ip_status = f"\n\n⚠️ IP расходится!\nВ настройках: {SERVER_IP}\nРеальный: {real_ip}"
 
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("💾 Бэкап + apt upgrade",         callback_data="maint_upgrade")],
+        [InlineKeyboardButton("💾 Создать бэкап",               callback_data="backup")],
+        [InlineKeyboardButton("📥 Восстановить из бэкапа",      callback_data="restore")],
+        [InlineKeyboardButton("🔍 Диагностика конфигов",        callback_data="diagnostics")],
+        [InlineKeyboardButton("💿 Бэкап + apt upgrade",         callback_data="maint_upgrade")],
         [InlineKeyboardButton("📦 Проверить версию библиотеки", callback_data="maint_ptb")],
         [InlineKeyboardButton("🕐 Сменить часовой пояс",        callback_data="maint_tz")],
         [InlineKeyboardButton("🔄 Обновить IP сервера",         callback_data="maint_update_ip")],
@@ -1811,38 +1803,37 @@ async def show_help_dns(query):
 # ИСКЛЮЧЕНИЯ САЙТОВ (split tunneling)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _sites_text(name: str, ep_key: str) -> str:
+def _sites_text(name: str) -> str:
     short = name.split(".", 1)[1] if "." in name else name
-    ep    = _resolve_endpoint(ep_key)
     return (
-        f"🌐 Исключения сайтов для *{short}*\n"
-        f"🌐 Эндпоинт: `{ep}`\n\n"
+        f"🌐 Исключения сайтов для *{short}*\n\n"
         f"Отмеченные сайты будут работать *без VPN*.\n"
         f"🏠 Локальная сеть включена всегда.\n"
         f"Нажмите на категорию чтобы раскрыть её."
     )
 
 
-async def show_sites_menu(query, name: str, user_id: int, context, ep_key: str = "main", mode: str = "conf"):
-    """Меню исключений. ep_key передаётся из conf_excl_<ep_key>_<n>. mode: 'conf' | 'qr'."""
+async def show_sites_menu(query, name: str, user_id: int, context):
+    """Меню настройки исключений сайтов для устройства. Загружает сохранённые настройки из excl.json."""
     user_prefix = get_user_name(user_id) + "."
     if user_id != ADMIN_ID and not name.startswith(user_prefix):
         await query.answer("⛔ Это не ваше устройство.", show_alert=True)
         return
 
+    # Загружаем сохранённые исключения (если есть)
+    saved = load_client_excl(name)
+    if saved and "sites" in saved:
+        selected = set(saved["sites"]) | set(DEFAULT_SELECTED)
+    else:
+        selected = set(DEFAULT_SELECTED)
+
     context.user_data["sites_device"]   = name
-    context.user_data["sites_selected"] = set(DEFAULT_SELECTED)
-    context.user_data["sites_ep_key"]   = ep_key
-    context.user_data["sites_mode"]     = mode
+    context.user_data["sites_selected"] = selected
     context.user_data["sites_expanded"] = set()  # все категории свёрнуты
 
     await query.edit_message_text(
-        _sites_text(name, ep_key),
-        reply_markup=sites_keyboard(
-            context.user_data["sites_selected"],
-            name,
-            context.user_data["sites_expanded"],
-        ),
+        _sites_text(name),
+        reply_markup=sites_keyboard(selected, name, set()),
         parse_mode="Markdown",
     )
 
@@ -1861,7 +1852,6 @@ async def toggle_site_handler(query, key: str, user_id: int, context):
 
     selected = context.user_data.get("sites_selected", set(DEFAULT_SELECTED))
     expanded = context.user_data.get("sites_expanded", set())
-    ep_key   = context.user_data.get("sites_ep_key", "main")
 
     if key == "select_all":
         selected = set(DEFAULT_SELECTED) | ALL_SELECTABLE
@@ -1880,7 +1870,7 @@ async def toggle_site_handler(query, key: str, user_id: int, context):
         context.user_data["sites_selected"] = selected
 
     await query.edit_message_text(
-        _sites_text(name, ep_key),
+        _sites_text(name),
         reply_markup=sites_keyboard(selected, name, expanded),
         parse_mode="Markdown",
     )
@@ -1895,7 +1885,6 @@ async def toggle_category_handler(query, cat_name: str, context):
 
     selected = context.user_data.get("sites_selected", set(DEFAULT_SELECTED))
     expanded = context.user_data.get("sites_expanded", set())
-    ep_key   = context.user_data.get("sites_ep_key", "main")
 
     if cat_name in expanded:
         expanded.discard(cat_name)
@@ -1904,14 +1893,14 @@ async def toggle_category_handler(query, cat_name: str, context):
     context.user_data["sites_expanded"] = expanded
 
     await query.edit_message_text(
-        _sites_text(name, ep_key),
+        _sites_text(name),
         reply_markup=sites_keyboard(selected, name, expanded),
         parse_mode="Markdown",
     )
 
 
 async def apply_sites(query, user_id: int, context):
-    """Применяет исключения сайтов — генерирует .conf в памяти с нужным эндпоинтом."""
+    """Сохраняет исключения сайтов в excl.json и возвращает в меню устройства."""
     name = context.user_data.get("sites_device")
     if not name:
         await query.answer("Сессия устарела, откройте меню заново.", show_alert=True)
@@ -1923,200 +1912,29 @@ async def apply_sites(query, user_id: int, context):
         return
 
     selected  = context.user_data.get("sites_selected", set(DEFAULT_SELECTED))
-    ep_key    = context.user_data.get("sites_ep_key", "main")
     conf_path = f"{CLIENTS_DIR}/{name}.conf"
     if not os.path.exists(conf_path):
         await query.edit_message_text("❌ Файл конфига не найден.", reply_markup=back_kb())
         return
 
-    await query.edit_message_text("⏳ Резолвлю IP-адреса, подождите...")
-
-    allowed_ips = build_allowed_ips(selected)
+    # Сохраняем исключения (без DEFAULT_SELECTED — они всегда включены)
+    user_sites = list(selected - set(DEFAULT_SELECTED))
+    save_client_excl(name, {"sites": user_sites, "custom_domains": []})
 
     context.user_data.pop("sites_device", None)
     context.user_data.pop("sites_selected", None)
-    context.user_data.pop("sites_ep_key", None)
     context.user_data.pop("sites_expanded", None)
 
-    mode = context.user_data.pop("sites_mode", "conf")
-    if mode == "qr":
-        await do_send_qr(query, name, ep_key, allowed_ips)
-    else:
-        await do_send_conf(query, name, ep_key, allowed_ips)
+    short = name.split(".", 1)[1] if "." in name else name
+    excl_count = len(user_sites)
+    note = f"{excl_count} {'сайт' if excl_count == 1 else 'сайта' if 2 <= excl_count <= 4 else 'сайтов'}" if excl_count else "только локальная сеть"
+    await query.answer(f"✅ Исключения сохранены: {note}", show_alert=False)
+    await show_device(query, name, user_id)
 
 
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# КАЛЬКУЛЯТОР ИСКЛЮЧЕНИЙ САЙТОВ
-# ══════════════════════════════════════════════════════════════════════════════
 
-async def excl_calc_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Шаг 1 — инструкция с картинками, просим вставить AllowedIPs"""
-    query = update.callback_query
-    await query.answer()
-
-    # Шаг 1 — выбрать туннель
-    await query.message.reply_photo(
-        photo=f"{IMG_BASE}/111.jpg",
-        caption=(
-            "➕ *Добавить сайт в исключения*\n\n"
-            "*Шаг 1.* Откройте AmneziaWG на своём устройстве и выберите туннель, "
-            "в который хотите внести изменения."
-        ),
-        parse_mode="Markdown"
-    )
-    # Шаг 2 — нажать редактировать
-    await query.message.reply_photo(
-        photo=f"{IMG_BASE}/222.jpg",
-        caption="*Шаг 2.* Нажмите кнопку *Редактировать* (значок карандаша).",
-        parse_mode="Markdown"
-    )
-    # Шаг 3 — скопировать AllowedIPs
-    await query.message.reply_photo(
-        photo=f"{IMG_BASE}/333.jpg",
-        caption=(
-            "*Шаг 3.* Найдите поле *AllowedIPs*, выделите и скопируйте всё его содержимое.\n\n"
-            "📋 Вставьте скопированную строку в следующем сообщении."
-        ),
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("❌ Отмена", callback_data="excl_calc_cancel")]
-        ])
-    )
-    return WAITING_EXCL_ALLOWED
-
-
-async def excl_calc_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отмена через кнопку"""
-    query = update.callback_query
-    await query.answer()
-    context.user_data.pop("excl_allowed_ips", None)
-    await query.edit_message_caption(
-        caption="❌ Отменено.",
-        reply_markup=None
-    )
-    return ConversationHandler.END
-
-
-async def excl_receive_allowed(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Шаг 2 — получаем строку AllowedIPs, просим домен"""
-    text = update.message.text.strip()
-
-    # Базовая валидация — должны быть цифры, точки, слэши, запятые
-    if not any(c.isdigit() for c in text) or "/" not in text:
-        await update.message.reply_text(
-            "❌ Это не похоже на строку AllowedIPs.\n\n"
-            "Она должна содержать IP-адреса вида `10.0.0.0/8, 172.16.0.0/12`\n\n"
-            "Попробуйте скопировать ещё раз или нажмите /cancel для отмены.",
-            parse_mode="Markdown"
-        )
-        return WAITING_EXCL_ALLOWED
-
-    context.user_data["excl_allowed_ips"] = text
-
-    await update.message.reply_text(
-        "✅ Строка получена!\n\n"
-        "*Шаг 4.* Теперь введите домен сайта который хотите исключить из VPN трафика.\n\n"
-        "Примеры:\n"
-        "`sberbank.ru`\n"
-        "`gosuslugi.ru`\n"
-        "`tbank.ru`\n\n"
-        "Просто введите домен без `http://` и без `www`.",
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("❌ Отмена", callback_data="my_devices_back")]
-        ])
-    )
-    return WAITING_EXCL_DOMAIN
-
-
-async def excl_receive_domain(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Шаг 3 — получаем домен, резолвим, вычисляем новую строку"""
-    domain = update.message.text.strip().lower()
-    domain = domain.replace("https://", "").replace("http://", "").replace("www.", "").split("/")[0]
-
-    if "." not in domain or len(domain) < 4:
-        await update.message.reply_text(
-            "❌ Неверный формат домена. Введите например: `sberbank.ru`",
-            parse_mode="Markdown"
-        )
-        return WAITING_EXCL_DOMAIN
-
-    allowed_str = context.user_data.get("excl_allowed_ips", "")
-    if not allowed_str:
-        await update.message.reply_text("❌ Сессия устарела. Начните заново.")
-        return ConversationHandler.END
-
-    await update.message.reply_text(f"⏳ Резолвлю `{domain}`...", parse_mode="Markdown")
-
-    # Резолвим домен в IP
-    try:
-        results = socket.getaddrinfo(domain, None, socket.AF_INET)
-        domain_ips = list({r[4][0] for r in results})
-    except Exception:
-        await update.message.reply_text(
-            f"❌ Не удалось определить IP для домена `{domain}`.\n\n"
-            f"Проверьте правильность написания домена.",
-            parse_mode="Markdown"
-        )
-        return WAITING_EXCL_DOMAIN
-
-    # Парсим текущие AllowedIPs
-    try:
-        allowed_nets = []
-        for part in allowed_str.split(","):
-            part = part.strip()
-            if part:
-                allowed_nets.append(ipaddress.ip_network(part, strict=False))
-    except ValueError as e:
-        await update.message.reply_text(
-            f"❌ Ошибка парсинга строки AllowedIPs: {e}\n\nПопробуйте скопировать строку заново.",
-        )
-        return WAITING_EXCL_ALLOWED
-
-    # Вычитаем IP домена из AllowedIPs
-    for ip_str in domain_ips:
-        target = ipaddress.ip_network(f"{ip_str}/32", strict=False)
-        new_nets = []
-        for net in allowed_nets:
-            if target.overlaps(net):
-                new_nets.extend(net.address_exclude(target))
-            else:
-                new_nets.append(net)
-        allowed_nets = new_nets
-
-    new_allowed = ", ".join(
-        str(n) for n in sorted(allowed_nets, key=lambda n: (n.network_address, n.prefixlen))
-    )
-
-    ip_list = ", ".join(domain_ips)
-    context.user_data.pop("excl_allowed_ips", None)
-
-    await update.message.reply_text(
-        f"✅ Готово!\n\n"
-        f"🌐 Домен `{domain}` → IP: `{ip_list}`\n\n"
-        f"*Скопируйте строку ниже и вставьте её в поле AllowedIPs вместо старого содержимого, "
-        f"затем нажмите Сохранить:*",
-        parse_mode="Markdown"
-    )
-    # Отправляем результат отдельным сообщением — удобнее копировать
-    await update.message.reply_text(
-        f"`{new_allowed}`",
-        parse_mode="Markdown"
-    )
-
-    context.user_data.pop("excl_allowed_ips", None)
-    return ConversationHandler.END
-
-
-async def excl_back_to_my_devices(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Возврат к списку устройств из диалога excl_calc"""
-    query = update.callback_query
-    await query.answer()
-    context.user_data.pop("excl_allowed_ips", None)
-    await show_my_devices(query, query.from_user.id)
-    return ConversationHandler.END
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2518,24 +2336,6 @@ def main():
         allow_reentry=True,
     )
 
-    excl_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(excl_calc_start, pattern="^excl_calc$")],
-        states={
-            WAITING_EXCL_ALLOWED: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, excl_receive_allowed),
-                CallbackQueryHandler(excl_calc_cancel, pattern="^excl_calc_cancel$"),
-            ],
-            WAITING_EXCL_DOMAIN: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, excl_receive_domain),
-                CallbackQueryHandler(excl_back_to_my_devices, pattern="^my_devices_back$"),
-            ],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-        per_chat=True,
-        per_message=False,
-        allow_reentry=True,
-    )
-
     tz_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(ask_tz_manual, pattern="^set_tz_manual$")],
         states={
@@ -2552,7 +2352,6 @@ def main():
     app.add_handler(reg_conv)
     app.add_handler(add_conv)
     app.add_handler(restore_conv)
-    app.add_handler(excl_conv)
     app.add_handler(tz_conv)
     app.add_handler(CallbackQueryHandler(button_handler))
 
