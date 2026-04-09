@@ -441,8 +441,8 @@ def _tma_button() -> InlineKeyboardButton | None:
     if not TMA_URL:
         return None
     if TMA_URL.startswith("https://"):
-        return InlineKeyboardButton("▶️ ОТКРЫТЬ VPN", web_app=WebAppInfo(url=TMA_URL))
-    return InlineKeyboardButton("▶️ ОТКРЫТЬ VPN", url=TMA_URL)
+        return InlineKeyboardButton("🗝 ОТКРЫТЬ VPN", web_app=WebAppInfo(url=TMA_URL))
+    return InlineKeyboardButton("🗝 ОТКРЫТЬ VPN", url=TMA_URL)
 
 
 async def show_start_screen(msg, user_id: int, edit: bool = False):
@@ -633,12 +633,10 @@ async def main_menu(msg, user_id: int, edit=False):
         kb = []
         if tma_btn:
             kb.append([tma_btn])
-        kb.append([
-            InlineKeyboardButton("🆕 Добавить",       callback_data="add"),
-            InlineKeyboardButton("📋 Мои устройства", callback_data="my_devices"),
-        ])
-        kb.append([InlineKeyboardButton("📊 Статус сервера", callback_data="status")])
-        kb.append([InlineKeyboardButton("📖 Инструкция",     callback_data="help")])
+        kb.append([InlineKeyboardButton("📋 Мои устройства",      callback_data="my_devices")])
+        kb.append([InlineKeyboardButton("🧲 Добавить устройство",  callback_data="add")])
+        kb.append([InlineKeyboardButton("📊 Статус сервера",       callback_data="status")])
+        kb.append([InlineKeyboardButton("📖 Инструкция",           callback_data="help")])
 
     if edit:
         await msg.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
@@ -2506,12 +2504,10 @@ async def post_init(application) -> None:
     """Регистрирует команды бота в Telegram (кнопка «Меню»)."""
     commands = [
         BotCommand("start",  "🏠 Главная"),
-        BotCommand("panel",  "🖥 Открыть панель"),
-        BotCommand("bot",    "📱 Режим бота"),
         BotCommand("cancel", "❌ Отмена"),
     ]
     await application.bot.set_my_commands(commands)
-    logger.info("Команды бота зарегистрированы: /start /panel /bot /cancel")
+    logger.info("Команды бота зарегистрированы: /start /cancel")
 
 
 def main():
