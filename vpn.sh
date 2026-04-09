@@ -1111,6 +1111,117 @@ analyze_configs() {
 }
 
 # =============================================================================
+# ПРОВЕРКА ЦЕЛОСТНОСТИ ПИРОВ
+# =============================================================================
+
+check_peer_integrity() {
+    show_header
+    echo -e "${BOLD}  Проверка целостности клиентов${NC}"
+    echo ""
+
+    # ── 1. Имена клиентов по .conf файлам (источник истины: «эти клиенты существуют») ──
+    local -a CONF_NAMES=()
+    for f in "$CLIENTS_DIR"/*.conf; do
+        [[ -f "$f" ]] && CONF_NAMES+=("$(basename "$f" .conf)")
+    done
+
+    # ── 2. Имена + публичные ключи из awg0.conf (# Client: + PublicKey =) ──
+    # Строим ассоциативный массив: имя → ключ
+    declare -A CONF_TO_KEY=()
+    declare -A KEY_TO_CONF=()
+    local cur_name="" cur_key=""
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^#\ Client:\ (.+)$ ]]; then
+            cur_name="${BASH_REMATCH[1]}"
+            cur_key=""
+        elif [[ -n "$cur_name" && "$line" =~ ^PublicKey\ =\ (.+)$ ]]; then
+            cur_key="${BASH_REMATCH[1]}"
+            CONF_TO_KEY["$cur_name"]="$cur_key"
+            KEY_TO_CONF["$cur_key"]="$cur_name"
+            cur_name=""
+        fi
+    done < "$AWG_CONF"
+
+    # ── 3. Публичные ключи из runtime AWG ──
+    local AWG_RUNNING=1
+    if ! ip link show "${VPN_IFACE}" &>/dev/null; then
+        AWG_RUNNING=0
+    fi
+    local -a RUNTIME_KEYS=()
+    if [[ "$AWG_RUNNING" -eq 1 ]]; then
+        while IFS= read -r k; do
+            [[ -n "$k" ]] && RUNTIME_KEYS+=("$k")
+        done < <(awg show "${VPN_IFACE}" dump 2>/dev/null | tail -n +2 | awk '{print $1}')
+    fi
+
+    # ── Проверки ──
+    local -a ERRORS=()
+    local OK=0
+
+    # A) Каждый .conf должен быть в awg0.conf
+    for cname in "${CONF_NAMES[@]}"; do
+        if [[ -z "${CONF_TO_KEY[$cname]+x}" ]]; then
+            ERRORS+=("${RED}  ✗ [.conf есть, в awg0.conf нет]${NC} ${cname}")
+        else
+            ((OK++))
+        fi
+    done
+
+    # B) Каждый [Peer] в awg0.conf должен иметь .conf файл
+    for cname in "${!CONF_TO_KEY[@]}"; do
+        local found=0
+        for n in "${CONF_NAMES[@]}"; do [[ "$n" == "$cname" ]] && found=1; done
+        if [[ "$found" -eq 0 ]]; then
+            ERRORS+=("${YELLOW}  ✗ [в awg0.conf есть, .conf нет]${NC} ${cname}")
+        fi
+    done
+
+    # C) Каждый [Peer] из awg0.conf должен быть в AWG runtime
+    if [[ "$AWG_RUNNING" -eq 1 ]]; then
+        for cname in "${!CONF_TO_KEY[@]}"; do
+            local key="${CONF_TO_KEY[$cname]}"
+            local found=0
+            for rk in "${RUNTIME_KEYS[@]}"; do [[ "$rk" == "$key" ]] && found=1; done
+            if [[ "$found" -eq 0 ]]; then
+                ERRORS+=("${RED}  ✗ [awg0.conf есть, runtime нет]${NC} ${cname}")
+            fi
+        done
+
+        # D) Каждый пир в runtime должен быть в awg0.conf
+        for rk in "${RUNTIME_KEYS[@]}"; do
+            if [[ -z "${KEY_TO_CONF[$rk]+x}" ]]; then
+                ERRORS+=("${YELLOW}  ✗ [runtime есть, awg0.conf нет]${NC} ${rk:0:24}…")
+            fi
+        done
+    fi
+
+    # ── Итоги ──
+    echo -e "  Клиентов (.conf): ${CYAN}${#CONF_NAMES[@]}${NC}  |  Пиров в awg0.conf: ${CYAN}${#CONF_TO_KEY[@]}${NC}  |  Пиров в runtime: ${CYAN}${#RUNTIME_KEYS[@]}${NC}${AWG_RUNNING:+ (AWG выключен)}"
+    [[ "$AWG_RUNNING" -eq 0 ]] && echo -e "  ${YELLOW}[!] AWG не запущен — проверка runtime пропущена.${NC}"
+    echo ""
+
+    if [[ "${#ERRORS[@]}" -eq 0 ]]; then
+        echo -e "  ${GREEN}✓ Всё в порядке — .conf, awg0.conf и runtime совпадают.${NC}"
+    else
+        echo -e "  ${RED}Обнаружены расхождения (${#ERRORS[@]}):${NC}"
+        echo ""
+        for ERR in "${ERRORS[@]}"; do
+            echo -e "$ERR"
+        done
+        echo ""
+        echo -e "  ${YELLOW}Подсказки:"
+        echo -e "  • [.conf есть, в awg0.conf нет] — клиент не был добавлен в сервер-конфиг."
+        echo -e "    Удалите .conf и пересоздайте клиента."
+        echo -e "  • [в awg0.conf есть, .conf нет] — сиротский peer в awg0.conf."
+        echo -e "    Удалите секцию [Peer] из ${AWG_CONF} вручную."
+        echo -e "  • [awg0.conf есть, runtime нет] — awg0.conf и runtime рассинхронизированы."
+        echo -e "    Перезапустите: systemctl restart awg-quick@${VPN_IFACE}${NC}"
+    fi
+    echo ""
+    press_enter
+}
+
+# =============================================================================
 # ГЛАВНОЕ МЕНЮ
 # =============================================================================
 
@@ -1142,6 +1253,7 @@ main_menu() {
         echo "  9) Полный диагностический отчёт"
         echo " 10) Анализ конфигов клиентов"
         echo " 11) Просмотр предыдущих диагностик"
+        echo " 12) Проверить целостность клиентов"
         echo ""
         echo "  0) Выход"
         echo ""
@@ -1159,6 +1271,7 @@ main_menu() {
             9)  run_diagnostics ;;
             10) analyze_configs ;;
             11) view_old_diagnostics ;;
+            12) check_peer_integrity ;;
             0|"")  echo ""; exit 0 ;;
             *)  echo -e "  ${RED}Неверный выбор${NC}"; sleep 1 ;;
         esac
