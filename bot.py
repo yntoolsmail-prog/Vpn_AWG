@@ -441,8 +441,8 @@ def _tma_button() -> InlineKeyboardButton | None:
     if not TMA_URL:
         return None
     if TMA_URL.startswith("https://"):
-        return InlineKeyboardButton("▶️ ОТКРЫТЬ VPN 🌐", web_app=WebAppInfo(url=TMA_URL))
-    return InlineKeyboardButton("▶️ ОТКРЫТЬ VPN 🌐", url=TMA_URL)
+        return InlineKeyboardButton("▶️ ОТКРЫТЬ VPN", web_app=WebAppInfo(url=TMA_URL))
+    return InlineKeyboardButton("▶️ ОТКРЫТЬ VPN", url=TMA_URL)
 
 
 async def show_start_screen(msg, user_id: int, edit: bool = False):
@@ -632,15 +632,13 @@ async def main_menu(msg, user_id: int, edit=False):
         tma_btn = _tma_button()
         kb = []
         if tma_btn:
-            kb.append([InlineKeyboardButton("──────────────────────", callback_data="noop")])
             kb.append([tma_btn])
-            kb.append([InlineKeyboardButton("──────────────────────", callback_data="noop")])
         kb.append([
-            InlineKeyboardButton("➕ Добавить",  callback_data="add"),
-            InlineKeyboardButton("📋 Мои",       callback_data="my_devices"),
-            InlineKeyboardButton("📊 Статус",    callback_data="status"),
+            InlineKeyboardButton("🆕 Добавить",       callback_data="add"),
+            InlineKeyboardButton("📋 Мои устройства", callback_data="my_devices"),
         ])
-        kb.append([InlineKeyboardButton("📖 Инструкция 📖", callback_data="help")])
+        kb.append([InlineKeyboardButton("📊 Статус сервера", callback_data="status")])
+        kb.append([InlineKeyboardButton("📖 Инструкция",     callback_data="help")])
 
     if edit:
         await msg.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
