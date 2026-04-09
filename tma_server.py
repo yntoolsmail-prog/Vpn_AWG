@@ -12,7 +12,9 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
+import tarfile
 import tempfile
 import time
 from functools import wraps
@@ -21,9 +23,9 @@ from urllib.parse import unquote
 from flask import Flask, jsonify, request, Response, send_file
 
 from awg_core import (
-    ADMIN_ID, BACKUP_DIR, CLIENTS_DIR, BOT_TOKEN,
-    SERVER_ENDPOINT, SERVER_ENDPOINT_BACKUP, SERVER_IP, SERVER_PORT,
-    PRIMARY_DNS, SECONDARY_DNS,
+    ADMIN_ID, AWG_CONF, AWG_IFACE, BACKUP_DIR, CLIENTS_DIR, BOT_TOKEN,
+    ENV_FILE, SERVER_ENDPOINT, SERVER_ENDPOINT_BACKUP, SERVER_IP, SERVER_PORT,
+    PRIMARY_DNS, SECONDARY_DNS, USERS_FILE,
     build_allowed_ips, collect_stats_basic, collect_stats_full,
     create_backup, create_client, fmt_bytes,
     get_all_clients, get_awg_dump, get_client_keys, get_client_pub,
@@ -678,6 +680,59 @@ def backup_send(user_id, filename):
         return jsonify({"error": "Ошибка curl"}), 500
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/backups/<filename>/restore", methods=["POST"])
+@require_admin
+def backup_restore(user_id, filename):
+    """Восстанавливает конфиги из бэкапа. Перед восстановлением создаёт автобэкап."""
+    if ".." in filename or "/" in filename:
+        return jsonify({"error": "Недопустимое имя файла"}), 400
+    path = os.path.join(BACKUP_DIR, filename)
+    if not os.path.exists(path):
+        return jsonify({"error": "Файл не найден"}), 404
+
+    # Автобэкап перед восстановлением
+    os.makedirs(BACKUP_DIR, exist_ok=True)
+    ts          = time.strftime("%Y%m%d_%H%M%S")
+    auto_backup = os.path.join(BACKUP_DIR, f"pre_restore_{ts}.tar.gz")
+    try:
+        with tarfile.open(auto_backup, "w:gz") as tar:
+            tar.add(AWG_CONF,    arcname=f"{AWG_IFACE}.conf")
+            tar.add(ENV_FILE,    arcname="server.env")
+            tar.add(CLIENTS_DIR, arcname="clients")
+            if os.path.exists(USERS_FILE):
+                tar.add(USERS_FILE, arcname="users.json")
+    except Exception as e:
+        return jsonify({"error": f"Не удалось создать автобэкап: {e}"}), 500
+
+    try:
+        # Останавливаем AWG
+        subprocess.run(["systemctl", "stop", f"awg-quick@{AWG_IFACE}"],
+                       capture_output=True)
+
+        # Чистим clients/ чтобы не осталось мусора
+        if os.path.exists(CLIENTS_DIR):
+            shutil.rmtree(CLIENTS_DIR)
+        os.makedirs(CLIENTS_DIR)
+
+        # Распаковываем бэкап
+        with tarfile.open(path, "r:gz") as tar:
+            tar.extractall("/etc/amnezia/amneziawg/")
+    except Exception as e:
+        return jsonify({"error": f"Ошибка при восстановлении: {e}",
+                        "auto_backup": os.path.basename(auto_backup)}), 500
+
+    # Поднимаем AWG и перезапускаем бота (через 2 сек, не блокируем ответ)
+    subprocess.Popen(
+        ["bash", "-c",
+         f"sleep 2 && systemctl start awg-quick@{AWG_IFACE} && systemctl restart awg-bot"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    return jsonify({
+        "ok":          True,
+        "auto_backup": os.path.basename(auto_backup),
+    })
 
 
 # ── Обслуживание (admin) ──────────────────────────────────────────────────────

@@ -861,6 +861,31 @@
   </div>
 </div>
 
+<!-- ══ МОДАЛКА: Подтвердить восстановление бэкапа ══ -->
+<div class="modal-overlay hidden" id="modal-restore" onclick="closeModal('modal-restore')">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-handle"></div>
+    <div class="modal-title">Восстановить бэкап?</div>
+    <div style="font-size:13px;color:var(--text-mid);line-height:1.6;margin-bottom:16px">
+      <div id="restore-name" style="font-weight:600;color:var(--text);margin-bottom:10px;word-break:break-all"></div>
+      <div>Будет выполнено:</div>
+      <ul style="margin:8px 0 0 16px;padding:0;color:var(--text-dim)">
+        <li>Автобэкап текущего состояния</li>
+        <li>Остановка AWG</li>
+        <li>Замена конфигов из выбранного бэкапа</li>
+        <li>Перезапуск AWG и бота</li>
+      </ul>
+      <div style="margin-top:12px;font-size:12px;color:var(--amber)">
+        ⚠️ Бот и TMA перезапустятся. Соединение прервётся на несколько секунд.
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('modal-restore')">Отмена</button>
+      <button class="btn btn-red" id="btn-restore-confirm">↩ Восстановить</button>
+    </div>
+  </div>
+</div>
+
 <!-- ══ МОДАЛКА: Настройка сайтов ══ -->
 <div class="modal-overlay hidden" id="modal-sites" onclick="closeModal('modal-sites')">
   <div class="modal" onclick="event.stopPropagation()">
@@ -1569,6 +1594,9 @@ function renderSettings(s, backups) {
           <button class="btn btn-ghost" style="padding:6px 10px;font-size:14px"
                   title="Отправить в Telegram"
                   onclick="sendBackupToBot(this,'${encodeURIComponent(b.name)}')">📤</button>
+          <button class="btn btn-ghost" style="padding:6px 10px;font-size:14px"
+                  title="Восстановить"
+                  onclick="confirmRestore('${encodeURIComponent(b.name)}','${_esc(b.name)}')">↩</button>
           <button class="btn btn-red" style="padding:6px 10px;font-size:14px"
                   onclick="deleteBackup('${encodeURIComponent(b.name)}','${_esc(b.name)}')">🗑</button>
         </div>
@@ -1628,6 +1656,35 @@ async function sendBackupToBot(btn, encName) {
   } finally {
     btn.disabled = false;
     btn.innerHTML = orig;
+  }
+}
+
+
+// ── Восстановить бэкап ──
+function confirmRestore(encName, displayName) {
+  document.getElementById('restore-name').textContent = displayName;
+  const btn = document.getElementById('btn-restore-confirm');
+  btn.disabled = false;
+  btn.textContent = '↩ Восстановить';
+  btn.onclick = () => doRestore(encName, btn);
+  openModal('modal-restore');
+}
+
+async function doRestore(encName, btn) {
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Восстановление…';
+  try {
+    const resp = await API(`/api/backups/${encName}/restore`, { method: 'POST' });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || 'Ошибка');
+    closeModal('modal-restore');
+    tg?.showAlert?.(
+      `✅ Восстановление запущено!\n\nАвтобэкап: ${data.auto_backup}\n\nАWG и бот перезапускаются…`
+    );
+  } catch(e) {
+    btn.disabled = false;
+    btn.textContent = '↩ Восстановить';
+    tg?.showAlert?.('Ошибка: ' + e.message);
   }
 }
 
