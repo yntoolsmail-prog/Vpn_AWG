@@ -481,11 +481,14 @@ async def show_start_screen(msg, user_id: int, edit: bool = False):
 
     text = status + greeting + "\n\n💡 Дополнительные команды — кнопка *Меню* ↓"
 
-    kb = []
     tma_btn = _tma_button()
+    kb = []
     if tma_btn:
         kb.append([tma_btn])
-    kb.append([InlineKeyboardButton("📱 Режим бота", callback_data="back")])
+    # Кнопка "Режим бота" — только для админа (у пользователей весь UI в TMA)
+    # Если TMA не настроена — показываем как фоллбэк для всех
+    if is_admin or not tma_btn:
+        kb.append([InlineKeyboardButton("📱 Режим бота", callback_data="back")])
 
     markup = InlineKeyboardMarkup(kb)
     if edit:
@@ -2217,7 +2220,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def cmd_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/panel — открыть панель управления (TMA или сообщение что не настроена)."""
+    """/panel — открыть панель управления (TMA)."""
     user_id = update.effective_user.id
     if not is_approved(user_id):
         await update.message.reply_text("⛔ У вас нет доступа.")
@@ -2225,14 +2228,11 @@ async def cmd_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     tma_btn = _tma_button()
     if tma_btn:
-        await update.message.reply_text(
-            "🖥 Панель управления:",
-            reply_markup=InlineKeyboardMarkup([[tma_btn]])
-        )
+        # Минимальный текст — сразу кнопка, нажать один раз
+        await update.message.reply_text("🖥", reply_markup=InlineKeyboardMarkup([[tma_btn]]))
     else:
         await update.message.reply_text(
-            "⚠️ Панель управления не настроена.\n\n"
-            "Используйте /bot для управления через бота."
+            "⚠️ Панель не настроена. Используйте /bot"
         )
 
 
