@@ -3,7 +3,7 @@
 # Version: 3.0
 # Вся бизнес-логика — в awg_core.py и sites_data.py
 import os, subprocess, logging, json, time, tempfile, shutil, re, asyncio
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo, BotCommand
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, filters, ContextTypes, ConversationHandler
@@ -42,19 +42,24 @@ WAITING_REGISTER_NAME  = 10
 WAITING_DEVICE_NAME    = 11
 WAITING_RESTORE_FILE   = 12
 WAITING_TZ_INPUT       = 15   # ждём ручной ввод часового пояса
+WAITING_SITES_DOMAIN   = 16   # ждём домен/IP для добавления в исключения
 
 IMG_BASE = "https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/.images"
 
 
 
 
-def sites_keyboard(selected: set, device_name: str, expanded: set | None = None) -> InlineKeyboardMarkup:
+def sites_keyboard(selected: set, device_name: str, expanded: set | None = None,
+                   custom_domains: list | None = None) -> InlineKeyboardMarkup:
     """Строит клавиатуру исключений сайтов.
     Категории с 1 пунктом — всегда развёрнуты без заголовка.
     Категории с 2+ пунктами — сворачиваются/разворачиваются кнопкой заголовка.
-    expanded — множество ключей категорий которые сейчас раскрыты."""
+    expanded — множество ключей категорий которые сейчас раскрыты.
+    custom_domains — список кастомных доменов/IP пользователя."""
     if expanded is None:
         expanded = set()
+    if custom_domains is None:
+        custom_domains = []
 
     rows = []
     all_selected   = ALL_SELECTABLE.issubset(selected)  # для кнопки "выбрать все"
@@ -96,6 +101,13 @@ def sites_keyboard(selected: set, device_name: str, expanded: set | None = None)
         rows.append([InlineKeyboardButton("☐ Снять все", callback_data="ts_deselect_all")])
     else:
         rows.append([InlineKeyboardButton("☑️ Выбрать все", callback_data="ts_select_all")])
+
+    # Блок кастомных доменов
+    if custom_domains:
+        rows.append([InlineKeyboardButton("──── 🌐 Свои сайты ────", callback_data="noop")])
+        for i, d in enumerate(custom_domains):
+            rows.append([InlineKeyboardButton(f"❌ {d}", callback_data=f"ts_rm_custom_{i}")])
+    rows.append([InlineKeyboardButton("➕ Добавить свой сайт", callback_data="sites_add_custom")])
 
     rows.append([
         InlineKeyboardButton("✅ Готово",   callback_data="sites_done"),
@@ -418,11 +430,69 @@ def back_kb(target="back"):
 # РЕГИСТРАЦИЯ
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _tma_button() -> InlineKeyboardButton | None:
+    """Возвращает кнопку открытия TMA или None если URL не настроен."""
+    if not TMA_URL:
+        return None
+    if TMA_URL.startswith("https://"):
+        return InlineKeyboardButton("🖥 Открыть панель управления", web_app=WebAppInfo(url=TMA_URL))
+    return InlineKeyboardButton("🖥 Открыть панель управления", url=TMA_URL)
+
+
+async def show_start_screen(msg, user_id: int, edit: bool = False):
+    """Минималистичный стартовый экран с живой статистикой и кнопкой TMA."""
+    is_admin = (user_id == ADMIN_ID)
+
+    peers  = get_awg_dump()
+    now    = int(time.time())
+    online = sum(1 for p in peers.values() if p.get("handshake") and now - p["handshake"] < 180)
+    total  = len(get_all_clients())
+    sys_s  = get_system_stats()
+    bw     = load_bw_peak().get("last", {})
+    ram_pct = round(sys_s["ram_used"] / sys_s["ram_total"] * 100) if sys_s.get("ram_total") else 0
+
+    status = (
+        f"🔐 {'AmneziaWG' if is_admin else 'Семейный VPN'}\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"🟢 Онлайн: {online} из {total}\n"
+        f"💾 RAM: {ram_pct}%  💿 Диск: {sys_s['disk_pct']}%\n"
+        f"⬇️ {bw.get('awg_down', 0)} / ⬆️ {bw.get('awg_up', 0)} Mbit/s"
+    )
+
+    if is_admin:
+        users         = load_users()
+        pending_count = len(users["pending"])
+        pending_note  = f"  🔴 Ожидают: {pending_count}" if pending_count else ""
+        greeting = (
+            f"\n\n📱 Клиентов: {total} | 👥 Польз.: {len(users['approved'])}{pending_note}"
+        )
+    else:
+        my_clients   = get_user_clients(user_id)
+        display_name = get_user_display(user_id)
+        n = len(my_clients)
+        word = "устройство" if n == 1 else ("устройства" if 2 <= n <= 4 else "устройств")
+        greeting = f"\n\n👋 Привет, {display_name}! У тебя {n} {word}."
+
+    text = status + greeting + "\n\n💡 Дополнительные команды — кнопка *Меню* ↓"
+
+    kb = []
+    tma_btn = _tma_button()
+    if tma_btn:
+        kb.append([tma_btn])
+    kb.append([InlineKeyboardButton("📱 Режим бота", callback_data="back")])
+
+    markup = InlineKeyboardMarkup(kb)
+    if edit:
+        await msg.edit_message_text(text, reply_markup=markup, parse_mode="Markdown")
+    else:
+        await msg.reply_text(text, reply_markup=markup, parse_mode="Markdown")
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
     if is_approved(user_id):
-        await main_menu(update.message, user_id)
+        await show_start_screen(update.message, user_id)
         return ConversationHandler.END
 
     users = load_users()
@@ -791,7 +861,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("cat_toggle_"):
         await toggle_category_handler(query, data[11:], context)
     elif data.startswith("sites_"):
-        # sites_<name> → меню исключений для устройства
+        # sites_<name> → меню исключений; sites_add_custom перехватывается ConversationHandler раньше
         await show_sites_menu(query, data[6:], user_id, context)
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1826,14 +1896,16 @@ async def show_sites_menu(query, name: str, user_id: int, context):
         selected = set(saved["sites"]) | set(DEFAULT_SELECTED)
     else:
         selected = set(DEFAULT_SELECTED)
+    custom_domains = list(saved.get("custom_domains", [])) if saved else []
 
     context.user_data["sites_device"]   = name
     context.user_data["sites_selected"] = selected
-    context.user_data["sites_expanded"] = set()  # все категории свёрнуты
+    context.user_data["sites_custom"]   = custom_domains
+    context.user_data["sites_expanded"] = set()
 
     await query.edit_message_text(
         _sites_text(name),
-        reply_markup=sites_keyboard(selected, name, set()),
+        reply_markup=sites_keyboard(selected, name, set(), custom_domains),
         parse_mode="Markdown",
     )
 
@@ -1852,6 +1924,7 @@ async def toggle_site_handler(query, key: str, user_id: int, context):
 
     selected = context.user_data.get("sites_selected", set(DEFAULT_SELECTED))
     expanded = context.user_data.get("sites_expanded", set())
+    custom   = context.user_data.get("sites_custom", [])
 
     if key == "select_all":
         selected = set(DEFAULT_SELECTED) | ALL_SELECTABLE
@@ -1859,6 +1932,11 @@ async def toggle_site_handler(query, key: str, user_id: int, context):
     elif key == "deselect_all":
         selected = set(DEFAULT_SELECTED)
         context.user_data["sites_selected"] = selected
+    elif key.startswith("rm_custom_"):
+        idx = int(key[10:])
+        if 0 <= idx < len(custom):
+            custom.pop(idx)
+        context.user_data["sites_custom"] = custom
     elif key in DEFAULT_SELECTED:
         await query.answer()
         return
@@ -1871,7 +1949,7 @@ async def toggle_site_handler(query, key: str, user_id: int, context):
 
     await query.edit_message_text(
         _sites_text(name),
-        reply_markup=sites_keyboard(selected, name, expanded),
+        reply_markup=sites_keyboard(selected, name, expanded, custom),
         parse_mode="Markdown",
     )
 
@@ -1885,6 +1963,7 @@ async def toggle_category_handler(query, cat_name: str, context):
 
     selected = context.user_data.get("sites_selected", set(DEFAULT_SELECTED))
     expanded = context.user_data.get("sites_expanded", set())
+    custom   = context.user_data.get("sites_custom", [])
 
     if cat_name in expanded:
         expanded.discard(cat_name)
@@ -1894,7 +1973,7 @@ async def toggle_category_handler(query, cat_name: str, context):
 
     await query.edit_message_text(
         _sites_text(name),
-        reply_markup=sites_keyboard(selected, name, expanded),
+        reply_markup=sites_keyboard(selected, name, expanded, custom),
         parse_mode="Markdown",
     )
 
@@ -1918,12 +1997,14 @@ async def apply_sites(query, user_id: int, context):
         return
 
     # Сохраняем исключения (без DEFAULT_SELECTED — они всегда включены)
-    user_sites = list(selected - set(DEFAULT_SELECTED))
-    save_client_excl(name, {"sites": user_sites, "custom_domains": []})
+    user_sites     = list(selected - set(DEFAULT_SELECTED))
+    custom_domains = context.user_data.get("sites_custom", [])
+    save_client_excl(name, {"sites": user_sites, "custom_domains": custom_domains})
 
     context.user_data.pop("sites_device", None)
     context.user_data.pop("sites_selected", None)
     context.user_data.pop("sites_expanded", None)
+    context.user_data.pop("sites_custom", None)
 
     short = name.split(".", 1)[1] if "." in name else name
     excl_count = len(user_sites)
@@ -1932,6 +2013,80 @@ async def apply_sites(query, user_id: int, context):
     await show_device(query, name, user_id)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# ДОБАВИТЬ СВОЙ САЙТ В ИСКЛЮЧЕНИЯ
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def sites_add_custom_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Шаг 1 — спрашиваем домен или IP для добавления в исключения."""
+    query = update.callback_query
+    await query.answer()
+    name = context.user_data.get("sites_device")
+    if not name:
+        await query.answer("Сессия устарела, откройте меню заново.", show_alert=True)
+        return ConversationHandler.END
+    await query.edit_message_text(
+        "➕ *Добавить свой сайт в исключения*\n\n"
+        "Введите домен или IP-адрес:\n\n"
+        "Примеры:\n"
+        "`netflix.com`\n"
+        "`142.250.0.0/16`\n"
+        "`1.2.3.4`\n\n"
+        "Домен будет исключён из VPN-туннеля.\n"
+        "Или нажмите Отмена.",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("❌ Отмена", callback_data=f"sites_{name}")
+        ]]),
+        parse_mode="Markdown",
+    )
+    return WAITING_SITES_DOMAIN
+
+
+async def sites_add_custom_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Шаг 2 — получаем домен/IP, добавляем в список и возвращаем меню."""
+    import ipaddress as _ip
+    raw = update.message.text.strip()
+
+    # Очищаем — убираем схему и путь
+    entry = raw.replace("https://", "").replace("http://", "")
+    entry = entry.replace("www.", "").split("/")[0].strip().lower()
+
+    # Проверяем: CIDR или домен
+    valid = False
+    try:
+        _ip.ip_network(entry, strict=False)
+        valid = True
+    except ValueError:
+        if "." in entry and len(entry) >= 4 and not entry.startswith("."):
+            valid = True
+
+    if not valid:
+        await update.message.reply_text(
+            "❌ Неверный формат. Введите домен (`site.ru`) или IP/CIDR (`1.2.3.0/24`).",
+            parse_mode="Markdown",
+        )
+        return WAITING_SITES_DOMAIN
+
+    custom = context.user_data.get("sites_custom", [])
+    if entry not in custom:
+        custom.append(entry)
+        context.user_data["sites_custom"] = custom
+        note = f"✅ `{entry}` добавлен в исключения."
+    else:
+        note = f"ℹ️ `{entry}` уже есть в списке."
+
+    name = context.user_data.get("sites_device", "")
+    await update.message.reply_text(
+        note + f"\n\n{_sites_text(name)}",
+        reply_markup=sites_keyboard(
+            context.user_data.get("sites_selected", set(DEFAULT_SELECTED)),
+            name,
+            context.user_data.get("sites_expanded", set()),
+            custom,
+        ),
+        parse_mode="Markdown",
+    )
+    return ConversationHandler.END
 
 
 
@@ -2046,8 +2201,42 @@ async def receive_device_name(update: Update, context: ContextTypes.DEFAULT_TYPE
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Отменено.")
+    context.user_data.clear()
+    await update.message.reply_text("❌ Отменено.")
     return ConversationHandler.END
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# КОМАНДЫ /panel и /bot
+# ══════════════════════════════════════════════════════════════════════════════
+
+async def cmd_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/panel — открыть панель управления (TMA или сообщение что не настроена)."""
+    user_id = update.effective_user.id
+    if not is_approved(user_id):
+        await update.message.reply_text("⛔ У вас нет доступа.")
+        return
+
+    tma_btn = _tma_button()
+    if tma_btn:
+        await update.message.reply_text(
+            "🖥 Панель управления:",
+            reply_markup=InlineKeyboardMarkup([[tma_btn]])
+        )
+    else:
+        await update.message.reply_text(
+            "⚠️ Панель управления не настроена.\n\n"
+            "Используйте /bot для управления через бота."
+        )
+
+
+async def cmd_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/bot — открыть главное меню бота."""
+    user_id = update.effective_user.id
+    if not is_approved(user_id):
+        await update.message.reply_text("⛔ У вас нет доступа.")
+        return
+    await main_menu(update.message, user_id)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2292,8 +2481,20 @@ async def do_update_ip(query, new_ip: str):
 # ЗАПУСК
 # ══════════════════════════════════════════════════════════════════════════════
 
+async def post_init(application) -> None:
+    """Регистрирует команды бота в Telegram (кнопка «Меню»)."""
+    commands = [
+        BotCommand("start",  "🏠 Главная"),
+        BotCommand("panel",  "🖥 Открыть панель"),
+        BotCommand("bot",    "📱 Режим бота"),
+        BotCommand("cancel", "❌ Отмена"),
+    ]
+    await application.bot.set_my_commands(commands)
+    logger.info("Команды бота зарегистрированы: /start /panel /bot /cancel")
+
+
 def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
     reg_conv = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
@@ -2349,10 +2550,29 @@ def main():
         allow_reentry=True,
     )
 
+    # sites_add_custom — регистрируем ДО общего button_handler,
+    # чтобы колбэк "sites_add_custom" перехватывался сюда,
+    # а не уходил в button_handler как sites_<name>
+    sites_custom_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(sites_add_custom_start, pattern="^sites_add_custom$")],
+        states={
+            WAITING_SITES_DOMAIN: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, sites_add_custom_receive),
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+        per_chat=True,
+        per_message=False,
+        allow_reentry=True,
+    )
+
     app.add_handler(reg_conv)
     app.add_handler(add_conv)
     app.add_handler(restore_conv)
     app.add_handler(tz_conv)
+    app.add_handler(sites_custom_conv)  # до общего button_handler
+    app.add_handler(CommandHandler("panel",  cmd_panel))
+    app.add_handler(CommandHandler("bot",    cmd_bot))
     app.add_handler(CallbackQueryHandler(button_handler))
 
     # Проверка напоминания о техобслуживании — раз в сутки

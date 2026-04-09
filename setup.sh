@@ -314,30 +314,36 @@ EOF2
         TMA_URL="http://${SERVER_IP}:${TMA_PORT}"
     fi
 
+    # Сохраняем TMA_URL в server.env
+    if grep -q "^TMA_URL=" "${AWG_DIR}/server.env" 2>/dev/null; then
+        sed -i "s|^TMA_URL=.*|TMA_URL=${TMA_URL}|" "${AWG_DIR}/server.env"
+    else
+        printf "TMA_URL=%s\n" "$TMA_URL" >> "${AWG_DIR}/server.env"
+    fi
+
     echo ""
     log "TMA установлена!"
     info "URL: ${TMA_URL}"
-    if [[ "$USE_SSL" -eq 1 ]]; then
-        echo ""
-        echo -e "  ${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-        echo -e "  ${BOLD}  Настройка кнопки «Монитор» в Telegram (BotFather)${NC}"
-        echo -e "  ${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-        echo ""
-        echo -e "  ${CYAN}1.${NC} Открой Telegram и найди ${YELLOW}@BotFather${NC}"
-        echo -e "  ${CYAN}2.${NC} Отправь команду: ${YELLOW}/mybots${NC}"
-        echo -e "  ${CYAN}3.${NC} Выбери своего бота из списка"
-        echo -e "  ${CYAN}4.${NC} Нажми ${YELLOW}Bot Settings${NC}"
-        echo -e "  ${CYAN}5.${NC} Нажми ${YELLOW}Menu Button${NC}"
-        echo -e "  ${CYAN}6.${NC} Нажми ${YELLOW}Configure menu button${NC}"
-        echo -e "  ${CYAN}7.${NC} Отправь URL веб-приложения:"
-        echo -e "     ${GREEN}${TMA_URL}${NC}"
-        echo -e "  ${CYAN}8.${NC} Отправь текст кнопки (название), например:"
-        echo -e "     ${GREEN}Монитор${NC}"
-        echo ""
-        echo -e "  ${YELLOW}Готово!${NC} Кнопка появится рядом с полем ввода в боте."
-        echo -e "  При нажатии Telegram откроет веб-панель прямо внутри себя."
-        echo -e "  ${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    fi
+    echo ""
+    echo -e "  ${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "  ${BOLD}  Команды бота — настройка в BotFather (Edit Commands)${NC}"
+    echo -e "  ${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo -e "  ${CYAN}Команды регистрируются автоматически при запуске бота.${NC}"
+    echo -e "  Если хотите проверить или настроить вручную:"
+    echo ""
+    echo -e "  ${CYAN}1.${NC} Открой Telegram и найди ${YELLOW}@BotFather${NC}"
+    echo -e "  ${CYAN}2.${NC} Отправь команду: ${YELLOW}/mybots${NC}"
+    echo -e "  ${CYAN}3.${NC} Выбери своего бота → ${YELLOW}Bot Settings${NC} → ${YELLOW}Edit Commands${NC}"
+    echo -e "  ${CYAN}4.${NC} Вставь блок команд:"
+    echo ""
+    echo -e "  ${GREEN}start - 🏠 Главная${NC}"
+    echo -e "  ${GREEN}panel - 🖥 Открыть панель${NC}"
+    echo -e "  ${GREEN}bot - 📱 Режим бота${NC}"
+    echo -e "  ${GREEN}cancel - ❌ Отмена${NC}"
+    echo ""
+    echo -e "  ${YELLOW}Готово!${NC} Команды появятся в кнопке «/» рядом с полем ввода."
+    echo -e "  ${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
 }
 

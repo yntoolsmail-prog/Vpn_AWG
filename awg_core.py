@@ -56,6 +56,7 @@ SECONDARY_DNS          = srv.get("SECONDARY_DNS", "1.0.0.1")
 TZ                     = srv.get("TIMEZONE", "UTC")
 SERVER_ENDPOINT        = srv.get("SERVER_ENDPOINT", "") or SERVER_IP
 SERVER_ENDPOINT_BACKUP = srv.get("SERVER_ENDPOINT_BACKUP", "")
+TMA_URL                = srv.get("TMA_URL", "")
 
 # Применяем часовой пояс
 os.environ["TZ"] = TZ
