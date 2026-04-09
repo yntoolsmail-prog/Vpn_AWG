@@ -1229,15 +1229,22 @@ async def do_send_qr(query, name: str, ep_key: str):
             caption=f"📄 .conf для AmneziaWG — *{short}* ({ep_label}){excl_note}",
             parse_mode="Markdown"
         )
-        subprocess.run(["qrencode", "-o", qr_path, "-r", tmp_conf], check=True)
-        await query.message.reply_photo(
-            photo=open(qr_path, "rb"),
-            caption=(
-                f"📱 QR для AmneziaWG — *{short}* ({ep_label})\n"
-                f"🌐 Endpoint: `{ep}:{SERVER_PORT}`{excl_note}"
-            ),
-            parse_mode="Markdown"
-        )
+        if len(content) > 2900:
+            await query.message.reply_text(
+                "ℹ️ QR-код недоступен: конфиг слишком большой из-за исключений сайтов.\n"
+                "Используйте *.conf* файл выше.",
+                parse_mode="Markdown"
+            )
+        else:
+            subprocess.run(["qrencode", "-o", qr_path, "-r", tmp_conf], check=True)
+            await query.message.reply_photo(
+                photo=open(qr_path, "rb"),
+                caption=(
+                    f"📱 QR для AmneziaWG — *{short}* ({ep_label})\n"
+                    f"🌐 Endpoint: `{ep}:{SERVER_PORT}`{excl_note}"
+                ),
+                parse_mode="Markdown"
+            )
     except Exception as e:
         await query.message.reply_text(f"❌ Ошибка QR: {e}")
     finally:
