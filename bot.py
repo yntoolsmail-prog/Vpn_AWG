@@ -441,8 +441,8 @@ def _tma_button() -> InlineKeyboardButton | None:
     if not TMA_URL:
         return None
     if TMA_URL.startswith("https://"):
-        return InlineKeyboardButton("🗝 ОТКРЫТЬ VPN", web_app=WebAppInfo(url=TMA_URL))
-    return InlineKeyboardButton("🗝 ОТКРЫТЬ VPN", url=TMA_URL)
+        return InlineKeyboardButton("▶️ ОТКРЫТЬ VPN 🔑", web_app=WebAppInfo(url=TMA_URL))
+    return InlineKeyboardButton("▶️ ОТКРЫТЬ VPN 🔑", url=TMA_URL)
 
 
 async def show_start_screen(msg, user_id: int, edit: bool = False):
