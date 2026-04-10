@@ -104,19 +104,19 @@ fi
 
 # Список всех файлов проекта — используется в --update
 PROJECT_FILES=(
-    "bot.py:/root/bot.py"
+    "modules/bot/bot.py:/root/modules/bot/bot.py"
     "awg_core.py:/root/awg_core.py"
     "sites_data.py:/root/sites_data.py"
     "module_loader.py:/root/module_loader.py"
     "modules.conf:/root/modules.conf"
     "vpn.sh:/root/vpn.sh"
-    "tma_server.py:${AWG_DIR}/tma_server.py"
+    "modules/tma/tma_server.py:/root/modules/tma/tma_server.py"
     "tma/index.html:${AWG_DIR}/tma/index.html"
 )
 # ── Функция установки TMA ─────────────────────────────────────────────────────
 _install_tma() {
     local TMA_DIR="${AWG_DIR}/tma"
-    local TMA_SERVER_DST="${AWG_DIR}/tma_server.py"
+    local TMA_SERVER_DST="/root/modules/tma/tma_server.py"
     local TMA_HTML_DST="${TMA_DIR}/index.html"
     local NGINX_CONF="/etc/nginx/sites-available/awg-tma"
     local NGINX_ENABLED="/etc/nginx/sites-enabled/awg-tma"
@@ -223,8 +223,9 @@ _install_tma() {
 
     # Файлы
     mkdir -p "$TMA_DIR"
+    mkdir -p /root/modules/tma
     log "Скачиваю tma_server.py..."
-    curl -fsSL "${REPO_RAW}/tma_server.py" -o "${TMA_SERVER_DST}.new"
+    curl -fsSL "${REPO_RAW}/modules/tma/tma_server.py" -o "${TMA_SERVER_DST}.new"
     mv "${TMA_SERVER_DST}.new" "$TMA_SERVER_DST"
     chmod 750 "$TMA_SERVER_DST"
 
@@ -249,7 +250,7 @@ ExecStart=/usr/bin/python3 ${TMA_SERVER_DST}
 Restart=always
 RestartSec=5
 User=root
-WorkingDirectory=${AWG_DIR}
+WorkingDirectory=/root
 Environment=PYTHONPATH=/root
 StandardOutput=journal
 StandardError=journal
@@ -398,7 +399,7 @@ if [[ "${1}" == "--update" ]]; then
         src_file="${entry%%:*}"
         dst_file="${entry##*:}"
         # Пропускаем файлы которых нет на сервере (например TMA не установлена)
-        [[ "$src_file" == "tma_server.py" && ! -f "$dst_file" ]] && continue
+        [[ "$src_file" == "modules/tma/tma_server.py" && ! -f "$dst_file" ]] && continue
         [[ "$src_file" == "tma/index.html" && ! -f "$dst_file" ]] && continue
         log "Обновляю ${src_file}..."
         if curl -fsSL "${REPO_RAW}/${src_file}" -o "${dst_file}.new"; then
@@ -412,8 +413,38 @@ if [[ "${1}" == "--update" ]]; then
         fi
     done
 
-    # Обновляем манифесты модулей (создаём папки если их ещё нет)
+    # ── Миграция: переносим файлы со старых путей если нужно ────────────────────
     mkdir -p /root/modules/bot /root/modules/tma
+    # bot.py: старый путь /root/bot.py → новый /root/modules/bot/bot.py
+    if [[ -f /root/bot.py && ! -f /root/modules/bot/bot.py ]]; then
+        mv /root/bot.py /root/modules/bot/bot.py
+        log "Перемещён bot.py → modules/bot/bot.py"
+    fi
+    # tma_server.py: старый путь /etc/amnezia/.../tma_server.py → новый /root/modules/tma/tma_server.py
+    if [[ -f "${AWG_DIR}/tma_server.py" && ! -f /root/modules/tma/tma_server.py ]]; then
+        mv "${AWG_DIR}/tma_server.py" /root/modules/tma/tma_server.py
+        log "Перемещён tma_server.py → modules/tma/tma_server.py"
+    fi
+    # Обновляем systemd-сервисы если ещё указывают на старые пути
+    if grep -q 'ExecStart=/usr/bin/python3 /root/bot.py' /etc/systemd/system/awg-bot.service 2>/dev/null; then
+        sed -i \
+            -e 's|ExecStart=/usr/bin/python3 /root/bot.py|ExecStart=/usr/bin/python3 /root/modules/bot/bot.py|' \
+            /etc/systemd/system/awg-bot.service
+        grep -q 'WorkingDirectory' /etc/systemd/system/awg-bot.service || \
+            sed -i '/^ExecStart/a WorkingDirectory=/root\nEnvironment=PYTHONPATH=/root' \
+            /etc/systemd/system/awg-bot.service
+        systemctl daemon-reload
+        log "awg-bot.service обновлён (новый путь к bot.py)"
+    fi
+    if grep -q "ExecStart=.*${AWG_DIR}/tma_server.py" /etc/systemd/system/awg-tma.service 2>/dev/null; then
+        sed -i \
+            "s|ExecStart=/usr/bin/python3 ${AWG_DIR}/tma_server.py|ExecStart=/usr/bin/python3 /root/modules/tma/tma_server.py|" \
+            /etc/systemd/system/awg-tma.service
+        systemctl daemon-reload
+        log "awg-tma.service обновлён (новый путь к tma_server.py)"
+    fi
+
+    # Обновляем манифесты модулей (создаём папки если их ещё нет)
     for _mf in "modules/__init__.py" "modules/bot/__init__.py" "modules/tma/__init__.py"; do
         if curl -fsSL "${REPO_RAW}/${_mf}" -o "/root/${_mf}.new" 2>/dev/null; then
             mv "/root/${_mf}.new" "/root/${_mf}"
@@ -1174,9 +1205,10 @@ printf "REPO_BRANCH=%s\n" "$REPO_BRANCH" \
 
 # ── Шаг 10: Скачиваем скрипты ─────────────────────────────────────────────────
 log "Загрузка скриптов управления (ветка: ${REPO_BRANCH})..."
-curl -fsSL "${REPO_RAW}/vpn.sh"        -o /root/vpn.sh        || err "Не удалось скачать vpn.sh"
-curl -fsSL "${REPO_RAW}/bot.py"        -o /root/bot.py        || err "Не удалось скачать bot.py"
-curl -fsSL "${REPO_RAW}/awg_core.py"   -o /root/awg_core.py   || err "Не удалось скачать awg_core.py"
+curl -fsSL "${REPO_RAW}/vpn.sh"                    -o /root/vpn.sh                    || err "Не удалось скачать vpn.sh"
+mkdir -p /root/modules/bot
+curl -fsSL "${REPO_RAW}/modules/bot/bot.py"        -o /root/modules/bot/bot.py        || err "Не удалось скачать bot.py"
+curl -fsSL "${REPO_RAW}/awg_core.py"               -o /root/awg_core.py               || err "Не удалось скачать awg_core.py"
 curl -fsSL "${REPO_RAW}/sites_data.py"    -o /root/sites_data.py    || err "Не удалось скачать sites_data.py"
 curl -fsSL "${REPO_RAW}/module_loader.py" -o /root/module_loader.py || err "Не удалось скачать module_loader.py"
 curl -fsSL "${REPO_RAW}/modules.conf"     -o /root/modules.conf     || err "Не удалось скачать modules.conf"
@@ -1265,7 +1297,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 /root/bot.py
+ExecStart=/usr/bin/python3 /root/modules/bot/bot.py
+WorkingDirectory=/root
+Environment=PYTHONPATH=/root
 Restart=always
 RestartSec=10
 StandardOutput=journal
