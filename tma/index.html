@@ -2,8 +2,24 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script>
+  // Telegram SDK принудительно отключает зум — восстанавливаем
+  (function() {
+    const vp = document.querySelector('meta[name="viewport"]');
+    function fixZoom() {
+      const c = vp.content;
+      let fixed = c
+        .replace(/maximum-scale=[0-9.]+/i, 'maximum-scale=5.0')
+        .replace(/user-scalable=no/i,      'user-scalable=yes');
+      if (!/maximum-scale/i.test(fixed)) fixed += ', maximum-scale=5.0';
+      if (!/user-scalable/i.test(fixed))  fixed += ', user-scalable=yes';
+      if (fixed !== c) vp.content = fixed;
+    }
+    new MutationObserver(fixZoom).observe(vp, { attributes: true, attributeFilter: ['content'] });
+  })();
+</script>
 <title>AWG Monitor</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Syne:wght@400;700;800&display=swap');
