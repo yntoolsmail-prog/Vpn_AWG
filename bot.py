@@ -402,15 +402,6 @@ async def do_bw_reset_all(query):
 
 
 
-def fmt_handshake(ts: int) -> str:
-    if not ts: return "никогда"
-    diff = int(time.time()) - ts
-    if diff < 60:      return f"{diff} сек назад 🟢"
-    elif diff < 180:   return f"{diff//60} мин назад 🟢"
-    elif diff < 3600:  return f"{diff//60} мин назад"
-    elif diff < 86400: return f"{diff//3600} ч назад"
-    else:              return f"{diff//86400} д назад"
-
 # ── Бэкап ──────────────────────────────────────────────────────────────────────
 async def do_backup(query):
     try:
@@ -915,17 +906,15 @@ async def show_my_devices(query, user_id: int):
         hs    = fmt_handshake(stats.get("handshake", 0))
         dl    = fmt_bytes(stats.get("tx", 0))  # tx сервера = клиент скачал (↓)
         ul    = fmt_bytes(stats.get("rx", 0))  # rx сервера = клиент отдал (↑)
-        short = name.split(".", 1)[1] if "." in name else name
-        lines.append(f"• {short} | {hs} | ↓{dl} ↑{ul}")
+        lines.append(f"• {device_short_name(name)} | {hs} | ↓{dl} ↑{ul}")
 
-    kb = [[InlineKeyboardButton(f"📋 {name.split('.', 1)[1] if '.' in name else name}",
+    kb = [[InlineKeyboardButton(f"📋 {device_short_name(name)}",
            callback_data=f"device_{name}")] for name in clients]
     kb.append([InlineKeyboardButton("◀️ В меню", callback_data="back")])
     await query.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(kb))
 
 async def show_device(query, name: str, user_id: int):
-    user_prefix = get_user_name(user_id) + "."
-    if user_id != ADMIN_ID and not name.startswith(user_prefix):
+    if not can_access_device(user_id, name):
         await query.answer("⛔ Это не ваше устройство.", show_alert=True)
         return
 
@@ -933,7 +922,7 @@ async def show_device(query, name: str, user_id: int):
     pub   = get_client_pub(name)
     stats = peers.get(pub, {}) if pub else {}
 
-    short = name.split(".", 1)[1] if "." in name else name
+    short = device_short_name(name)
     hs    = fmt_handshake(stats.get("handshake", 0))
     dl    = fmt_bytes(stats.get("tx", 0))  # tx сервера = клиент скачал (↓)
     ul    = fmt_bytes(stats.get("rx", 0))  # rx сервера = клиент отдал (↑)
@@ -1111,8 +1100,7 @@ def _conf_for_endpoint(name: str, ep_key: str, allowed_ips: str = "0.0.0.0/0") -
 
 async def show_conf_ep_select(query, name: str, user_id: int):
     """Экран выбора эндпоинта для .conf"""
-    user_prefix = get_user_name(user_id) + "."
-    if user_id != ADMIN_ID and not name.startswith(user_prefix):
+    if not can_access_device(user_id, name):
         await query.answer("⛔ Это не ваше устройство.", show_alert=True)
         return
     # Если только один эндпоинт (основной == IP, резервного нет) — пропускаем выбор
@@ -1122,7 +1110,7 @@ async def show_conf_ep_select(query, name: str, user_id: int):
         # Один эндпоинт — сразу отправляем с сохранёнными исключениями
         await do_send_conf(query, name, "main")
         return
-    short = name.split(".", 1)[1] if "." in name else name
+    short = device_short_name(name)
     await query.edit_message_text(
         f"📄 Скачать .conf для *{short}*\n\nВыберите канал подключения:",
         reply_markup=_endpoint_kb(name, "conf"),
@@ -1131,8 +1119,7 @@ async def show_conf_ep_select(query, name: str, user_id: int):
 
 async def show_qr_ep_select(query, name: str, user_id: int):
     """Экран выбора эндпоинта для QR"""
-    user_prefix = get_user_name(user_id) + "."
-    if user_id != ADMIN_ID and not name.startswith(user_prefix):
+    if not can_access_device(user_id, name):
         await query.answer("⛔ Это не ваше устройство.", show_alert=True)
         return
     has_backup = bool(SERVER_ENDPOINT_BACKUP)
@@ -1140,7 +1127,7 @@ async def show_qr_ep_select(query, name: str, user_id: int):
     if not has_backup and not has_ip:
         await do_send_qr(query, name, "main")
         return
-    short = name.split(".", 1)[1] if "." in name else name
+    short = device_short_name(name)
     await query.edit_message_text(
         f"📱 QR-код для *{short}*\n\nВыберите канал подключения:",
         reply_markup=_endpoint_kb(name, "qr"),
@@ -1149,8 +1136,7 @@ async def show_qr_ep_select(query, name: str, user_id: int):
 
 async def show_share_ep_select(query, name: str, user_id: int):
     """Экран выбора эндпоинта для vpn:// ссылки"""
-    user_prefix = get_user_name(user_id) + "."
-    if user_id != ADMIN_ID and not name.startswith(user_prefix):
+    if not can_access_device(user_id, name):
         await query.answer("⛔ Это не ваше устройство.", show_alert=True)
         return
     has_backup = bool(SERVER_ENDPOINT_BACKUP)
@@ -1158,7 +1144,7 @@ async def show_share_ep_select(query, name: str, user_id: int):
     if not has_backup and not has_ip:
         await do_send_share(query, name, "main")
         return
-    short = name.split(".", 1)[1] if "." in name else name
+    short = device_short_name(name)
     await query.edit_message_text(
         f"📤 Поделиться кодом для *{short}*\n\nВыберите канал подключения:",
         reply_markup=_endpoint_kb(name, "share"),
@@ -1169,16 +1155,8 @@ async def show_share_ep_select(query, name: str, user_id: int):
 
 async def do_send_conf(query, name: str, ep_key: str):
     """Генерирует .conf в памяти (с сохранёнными исключениями) и отправляет в чат."""
-    # Загружаем сохранённые исключения
-    saved = load_client_excl(name)
-    if saved and ("sites" in saved or "custom_domains" in saved):
-        sites = set(saved.get("sites", [])) | set(DEFAULT_SELECTED)
-        custom = saved.get("custom_domains", [])
-        allowed_ips = build_allowed_ips(sites, custom)
-    else:
-        allowed_ips = "0.0.0.0/0"
-
-    short    = name.split(".", 1)[1] if "." in name else name
+    allowed_ips = get_allowed_ips_for_client(name)
+    short    = device_short_name(name)
     ep       = _resolve_endpoint(ep_key)
     content  = _conf_for_endpoint(name, ep_key, allowed_ips)
     filename = f"{name}.conf"
@@ -1200,16 +1178,8 @@ async def do_send_conf(query, name: str, ep_key: str):
 
 async def do_send_qr(query, name: str, ep_key: str):
     """Генерирует .conf в памяти (с сохранёнными исключениями) → QR → отправляет."""
-    # Загружаем сохранённые исключения
-    saved = load_client_excl(name)
-    if saved and ("sites" in saved or "custom_domains" in saved):
-        sites = set(saved.get("sites", [])) | set(DEFAULT_SELECTED)
-        custom = saved.get("custom_domains", [])
-        allowed_ips = build_allowed_ips(sites, custom)
-    else:
-        allowed_ips = "0.0.0.0/0"
-
-    short   = name.split(".", 1)[1] if "." in name else name
+    allowed_ips = get_allowed_ips_for_client(name)
+    short   = device_short_name(name)
     ep      = _resolve_endpoint(ep_key)
     content = _conf_for_endpoint(name, ep_key, allowed_ips)
     ep_label = {"main": "Основной", "backup": "Резервный", "ip": "По IP"}.get(ep_key, ep_key)
@@ -1261,7 +1231,7 @@ async def do_send_share(query, name: str, ep_key: str):
     if not keys:
         await query.message.reply_text(f"❌ Не удалось прочитать ключи для {name}")
         return
-    short    = name.split(".", 1)[1] if "." in name else name
+    short    = device_short_name(name)
     ep       = _resolve_endpoint(ep_key)
     ep_label = {"main": "Основной", "backup": "Резервный", "ip": "По IP"}.get(ep_key, ep_key)
     vpn_link = make_vpn_link(
@@ -1292,8 +1262,7 @@ async def do_send_share(query, name: str, ep_key: str):
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def do_delete(query, name: str, user_id: int):
-    user_prefix = get_user_name(user_id) + "."
-    if user_id != ADMIN_ID and not name.startswith(user_prefix):
+    if not can_access_device(user_id, name):
         await query.answer("⛔ Это не ваше устройство.", show_alert=True)
         return
 
@@ -1301,7 +1270,7 @@ async def do_delete(query, name: str, user_id: int):
         await query.edit_message_text("❌ Устройство не найдено.", reply_markup=back_kb())
         return
 
-    short = name.split(".", 1)[1] if "." in name else name
+    short = device_short_name(name)
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Да, удалить", callback_data=f"confirm_del_{name}")],
         [InlineKeyboardButton("❌ Отмена",      callback_data=f"device_{name}")],
@@ -1312,13 +1281,12 @@ async def do_delete(query, name: str, user_id: int):
     )
 
 async def confirm_delete(query, name: str, user_id: int):
-    user_prefix = get_user_name(user_id) + "."
-    if user_id != ADMIN_ID and not name.startswith(user_prefix):
+    if not can_access_device(user_id, name):
         await query.answer("⛔ Это не ваше устройство.", show_alert=True)
         return
 
     remove_client_from_awg(name)
-    short = name.split(".", 1)[1] if "." in name else name
+    short = device_short_name(name)
     await query.edit_message_text(
         f"✅ Устройство *{short}* удалено.",
         reply_markup=back_kb("my_devices"), parse_mode="Markdown"
@@ -1525,16 +1493,8 @@ async def confirm_restore(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text("⏳ Создаю бэкап текущего состояния...")
 
     # Автобэкап перед восстановлением
-    os.makedirs(BACKUP_DIR, exist_ok=True)
-    ts          = time.strftime("%Y%m%d_%H%M%S")
-    auto_backup = f"{BACKUP_DIR}/pre_restore_{ts}.tar.gz"
     try:
-        with tarfile.open(auto_backup, "w:gz") as tar:
-            tar.add(AWG_CONF,    arcname=f"{AWG_IFACE}.conf")
-            tar.add(ENV_FILE,    arcname="server.env")
-            tar.add(CLIENTS_DIR, arcname="clients")
-            if os.path.exists(USERS_FILE):
-                tar.add(USERS_FILE, arcname="users.json")
+        auto_backup = create_backup(prefix="pre_restore")
     except Exception as e:
         await query.message.reply_text(f"⚠️ Не удалось создать автобэкап: {e}\nВосстановление отменено.")
         os.remove(tmp_path)
@@ -1915,7 +1875,7 @@ async def show_help_dns(query):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _sites_text(name: str) -> str:
-    short = name.split(".", 1)[1] if "." in name else name
+    short = device_short_name(name)
     return (
         f"🌐 Исключения сайтов для *{short}*\n\n"
         f"Отмеченные сайты будут работать *без VPN*.\n"
@@ -1926,8 +1886,7 @@ def _sites_text(name: str) -> str:
 
 async def show_sites_menu(query, name: str, user_id: int, context):
     """Меню настройки исключений сайтов для устройства. Загружает сохранённые настройки из excl.json."""
-    user_prefix = get_user_name(user_id) + "."
-    if user_id != ADMIN_ID and not name.startswith(user_prefix):
+    if not can_access_device(user_id, name):
         await query.answer("⛔ Это не ваше устройство.", show_alert=True)
         return
 
@@ -1958,8 +1917,7 @@ async def toggle_site_handler(query, key: str, user_id: int, context):
         await query.answer("Сессия устарела, откройте меню заново.", show_alert=True)
         return
 
-    user_prefix = get_user_name(user_id) + "."
-    if user_id != ADMIN_ID and not name.startswith(user_prefix):
+    if not can_access_device(user_id, name):
         await query.answer("⛔ Это не ваше устройство.", show_alert=True)
         return
 
@@ -2026,8 +1984,7 @@ async def apply_sites(query, user_id: int, context):
         await query.answer("Сессия устарела, откройте меню заново.", show_alert=True)
         return
 
-    user_prefix = get_user_name(user_id) + "."
-    if user_id != ADMIN_ID and not name.startswith(user_prefix):
+    if not can_access_device(user_id, name):
         await query.answer("⛔ Это не ваше устройство.", show_alert=True)
         return
 
@@ -2047,7 +2004,7 @@ async def apply_sites(query, user_id: int, context):
     context.user_data.pop("sites_expanded", None)
     context.user_data.pop("sites_custom", None)
 
-    short = name.split(".", 1)[1] if "." in name else name
+    short = device_short_name(name)
     excl_count = len(user_sites)
     note = f"{excl_count} {'сайт' if excl_count == 1 else 'сайта' if 2 <= excl_count <= 4 else 'сайтов'}" if excl_count else "только локальная сеть"
     await query.answer(f"✅ Исключения сохранены: {note}", show_alert=False)
