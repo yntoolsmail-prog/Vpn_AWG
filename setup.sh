@@ -355,8 +355,6 @@ EOF2
     echo -e "  ${CYAN}4.${NC} Вставь блок команд:"
     echo ""
     echo -e "  ${GREEN}start - 🏠 Главная${NC}"
-    echo -e "  ${GREEN}panel - 🖥 Открыть панель${NC}"
-    echo -e "  ${GREEN}bot - 📱 Режим бота${NC}"
     echo -e "  ${GREEN}cancel - ❌ Отмена${NC}"
     echo ""
     echo -e "  ${YELLOW}Готово!${NC} Команды появятся в кнопке «/» рядом с полем ввода."

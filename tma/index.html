@@ -633,34 +633,52 @@
     </div>
     <div style="padding:0 4px 100px">
 
-      <!-- Подключение через AmneziaWG -->
-      <div class="section-title">Подключение через AmneziaWG</div>
-      <div class="row-card" style="flex-direction:column;align-items:flex-start;gap:10px;line-height:1.6;font-size:13px">
-        <div><strong>1.</strong> Установите <strong>AmneziaWG</strong>:
-             Android — Play Market, iOS — App Store, Windows/Mac — amnezia.org.</div>
-        <div><strong>2.</strong> Здесь: «Устройства» → <strong>+</strong> → введите название гаджета.</div>
-        <div><strong>3.</strong> Откройте устройство → нажмите <strong>.conf в Telegram</strong>.
-             Файл придёт в бот. Или нажмите <strong>QR-код</strong> и отсканируйте.</div>
-        <div><strong>4.</strong> В AmneziaWG: нажмите <strong>+</strong> → «Добавить из файла» или «Сканировать QR».
-             Выберите полученный файл.</div>
-        <div><strong>5.</strong> Включите тоннель — готово!</div>
+      <!-- Важно -->
+      <div class="section-title">⚠️ Важно</div>
+      <div class="row-card" style="flex-direction:column;align-items:flex-start;gap:8px;font-size:13px;line-height:1.6">
+        <div><strong>Один гаджет = один профиль.</strong>
+             Не используйте один конфиг на нескольких устройствах — подключение будет нестабильным.
+             Создайте отдельный профиль для каждого гаджета.</div>
+        <div>🔧 <strong>Исключения</strong> — настраиваются в карточке устройства → «Исключения».
+             Позволяют пропускать банки, госуслуги и другие сайты напрямую, минуя VPN.</div>
+        <div>🔄 При смене конфига не забудьте <strong>переподключиться</strong> к VPN.</div>
+      </div>
+
+      <!-- Два приложения -->
+      <div class="section-title" style="margin-top:16px">📱 Два приложения на выбор</div>
+      <div class="row-card" style="flex-direction:column;align-items:flex-start;gap:8px;font-size:13px;line-height:1.6">
+        <div><strong>AmneziaVPN</strong> — раздельное туннелирование, для телефонов и планшетов.<br>
+             <span style="color:var(--text-dim)">Только нужные сайты идут через VPN, остальные — напрямую.</span></div>
+        <div><strong>AmneziaWG</strong> — лёгкий клиент, для ПК и телевизоров.<br>
+             <span style="color:var(--text-dim)">Весь трафик через VPN или с настраиваемыми исключениями.</span></div>
       </div>
 
       <!-- Подключение через AmneziaVPN -->
-      <div class="section-title" style="margin-top:16px">Подключение через AmneziaVPN</div>
+      <div class="section-title" style="margin-top:16px">📲 Подключение через AmneziaVPN</div>
       <div class="row-card" style="flex-direction:column;align-items:flex-start;gap:10px;line-height:1.6;font-size:13px">
         <div><strong>1.</strong> Установите <strong>AmneziaVPN</strong>:
-             Android — Play Market, iOS — App Store, Mac — App Store.</div>
-        <div><strong>2.</strong> Здесь: «Устройства» → откройте устройство → нажмите кнопку
+             Android — Play Market, iOS / Mac — App Store.</div>
+        <div><strong>2.</strong> Здесь: «Устройства» → откройте устройство → нажмите
              <strong style="color:var(--blue)">🔗 AmneziaVPN</strong>.</div>
         <div><strong>3.</strong> Ссылка скопируется в буфер обмена.</div>
         <div><strong>4.</strong> В AmneziaVPN: нажмите <strong>+</strong> →
-             в поле «Введите ключ» вставьте скопированную ссылку → нажмите «Добавить».</div>
+             вставьте ссылку в поле «Введите ключ» → <strong>Добавить</strong>.</div>
         <div><strong>5.</strong> Включите VPN — готово!</div>
         <div style="font-size:11px;color:var(--text-dim)">
-          Ключ — это длинная строка начинающаяся с <em>vpn://</em>. Именно её нужно вставить в поле.
-          QR-код для AmneziaVPN не подходит.
+          Ключ начинается с <em>vpn://</em>. QR-код для AmneziaVPN не подходит.
         </div>
+      </div>
+
+      <!-- Подключение через AmneziaWG -->
+      <div class="section-title" style="margin-top:16px">💻 Подключение через AmneziaWG</div>
+      <div class="row-card" style="flex-direction:column;align-items:flex-start;gap:10px;line-height:1.6;font-size:13px">
+        <div><strong>1.</strong> Установите <strong>AmneziaWG</strong>:
+             Android — Play Market, iOS — App Store, Windows/Mac — amnezia.org.</div>
+        <div><strong>2.</strong> Здесь: «Устройства» → откройте устройство → нажмите
+             <strong>.conf в Telegram</strong> или <strong>QR-код</strong>.</div>
+        <div><strong>3.</strong> В AmneziaWG: нажмите <strong>+</strong> →
+             «Добавить из файла» или «Сканировать QR».</div>
+        <div><strong>4.</strong> Включите тоннель — готово!</div>
       </div>
 
       <!-- DNS -->
@@ -710,17 +728,6 @@
         <div style="font-size:11px;color:var(--text-dim)">
           После настройки DNS изменения IP-адресов будут доходить за 2–5 минут вместо нескольких часов.
         </div>
-      </div>
-
-      <!-- Важное -->
-      <div class="section-title" style="margin-top:16px">Важно</div>
-      <div class="row-card" style="flex-direction:column;align-items:flex-start;gap:8px;font-size:13px;line-height:1.6">
-        <div>⚠️ <strong>Одно устройство = один профиль.</strong>
-             Не используйте один конфиг на нескольких гаджетах — подключение будет нестабильным.
-             Создайте отдельное устройство для каждого гаджета.</div>
-        <div>🔧 <strong>Исключения</strong> — настраиваются в карточке устройства → «Исключения».
-             Позволяют пропускать банки, госуслуги и другие сайты напрямую, минуя VPN.</div>
-        <div>🔄 При смене конфига не забудьте <strong>переподключиться</strong> к VPN.</div>
       </div>
 
     </div>
@@ -840,9 +847,10 @@
     <div class="modal-handle"></div>
     <div class="modal-title">QR код</div>
     <div class="qr-wrap"><img id="qr-img" src="" alt=""></div>
-    <div style="text-align:center;font-size:11px;color:var(--text-dim);margin-bottom:4px">Отсканируйте в приложении AmneziaVPN</div>
+    <div style="text-align:center;font-size:11px;color:var(--text-dim);margin-bottom:4px">Отсканируйте в приложении AmneziaWG</div>
+    <div id="qr-note" style="text-align:center;font-size:11px;padding:4px 8px;min-height:16px"></div>
     <div class="modal-actions">
-      <button class="btn btn-secondary" id="btn-qr-share" onclick="shareQR()">📤 Поделиться</button>
+      <button class="btn btn-secondary" id="btn-qr-share" onclick="shareQR()">📤 Отправить в Telegram</button>
       <button class="btn btn-ghost" onclick="closeModal('modal-qr')">Закрыть</button>
     </div>
   </div>
@@ -1195,13 +1203,18 @@ async function showVpnLink(name) {
 }
 
 // ── QR код ──
+let _qrContext = { name: '', endpoint: '', useExcl: false };
+
 async function showQR(name) {
   const endpoint = _getSelectedEndpoint();
   const useExcl  = !!(document.getElementById('chk-use-excl')?.checked);
+  _qrContext = { name, endpoint, useExcl };
   closeModal('modal-device');
   const img = document.getElementById('qr-img');
   img.src = ''; img.style.opacity = '.3';
   openModal('modal-qr');
+  const note = document.getElementById('qr-note');
+  if (note) note.textContent = '';
   try {
     const qs = `endpoint=${encodeURIComponent(endpoint)}&use_excl=${useExcl ? '1' : '0'}`;
     const resp = await API(`/api/devices/${encodeURIComponent(name)}/qr?${qs}`);
@@ -1209,27 +1222,41 @@ async function showQR(name) {
     if (!resp.ok) throw new Error(data.error || 'Ошибка');
     img.src = data.qr;
     img.style.opacity = '1';
+    if (data.too_large && note) {
+      note.textContent = 'ℹ️ QR без исключений — конфиг слишком большой. Используйте «.conf в Telegram».';
+      note.style.color = 'var(--yellow, #f59e0b)';
+    }
   } catch(e) {
     img.alt = 'Ошибка: ' + e.message;
     img.style.opacity = '1';
   }
 }
 
-// ── Поделиться QR ──
+// ── Отправить QR в Telegram ──
 async function shareQR() {
   const img = document.getElementById('qr-img');
   if (!img.src || img.style.opacity === '.3') return;
-  if (!navigator.share) {
-    tg?.showAlert?.('Функция недоступна в вашем браузере');
-    return;
-  }
+  const btn = document.getElementById('btn-qr-share');
+  const orig = btn.textContent;
+  btn.textContent = '⏳ Отправка...';
+  btn.disabled = true;
   try {
-    const resp = await fetch(img.src);
-    const blob = await resp.blob();
-    const file = new File([blob], 'vpn-qr.png', { type: 'image/png' });
-    await navigator.share({ files: [file], title: 'VPN QR-код' });
+    const resp = await API(`/api/devices/${encodeURIComponent(_qrContext.name)}/send_qr`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endpoint: _qrContext.endpoint, use_excl: _qrContext.useExcl }),
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      tg?.showAlert?.('QR-код отправлен в Telegram');
+    } else {
+      tg?.showAlert?.('Ошибка: ' + (data.error || 'неизвестная ошибка'));
+    }
   } catch(e) {
-    if (e.name !== 'AbortError') tg?.showAlert?.('Ошибка: ' + e.message);
+    tg?.showAlert?.('Ошибка: ' + e.message);
+  } finally {
+    btn.textContent = orig;
+    btn.disabled = false;
   }
 }
 

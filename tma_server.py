@@ -327,19 +327,24 @@ def device_qr(user_id, name):
     username = get_user_name(user_id)
     if user_id != ADMIN_ID and not name.startswith(username + "."):
         return jsonify({"error": "Нет доступа"}), 403
-    endpoint     = request.args.get("endpoint") or SERVER_ENDPOINT
-    use_excl     = request.args.get("use_excl", "").lower() in ("1", "true")
-    allowed_ips  = _resolve_allowed_ips(name, use_excl)
-    conf_text    = _make_conf_for_endpoint(name, endpoint, allowed_ips)
+    endpoint    = request.args.get("endpoint") or SERVER_ENDPOINT
+    use_excl    = request.args.get("use_excl", "").lower() in ("1", "true")
+    allowed_ips = _resolve_allowed_ips(name, use_excl)
+    conf_text   = _make_conf_for_endpoint(name, endpoint, allowed_ips)
     if conf_text is None:
         return jsonify({"error": "Устройство не найдено"}), 404
+    too_large = use_excl and len(conf_text.encode()) > 2900
+    if too_large:
+        # Генерируем QR без исключений — только базовое подключение
+        allowed_ips = "0.0.0.0/0"
+        conf_text   = _make_conf_for_endpoint(name, endpoint, allowed_ips)
     try:
         png_bytes = subprocess.check_output(
             ["qrencode", "-t", "PNG", "-s", "6", "-o", "-"],
             input=conf_text.encode(),
         )
         b64 = base64.b64encode(png_bytes).decode()
-        return jsonify({"qr": f"data:image/png;base64,{b64}"})
+        return jsonify({"qr": f"data:image/png;base64,{b64}", "too_large": too_large})
     except Exception as e:
         return jsonify({"error": f"qrencode: {e}"}), 500
 
@@ -379,12 +384,74 @@ def device_send(user_id, name):
     conf_text   = _make_conf_for_endpoint(name, endpoint, allowed_ips)
     if conf_text is None:
         return jsonify({"error": "Устройство не найдено"}), 404
-    filename = f"{name}.conf"
-    caption  = f"📄 {filename}"
+    short      = name.split(".", 1)[1] if "." in name else name
+    excl_note  = "\n🌐 С исключениями сайтов" if use_excl and allowed_ips != "0.0.0.0/0" else ""
+    filename   = f"{name}.conf"
+    caption    = (
+        f"📄 Конфиг {short}\n"
+        f"🌐 Endpoint: {endpoint}:{SERVER_PORT}{excl_note}\n\n"
+        f"Импортируйте в AmneziaWG."
+    )
     ok = _send_file_via_bot(user_id, filename, conf_text, caption)
     if ok:
         return jsonify({"ok": True})
     return jsonify({"error": "Ошибка отправки через Telegram"}), 500
+
+
+@app.route("/api/devices/<path:name>/send_qr", methods=["POST"])
+@require_auth
+def device_send_qr(user_id, name):
+    """Генерирует QR-код и отправляет PNG в Telegram-чат пользователя."""
+    username = get_user_name(user_id)
+    if user_id != ADMIN_ID and not name.startswith(username + "."):
+        return jsonify({"error": "Нет доступа"}), 403
+    body        = request.get_json(silent=True) or {}
+    endpoint    = body.get("endpoint") or SERVER_ENDPOINT
+    use_excl    = bool(body.get("use_excl", False))
+    allowed_ips = _resolve_allowed_ips(name, use_excl)
+    conf_text   = _make_conf_for_endpoint(name, endpoint, allowed_ips)
+    if conf_text is None:
+        return jsonify({"error": "Устройство не найдено"}), 404
+    conf_bytes = conf_text.encode()
+    if len(conf_bytes) > 2900:
+        return jsonify({"error": "Конфиг слишком большой для QR — используйте .conf файл"}), 400
+    try:
+        png_bytes = subprocess.check_output(
+            ["qrencode", "-t", "PNG", "-s", "6", "-o", "-"],
+            input=conf_bytes,
+        )
+    except Exception as e:
+        return jsonify({"error": f"Ошибка генерации QR: {e}"}), 500
+    short      = name.split(".", 1)[1] if "." in name else name
+    excl_note  = "\n🌐 С исключениями сайтов" if use_excl and allowed_ips != "0.0.0.0/0" else ""
+    caption    = (
+        f"📱 QR-код AmneziaWG — {short}\n"
+        f"🌐 Endpoint: {endpoint}:{SERVER_PORT}{excl_note}"
+    )
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
+        tf.write(png_bytes)
+        tmp_path = tf.name
+    try:
+        result = subprocess.run(
+            [
+                "curl", "-s", "-X", "POST",
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
+                "-F", f"chat_id={user_id}",
+                "-F", f"caption={caption}",
+                "-F", f"photo=@{tmp_path};type=image/png",
+            ],
+            capture_output=True, timeout=15,
+        )
+        if result.returncode == 0:
+            return jsonify({"ok": True})
+        return jsonify({"error": "Ошибка отправки в Telegram"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
 
 
 @app.route("/api/devices/<path:name>/sites", methods=["GET"])

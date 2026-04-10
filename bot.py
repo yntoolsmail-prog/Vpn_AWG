@@ -441,15 +441,20 @@ def _tma_button() -> InlineKeyboardButton | None:
     if not TMA_URL:
         return None
     if TMA_URL.startswith("https://"):
-        return InlineKeyboardButton("🖥 Открыть панель управления", web_app=WebAppInfo(url=TMA_URL))
-    return InlineKeyboardButton("🖥 Открыть панель управления", url=TMA_URL)
+        return InlineKeyboardButton("▶️ ОТКРЫТЬ VPN 🔑", web_app=WebAppInfo(url=TMA_URL))
+    return InlineKeyboardButton("▶️ ОТКРЫТЬ VPN 🔑", url=TMA_URL)
 
 
 async def show_start_screen(msg, user_id: int, edit: bool = False):
-    """Минималистичный стартовый экран с живой статистикой и кнопкой TMA."""
+    """Стартовый экран: для пользователей — единое меню, для админа — статус + TMA."""
     is_admin = (user_id == ADMIN_ID)
 
-    peers  = get_awg_dump()
+    # Для обычных пользователей — единое главное меню без дублирования
+    if not is_admin:
+        await main_menu(msg, user_id, edit=edit)
+        return
+
+    peers   = get_awg_dump()
     now    = int(time.time())
     online = sum(1 for p in peers.values() if p.get("handshake") and now - p["handshake"] < 180)
     total  = len(get_all_clients())
@@ -457,38 +462,25 @@ async def show_start_screen(msg, user_id: int, edit: bool = False):
     bw     = load_bw_peak().get("last", {})
     ram_pct = round(sys_s["ram_used"] / sys_s["ram_total"] * 100) if sys_s.get("ram_total") else 0
 
-    status = (
-        f"🔐 {'AmneziaWG' if is_admin else 'Семейный VPN'}\n"
+    users         = load_users()
+    pending_count = len(users["pending"])
+    pending_note  = f"  🔴 Ожидают: {pending_count}" if pending_count else ""
+
+    text = (
+        f"🔐 AmneziaWG\n"
         f"━━━━━━━━━━━━━━\n"
         f"🟢 Онлайн: {online} из {total}\n"
         f"💾 RAM: {ram_pct}%  💿 Диск: {sys_s['disk_pct']}%\n"
-        f"⬇️ {bw.get('awg_down', 0)} / ⬆️ {bw.get('awg_up', 0)} Mbit/s"
+        f"⬇️ {bw.get('awg_down', 0)} / ⬆️ {bw.get('awg_up', 0)} Mbit/s\n\n"
+        f"🖥 IP: {SERVER_IP}\n"
+        f"📱 Клиентов: {total} | 👥 Польз.: {len(users['approved'])}{pending_note}"
     )
-
-    if is_admin:
-        users         = load_users()
-        pending_count = len(users["pending"])
-        pending_note  = f"  🔴 Ожидают: {pending_count}" if pending_count else ""
-        greeting = (
-            f"\n\n📱 Клиентов: {total} | 👥 Польз.: {len(users['approved'])}{pending_note}"
-        )
-    else:
-        my_clients   = get_user_clients(user_id)
-        display_name = get_user_display(user_id)
-        n = len(my_clients)
-        word = "устройство" if n == 1 else ("устройства" if 2 <= n <= 4 else "устройств")
-        greeting = f"\n\n👋 Привет, {_md(display_name)}! У тебя {n} {word}."
-
-    text = status + greeting + "\n\n💡 Дополнительные команды — кнопка *Меню* ↓"
 
     tma_btn = _tma_button()
     kb = []
     if tma_btn:
         kb.append([tma_btn])
-    # Кнопка "Режим бота" — только для админа (у пользователей весь UI в TMA)
-    # Если TMA не настроена — показываем как фоллбэк для всех
-    if is_admin or not tma_btn:
-        kb.append([InlineKeyboardButton("📱 Режим бота", callback_data="back")])
+    kb.append([InlineKeyboardButton("📱 Режим бота", callback_data="back")])
 
     markup = InlineKeyboardMarkup(kb)
     if edit:
@@ -587,12 +579,28 @@ async def main_menu(msg, user_id: int, edit=False):
     is_admin = (user_id == ADMIN_ID)
 
     if is_admin:
-        clients_count = len(get_all_clients())
+        peers_a  = get_awg_dump()
+        now_a    = int(time.time())
+        online_a = sum(1 for p in peers_a.values() if p.get("handshake") and now_a - p["handshake"] < 180)
+        total_a  = len(get_all_clients())
+        sys_a    = get_system_stats()
+        bw_a     = load_bw_peak().get("last", {})
+        ram_a    = round(sys_a["ram_used"] / sys_a["ram_total"] * 100) if sys_a.get("ram_total") else 0
         users         = load_users()
         pending_count = len(users["pending"])
+        pending_note  = f"  🔴 Ожидают: {pending_count}" if pending_count else ""
         pending_label = f"👥 Пользователи" + (f" 🔴{pending_count}" if pending_count else "")
+        text = (
+            f"🔐 AmneziaWG\n"
+            f"━━━━━━━━━━━━━━\n"
+            f"🟢 Онлайн: {online_a} из {total_a}\n"
+            f"💾 RAM: {ram_a}%  💿 Диск: {sys_a['disk_pct']}%\n"
+            f"⬇️ {bw_a.get('awg_down', 0)} / ⬆️ {bw_a.get('awg_up', 0)} Mbit/s\n\n"
+            f"🖥 IP: {SERVER_IP}\n"
+            f"📱 Клиентов: {total_a} | 👥 Польз.: {len(users['approved'])}{pending_note}"
+        )
         kb = [
-            [InlineKeyboardButton("➕ Добавить устройство",  callback_data="add")],
+            [InlineKeyboardButton("🧲 Добавить устройство",  callback_data="add")],
             [InlineKeyboardButton("📋 Мои устройства",       callback_data="my_devices")],
             [InlineKeyboardButton("🌍 Все клиенты",          callback_data="all_clients")],
             [InlineKeyboardButton(pending_label,             callback_data="manage_users")],
@@ -600,35 +608,43 @@ async def main_menu(msg, user_id: int, edit=False):
             [InlineKeyboardButton("🔧 Техобслуживание",      callback_data="maintenance")],
             [InlineKeyboardButton("📖 Инструкция",           callback_data="help")],
         ]
-        endpoint_line = f"🌐 {SERVER_ENDPOINT}:{SERVER_PORT}"
-        if SERVER_ENDPOINT_BACKUP:
-            endpoint_line += f"\n🔄 Резерв: {SERVER_ENDPOINT_BACKUP}:{SERVER_PORT}"
-        text = (
-            f"🔐 AmneziaWG — Панель администратора\n\n"
-            f"{endpoint_line}\n"
-            f"📱 Всего клиентов: {clients_count}\n"
-            f"👥 Пользователей: {len(users['approved'])}"
-            + (f"\n🔴 Ожидают одобрения: {pending_count}" if pending_count else "")
-        )
     else:
         my_clients   = get_user_clients(user_id)
         display_name = get_user_display(user_id)
-        kb = [
-            [InlineKeyboardButton("➕ Добавить устройство",  callback_data="add")],
-            [InlineKeyboardButton("📋 Мои устройства",       callback_data="my_devices")],
-            [InlineKeyboardButton("📊 Статус сервера",       callback_data="status")],
-            [InlineKeyboardButton("📖 Инструкция",           callback_data="help")],
-        ]
+        n = len(my_clients)
+        word = "устройство" if n == 1 else ("устройства" if 2 <= n <= 4 else "устройств")
+
+        peers   = get_awg_dump()
+        now_ts  = int(time.time())
+        online  = sum(1 for p in peers.values() if p.get("handshake") and now_ts - p["handshake"] < 180)
+        total   = len(get_all_clients())
+        sys_s   = get_system_stats()
+        bw      = load_bw_peak().get("last", {})
+        ram_pct = round(sys_s["ram_used"] / sys_s["ram_total"] * 100) if sys_s.get("ram_total") else 0
+
         text = (
-            f"🔐 Семейный VPN\n\n"
+            f"🔐 Семейный VPN\n"
+            f"━━━━━━━━━━━━━━\n"
+            f"🟢 Онлайн: {online} из {total}\n"
+            f"💾 RAM: {ram_pct}%  💿 Диск: {sys_s['disk_pct']}%\n"
+            f"⬇️ {bw.get('awg_down', 0)} / ⬆️ {bw.get('awg_up', 0)} Mbit/s\n\n"
             f"👋 Привет, {_md(display_name)}!\n"
-            f"📱 Ваших устройств: {len(my_clients)}"
+            f"📱 Ваших устройств: {n} {word}"
         )
 
+        tma_btn = _tma_button()
+        kb = []
+        if tma_btn:
+            kb.append([tma_btn])
+        kb.append([InlineKeyboardButton("📋 Мои устройства",      callback_data="my_devices")])
+        kb.append([InlineKeyboardButton("🧲 Добавить устройство",  callback_data="add")])
+        kb.append([InlineKeyboardButton("📊 Статус сервера",       callback_data="status")])
+        kb.append([InlineKeyboardButton("📖 Инструкция",           callback_data="help")])
+
     if edit:
-        await msg.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
+        await msg.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
     else:
-        await msg.reply_text(text, reply_markup=InlineKeyboardMarkup(kb))
+        await msg.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ОБРАБОТЧИК КНОПОК
@@ -1213,15 +1229,22 @@ async def do_send_qr(query, name: str, ep_key: str):
             caption=f"📄 .conf для AmneziaWG — *{short}* ({ep_label}){excl_note}",
             parse_mode="Markdown"
         )
-        subprocess.run(["qrencode", "-o", qr_path, "-r", tmp_conf], check=True)
-        await query.message.reply_photo(
-            photo=open(qr_path, "rb"),
-            caption=(
-                f"📱 QR для AmneziaWG — *{short}* ({ep_label})\n"
-                f"🌐 Endpoint: `{ep}:{SERVER_PORT}`{excl_note}"
-            ),
-            parse_mode="Markdown"
-        )
+        if len(content) > 2900:
+            await query.message.reply_text(
+                "ℹ️ QR-код недоступен: конфиг слишком большой из-за исключений сайтов.\n"
+                "Используйте *.conf* файл выше.",
+                parse_mode="Markdown"
+            )
+        else:
+            subprocess.run(["qrencode", "-o", qr_path, "-r", tmp_conf], check=True)
+            await query.message.reply_photo(
+                photo=open(qr_path, "rb"),
+                caption=(
+                    f"📱 QR для AmneziaWG — *{short}* ({ep_label})\n"
+                    f"🌐 Endpoint: `{ep}:{SERVER_PORT}`{excl_note}"
+                ),
+                parse_mode="Markdown"
+            )
     except Exception as e:
         await query.message.reply_text(f"❌ Ошибка QR: {e}")
     finally:
@@ -1809,30 +1832,39 @@ async def show_help(query):
         [InlineKeyboardButton("🌐 DNS — почему это важно", callback_data="help_dns")],
         [InlineKeyboardButton("◀️ В меню", callback_data="back")],
     ])
-    text = (
-        "📖 *Инструкция*\n\n"
-        "➕ *Добавить устройство* — создать VPN-профиль для телефона, ноутбука, ПК и т.д.\n\n"
-        "📋 *Мои устройства* — список ваших профилей. Нажмите на устройство чтобы:\n"
-        "• 📄 скачать *.conf* файл — для AmneziaWG\n"
-        "• 📱 получить *QR-код* — для AmneziaWG на телефоне\n"
-        "• 📤 *Поделиться кодом* — для AmneziaVPN (раздельное туннелирование)\n"
-        "• 🌐 *Настроить исключения* — выбрать сайты которые работают без VPN\n"
-        "• 🗑 удалить устройство\n\n"
-        "📊 *Статус сервера* — проверить работает ли VPN.\n\n"
-        "⚠️ *Важно — на каждое устройство свой профиль!*\n"
-        "Один конфиг на двух устройствах одновременно — оба будут глючить. "
-        "Создайте отдельный профиль для каждого устройства.\n\n"
-        "📲 *Как подключиться:*\n"
-        "1. Нажмите «Добавить устройство», введите название (`Phone`, `PC`, `iPad`)\n"
-        "2. Откройте карточку устройства, выберите канал подключения\n"
-        "3. При желании настройте исключения сайтов (банки, госуслуги, маркетплейсы)\n"
-        "4. Скачайте .conf или QR → установите AmneziaWG → импортируйте\n\n"
-        "📱 *Приложения:*\n"
-        "• *AmneziaWG* — простое подключение (рекомендуется)\n"
-        "• *AmneziaVPN* — если нужно раздельное туннелирование\n\n"
-        "🌐 *DNS — важно для стабильной работы*\n"
-        "Нажмите кнопку ниже чтобы узнать почему нужно настроить DNS на устройстве."
-    )
+    lines = [
+        "📖 *Инструкция*\n",
+        "▶️ *ОТКРЫТЬ VPN* 🔑 — веб-панель управления прямо в Telegram.",
+        "🧲 *Добавить устройство* — создать VPN-профиль.",
+        "📋 *Мои устройства* — ваши профили и настройки.",
+        "📊 *Статус сервера* — онлайн и нагрузка сервера.\n",
+        "━━━━━━━━━━━━",
+        "⚠️ *Важно — один гаджет = один профиль!*",
+        "Не используйте один конфиг на нескольких устройствах —"
+        " подключение будет нестабильным. Создайте отдельный профиль для каждого.\n",
+        "📱 *Два приложения на выбор:*",
+        "• *AmneziaVPN* — раздельное туннелирование, для телефонов и планшетов.",
+        "  Только нужные сайты идут через VPN, остальные — напрямую.",
+        "• *AmneziaWG* — лёгкий клиент, для ПК и телевизоров.",
+        "  Весь трафик через VPN или с настраиваемыми исключениями.\n",
+        "━━━━━━━━━━━━",
+        "📲 *Подключение через AmneziaVPN:*",
+        "1. Установите *AmneziaVPN* (Android, iOS, Mac — Play Market / App Store)",
+        "2. 📋 Мои устройства → карточка → *📤 Поделиться кодом*",
+        "3. Ссылка скопируется в буфер обмена",
+        "4. В AmneziaVPN: + → вставьте ссылку → *Добавить*",
+        "5. Включите VPN — готово!\n",
+        "━━━━━━━━━━━━",
+        "💻 *Подключение через AmneziaWG:*",
+        "1. Установите *AmneziaWG* (Android, iOS, Windows, Mac — amnezia.org)",
+        "2. 📋 Мои устройства → карточка → *📄 .conf* или *📱 QR-код*",
+        "3. В AmneziaWG: + → «Добавить из файла» или «Сканировать QR»",
+        "4. Включите тоннель — готово!\n",
+        "━━━━━━━━━━━━",
+        "🌐 *DNS — важно для стабильной работы*",
+        "Нажмите кнопку ниже чтобы узнать почему нужно настроить DNS на устройстве.",
+    ]
+    text = "\n".join(lines).replace("\n\n\n", "\n\n")
     await query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
 
 
@@ -2126,7 +2158,7 @@ async def add_device_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("❌ Отмена", callback_data="add_cancel")]
     ])
     await query.edit_message_text(
-        f"➕ Добавление устройства\n\n"
+        f"🧲 Добавление устройства\n\n"
         f"Введите название устройства *латиницей*:\n"
         f"`Phone`, `PC`, `Nout`, `iPad`, `TV`\n\n"
         f"Или нажмите Отмена.",
@@ -2491,12 +2523,10 @@ async def post_init(application) -> None:
     """Регистрирует команды бота в Telegram (кнопка «Меню»)."""
     commands = [
         BotCommand("start",  "🏠 Главная"),
-        BotCommand("panel",  "🖥 Открыть панель"),
-        BotCommand("bot",    "📱 Режим бота"),
         BotCommand("cancel", "❌ Отмена"),
     ]
     await application.bot.set_my_commands(commands)
-    logger.info("Команды бота зарегистрированы: /start /panel /bot /cancel")
+    logger.info("Команды бота зарегистрированы: /start /cancel")
 
 
 def main():
