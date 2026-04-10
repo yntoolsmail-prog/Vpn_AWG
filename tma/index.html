@@ -2,8 +2,24 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script>
+  // Telegram SDK принудительно отключает зум — восстанавливаем
+  (function() {
+    const vp = document.querySelector('meta[name="viewport"]');
+    function fixZoom() {
+      const c = vp.content;
+      let fixed = c
+        .replace(/maximum-scale=[0-9.]+/i, 'maximum-scale=5.0')
+        .replace(/user-scalable=no/i,      'user-scalable=yes');
+      if (!/maximum-scale/i.test(fixed)) fixed += ', maximum-scale=5.0';
+      if (!/user-scalable/i.test(fixed))  fixed += ', user-scalable=yes';
+      if (fixed !== c) vp.content = fixed;
+    }
+    new MutationObserver(fixZoom).observe(vp, { attributes: true, attributeFilter: ['content'] });
+  })();
+</script>
 <title>AWG Monitor</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Syne:wght@400;700;800&display=swap');
@@ -21,11 +37,13 @@
     --blue-dim: #48cfff18;
     --amber: #ffc040;
     --amber-dim: #ffc04018;
+    --yellow: #ffe040;
+    --yellow-dim: #ffe04018;
     --red: #ff5555;
     --red-dim: #ff555518;
     --text: #dce8f2;
-    --text-dim: #4e6070;
-    --text-mid: #8faabb;
+    --text-dim: #7a9bb5;
+    --text-mid: #b0cce0;
     --nav-h: 62px;
   }
 
@@ -100,8 +118,8 @@
     text-transform: uppercase;
   }
   .header-subtitle {
-    font-size: 11px;
-    color: var(--text-dim);
+    font-size: 12px;
+    color: var(--text-mid);
     letter-spacing: 0.1em;
   }
   .status-dot {
@@ -127,12 +145,12 @@
   /* Last update */
   .last-update {
     text-align: center;
-    font-size: 11px;
-    color: var(--text-dim);
+    font-size: 12px;
+    color: var(--text-mid);
     margin-bottom: 10px;
     letter-spacing: 0.05em;
   }
-  .last-update span { color: var(--text-mid); }
+  .last-update span { color: var(--text); }
 
   /* Grid layout */
   .grid-2 {
@@ -161,25 +179,26 @@
   .card:hover { border-color: var(--border-glow); }
 
   .card-label {
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-dim);
     letter-spacing: 0.15em;
     text-transform: uppercase;
     margin-bottom: 6px;
   }
   .card-value {
-    font-size: 26px;
+    font-size: 28px;
     font-weight: 700;
     line-height: 1;
     color: var(--text);
   }
-  .card-value.green { color: var(--green); }
-  .card-value.blue  { color: var(--blue); }
-  .card-value.amber { color: var(--amber); }
-  .card-value.red   { color: var(--red); }
+  .card-value.green  { color: var(--green); }
+  .card-value.blue   { color: var(--blue); }
+  .card-value.amber  { color: var(--amber); }
+  .card-value.yellow { color: var(--yellow); }
+  .card-value.red    { color: var(--red); }
   .card-sub {
-    font-size: 10px;
-    color: var(--text-dim);
+    font-size: 12px;
+    color: var(--text-mid);
     margin-top: 4px;
   }
 
@@ -196,10 +215,11 @@
     border-radius: 3px;
     transition: width 0.8s cubic-bezier(0.4,0,0.2,1);
   }
-  .bar-fill.green { background: var(--green); box-shadow: 0 0 6px var(--green); }
-  .bar-fill.amber { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
-  .bar-fill.red   { background: var(--red);   box-shadow: 0 0 6px var(--red); }
-  .bar-fill.blue  { background: var(--blue);  box-shadow: 0 0 6px var(--blue); }
+  .bar-fill.green  { background: var(--green);  box-shadow: 0 0 6px var(--green); }
+  .bar-fill.amber  { background: var(--amber);  box-shadow: 0 0 6px var(--amber); }
+  .bar-fill.red    { background: var(--red);    box-shadow: 0 0 6px var(--red); }
+  .bar-fill.blue   { background: var(--blue);   box-shadow: 0 0 6px var(--blue); }
+  .bar-fill.yellow { background: var(--yellow); box-shadow: 0 0 6px var(--yellow); }
 
   /* Wide card */
   .card.wide {
@@ -208,10 +228,10 @@
 
   /* Section title */
   .section-title {
-    font-size: 11px;
+    font-size: 12px;
     letter-spacing: 0.18em;
     text-transform: uppercase;
-    color: var(--text-dim);
+    color: var(--text-mid);
     margin: 14px 0 8px;
     display: flex;
     align-items: center;
@@ -240,8 +260,8 @@
     border-bottom: 1px solid var(--border);
   }
   .traffic-row:last-child { border-bottom: none; }
-  .traffic-label { font-size: 12px; color: var(--text-mid); }
-  .traffic-val   { font-size: 14px; font-weight: 500; }
+  .traffic-label { font-size: 13px; color: var(--text-mid); }
+  .traffic-val   { font-size: 15px; font-weight: 500; }
   .traffic-val .arrow-down { color: var(--blue); }
   .traffic-val .arrow-up   { color: var(--green); }
 
@@ -259,10 +279,10 @@
     padding: 8px 12px;
     background: var(--surface2);
     border-bottom: 1px solid var(--border);
-    font-size: 10px;
+    font-size: 11px;
     letter-spacing: 0.1em;
     text-transform: uppercase;
-    color: var(--text-dim);
+    color: var(--text-mid);
   }
   .peer-row {
     display: grid;
@@ -274,11 +294,12 @@
   }
   .peer-row:last-child { border-bottom: none; }
   .peer-row:hover { background: var(--surface2); }
-  .peer-name { font-size: 13px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .peer-hs   { font-size: 12px; color: var(--text-dim); }
+  .peer-name { font-size: 14px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .peer-hs   { font-size: 12px; color: var(--text-mid); }
   .peer-hs.online { color: var(--green); }
   .peer-hs.recent { color: var(--amber); }
-  .peer-traffic { font-size: 11px; color: var(--text-dim); text-align: right; }
+  .peer-hs.never  { color: var(--red); }
+  .peer-traffic { font-size: 12px; color: var(--text-mid); text-align: right; }
 
   /* Monthly chart */
   .chart-card {
@@ -318,15 +339,15 @@
     box-shadow: 0 0 8px var(--green-dim);
   }
   .chart-month {
-    font-size: 9px;
-    color: var(--text-dim);
+    font-size: 10px;
+    color: var(--text-mid);
     letter-spacing: 0.05em;
   }
   .chart-legend {
     display: flex;
     gap: 14px;
-    font-size: 10px;
-    color: var(--text-dim);
+    font-size: 12px;
+    color: var(--text-mid);
   }
   .legend-dot {
     display: inline-block;
@@ -345,8 +366,8 @@
     align-items: center;
   }
   .peak-row:last-child { border-bottom: none; }
-  .peak-label { font-size: 11px; color: var(--text-mid); }
-  .peak-val   { font-size: 13px; font-weight: 500; color: var(--amber); }
+  .peak-label { font-size: 12px; color: var(--text); }
+  .peak-val   { font-size: 14px; font-weight: 500; color: var(--amber); }
 
   /* Load avg */
   .load-bars {
@@ -360,13 +381,13 @@
     text-align: center;
   }
   .load-num {
-    font-size: 15px;
+    font-size: 20px;
     font-weight: 700;
     margin-bottom: 4px;
   }
   .load-period {
-    font-size: 9px;
-    color: var(--text-dim);
+    font-size: 11px;
+    color: var(--text-mid);
   }
 
   @keyframes spin { to { transform: rotate(360deg); } }
@@ -421,8 +442,8 @@
   .nav-item {
     flex: 1; display: none; flex-direction: column;
     align-items: center; justify-content: center; gap: 3px;
-    cursor: pointer; color: var(--text-dim);
-    font-size: 10px; letter-spacing: .05em;
+    cursor: pointer; color: var(--text-mid);
+    font-size: 11px; letter-spacing: .05em;
     user-select: none; transition: color .15s;
     position: relative; padding: 8px 4px;
   }
@@ -474,8 +495,8 @@
   .row:active { background: var(--surface2); }
 
   /* ── Info rows (в модалке устройства) ── */
-  .info-row { display: flex; justify-content: space-between; align-items: center; padding: 9px 12px; background: var(--surface2); border-radius: 8px; font-size: 13px; margin-bottom: 6px; }
-  .info-label { color: var(--text-mid); }
+  .info-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: var(--surface2); border-radius: 8px; font-size: 14px; margin-bottom: 6px; }
+  .info-label { color: var(--text); }
 
   /* ── Buttons ── */
   .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 9px 16px; border-radius: 8px; border: 1px solid transparent; font-family: inherit; font-size: 13px; font-weight: 500; cursor: pointer; transition: all .15s; white-space: nowrap; }
@@ -564,11 +585,11 @@
     <div class="header">
       <div class="header-left">
         <div class="header-title">AWG Monitor</div>
-        <div class="header-subtitle">AmneziaWG · Client Stats</div>
+        <div class="header-subtitle">AmneziaWG · Статистика клиентов</div>
       </div>
       <div class="status-dot" id="status-indicator">
         <div class="dot" id="status-dot"></div>
-        <span id="status-text">online</span>
+        <span id="status-text">онлайн</span>
       </div>
     </div>
     <div class="last-update" id="last-update">обновлено: <span>—</span></div>
@@ -847,11 +868,10 @@
     <div class="modal-handle"></div>
     <div class="modal-title">QR код</div>
     <div class="qr-wrap"><img id="qr-img" src="" alt=""></div>
-    <div style="text-align:center;font-size:11px;color:var(--text-dim);margin-bottom:4px">Отсканируйте в приложении AmneziaWG</div>
-    <div id="qr-note" style="text-align:center;font-size:11px;padding:4px 8px;min-height:16px"></div>
+    <div style="text-align:center;font-size:12px;color:var(--text-mid);margin-bottom:6px">Отсканируйте в приложении AmneziaWG</div>
+    <div id="qr-note" style="display:none;margin:0 0 10px;padding:10px 14px;background:var(--amber-dim);border:1px solid var(--amber);border-radius:10px;font-size:13px;color:var(--amber);line-height:1.5;text-align:center"></div>
     <div class="modal-actions">
-      <button class="btn btn-secondary" id="btn-qr-share" onclick="shareQR()">📤 Отправить в Telegram</button>
-      <button class="btn btn-ghost" onclick="closeModal('modal-qr')">Закрыть</button>
+      <button class="btn btn-ghost" style="flex:1" onclick="closeModal('modal-qr')">Закрыть</button>
     </div>
   </div>
 </div>
@@ -1030,19 +1050,19 @@ function renderDeviceList(devices) {
 
   const rows = devices.map((d, i) => {
     const hs      = fmtHandshake(d.handshake);
-    const dotClr  = d.online ? 'var(--green)' : hs.cls === 'recent' ? 'var(--amber)' : 'var(--text-dim)';
+    const dotClr  = d.online ? 'var(--green)' : hs.cls === 'recent' ? 'var(--amber)' : hs.cls === 'never' ? 'var(--red)' : 'var(--text-mid)';
     const devName = d.name.includes('.') ? d.name.split('.').slice(1).join('.') : d.name;
     return `<div class="row" onclick="openDeviceDetail(window._devicesList[${i}])">
       <div style="flex:1;min-width:0">
-        <div style="font-size:14px;font-weight:500">
+        <div style="font-size:15px;font-weight:500">
           <span style="color:${dotClr}">●</span> ${_esc(devName)}
         </div>
-        <div style="font-size:11px;color:var(--text-dim);margin-top:2px">
+        <div style="font-size:13px;margin-top:3px">
           <span style="color:var(--blue)">↓${_esc(d.client_download)}</span>
           &nbsp;<span style="color:var(--green)">↑${_esc(d.client_upload)}</span>
         </div>
       </div>
-      <div style="text-align:right;flex-shrink:0;font-size:12px;color:${dotClr}">${_esc(hs.text)}</div>
+      <div style="text-align:right;flex-shrink:0;font-size:13px;font-weight:500;color:${dotClr}">${_esc(hs.text)}</div>
     </div>`;
   }).join('');
 
@@ -1099,7 +1119,7 @@ let _currentExclState = null; // {sites:[], custom_domains:[]} или null
 async function openDeviceDetail(d) {
   const devName = d.name.includes('.') ? d.name.split('.').slice(1).join('.') : d.name;
   const hs      = fmtHandshake(d.handshake);
-  const stColor = d.online ? 'var(--green)' : hs.cls === 'recent' ? 'var(--amber)' : 'var(--text-dim)';
+  const stColor = d.online ? 'var(--green)' : hs.cls === 'recent' ? 'var(--amber)' : hs.cls === 'never' ? 'var(--red)' : 'var(--text-mid)';
   const stText  = d.online ? `онлайн · ${hs.text}` : `оффлайн · ${hs.text}`;
 
   // Загружаем исключения
@@ -1214,7 +1234,7 @@ async function showQR(name) {
   img.src = ''; img.style.opacity = '.3';
   openModal('modal-qr');
   const note = document.getElementById('qr-note');
-  if (note) note.textContent = '';
+  if (note) { note.textContent = ''; note.style.display = 'none'; }
   try {
     const qs = `endpoint=${encodeURIComponent(endpoint)}&use_excl=${useExcl ? '1' : '0'}`;
     const resp = await API(`/api/devices/${encodeURIComponent(name)}/qr?${qs}`);
@@ -1223,40 +1243,12 @@ async function showQR(name) {
     img.src = data.qr;
     img.style.opacity = '1';
     if (data.too_large && note) {
-      note.textContent = 'ℹ️ QR без исключений — конфиг слишком большой. Используйте «.conf в Telegram».';
-      note.style.color = 'var(--yellow, #f59e0b)';
+      note.textContent = '⚠️ Исключения не вошли в QR — конфиг слишком большой. Для конфига с исключениями используйте «.conf в Telegram».';
+      note.style.display = 'block';
     }
   } catch(e) {
     img.alt = 'Ошибка: ' + e.message;
     img.style.opacity = '1';
-  }
-}
-
-// ── Отправить QR в Telegram ──
-async function shareQR() {
-  const img = document.getElementById('qr-img');
-  if (!img.src || img.style.opacity === '.3') return;
-  const btn = document.getElementById('btn-qr-share');
-  const orig = btn.textContent;
-  btn.textContent = '⏳ Отправка...';
-  btn.disabled = true;
-  try {
-    const resp = await API(`/api/devices/${encodeURIComponent(_qrContext.name)}/send_qr`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ endpoint: _qrContext.endpoint, use_excl: _qrContext.useExcl }),
-    });
-    const data = await resp.json();
-    if (data.ok) {
-      tg?.showAlert?.('QR-код отправлен в Telegram');
-    } else {
-      tg?.showAlert?.('Ошибка: ' + (data.error || 'неизвестная ошибка'));
-    }
-  } catch(e) {
-    tg?.showAlert?.('Ошибка: ' + e.message);
-  } finally {
-    btn.textContent = orig;
-    btn.disabled = false;
   }
 }
 
@@ -1719,7 +1711,7 @@ async function doRestore(encName, btn) {
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 function fmtHandshake(tsUnix) {
   // tsUnix — Unix timestamp последнего хэндшейка (секунды с эпохи)
-  if (!tsUnix) return { text: "никогда", cls: "" };
+  if (!tsUnix) return { text: "никогда", cls: "never" };
   const sec = Math.floor(Date.now() / 1000) - tsUnix;
   if (sec < 0)     return { text: "только что", cls: "online" };
   if (sec < 180)   return { text: sec + "с назад", cls: "online" };
@@ -1732,6 +1724,15 @@ function barColor(pct) {
   if (pct > 85) return "red";
   if (pct > 65) return "amber";
   return "green";
+}
+function ramColor(pct) {
+  if (pct > 85) return "red";
+  if (pct > 65) return "amber";
+  return "blue";
+}
+function diskColor(pct) {
+  if (pct > 85) return "red";
+  return "amber";
 }
 function loadColor(v) {
   const n = parseFloat(v);
@@ -1764,25 +1765,25 @@ function buildDOM(d) {
   <div class="grid-3">
     <div class="card">
       <div class="card-label">онлайн</div>
-      <div class="card-value green" id="v-online">—</div>
+      <div class="card-value yellow" id="v-online">—</div>
       <div class="card-sub" id="v-online-sub">из —</div>
-      <div class="bar-wrap"><div class="bar-fill green" id="b-online" style="width:0%"></div></div>
+      <div class="bar-wrap"><div class="bar-fill yellow" id="b-online" style="width:0%"></div></div>
     </div>
     <div class="card">
       <div class="card-label">RAM</div>
-      <div class="card-value" id="v-ram">—</div>
+      <div class="card-value blue" id="v-ram">—</div>
       <div class="card-sub" id="v-ram-sub">— MB</div>
-      <div class="bar-wrap"><div class="bar-fill" id="b-ram" style="width:0%"></div></div>
+      <div class="bar-wrap"><div class="bar-fill blue" id="b-ram" style="width:0%"></div></div>
     </div>
     <div class="card">
       <div class="card-label">диск</div>
-      <div class="card-value" id="v-disk">—</div>
+      <div class="card-value amber" id="v-disk">—</div>
       <div class="card-sub" id="v-disk-sub">—</div>
-      <div class="bar-wrap"><div class="bar-fill" id="b-disk" style="width:0%"></div></div>
+      <div class="bar-wrap"><div class="bar-fill amber" id="b-disk" style="width:0%"></div></div>
     </div>
   </div>
   <div class="card wide">
-    <div class="card-label">Uptime · Load Average</div>
+    <div class="card-label">Время работы · Нагрузка</div>
     <div class="uptime-tag" id="v-uptime">—</div>
     <div class="load-bars" id="v-load"></div>
   </div>
@@ -1800,19 +1801,19 @@ function buildDOM(d) {
     </div>
   </div>
   <div class="traffic-card">
-    <div class="card-label" style="margin-bottom:8px">awg0 vs eth0 · сейчас</div>
-    <div class="traffic-row"><div class="traffic-label">↓ клиенты скачивают (awg0)</div><div class="traffic-val"><span class="arrow-down" id="v-t-awgdown">—</span> <span style="font-size:10px;color:var(--text-dim)">Mbit/s</span></div></div>
-    <div class="traffic-row"><div class="traffic-label">↓ сервер получает (eth0)</div><div class="traffic-val"><span style="color:var(--text-mid)" id="v-t-ethdown">—</span> <span style="font-size:10px;color:var(--text-dim)">Mbit/s</span></div></div>
-    <div class="traffic-row"><div class="traffic-label" style="color:var(--text-dim)">overhead ↓ (eth − awg)</div><div class="traffic-val" style="color:var(--amber)" id="v-t-overhead">— <span style="font-size:10px">Mbit/s</span></div></div>
-    <div class="traffic-row"><div class="traffic-label">↑ клиенты отдают (awg0)</div><div class="traffic-val"><span class="arrow-up" id="v-t-awgup">—</span> <span style="font-size:10px;color:var(--text-dim)">Mbit/s</span></div></div>
-    <div class="traffic-row"><div class="traffic-label">↑ сервер отдаёт (eth0)</div><div class="traffic-val"><span style="color:var(--text-mid)" id="v-t-ethup">—</span> <span style="font-size:10px;color:var(--text-dim)">Mbit/s</span></div></div>
+    <div class="card-label" style="margin-bottom:8px">awg0 / eth0 · сейчас</div>
+    <div class="traffic-row"><div class="traffic-label">↓ клиенты скачивают (awg0)</div><div class="traffic-val"><span class="arrow-down" id="v-t-awgdown">—</span> <span style="font-size:11px;color:var(--text-mid)">Mbit/s</span></div></div>
+    <div class="traffic-row"><div class="traffic-label">↓ сервер получает (eth0)</div><div class="traffic-val"><span style="color:var(--text-mid)" id="v-t-ethdown">—</span> <span style="font-size:11px;color:var(--text-mid)">Mbit/s</span></div></div>
+    <div class="traffic-row"><div class="traffic-label">накладной расход ↓</div><div class="traffic-val" style="color:var(--amber)" id="v-t-overhead">— <span style="font-size:11px">Mbit/s</span></div></div>
+    <div class="traffic-row"><div class="traffic-label">↑ клиенты отдают (awg0)</div><div class="traffic-val"><span class="arrow-up" id="v-t-awgup">—</span> <span style="font-size:11px;color:var(--text-mid)">Mbit/s</span></div></div>
+    <div class="traffic-row"><div class="traffic-label">↑ сервер отдаёт (eth0)</div><div class="traffic-val"><span style="color:var(--text-mid)" id="v-t-ethup">—</span> <span style="font-size:11px;color:var(--text-mid)">Mbit/s</span></div></div>
   </div>
   <div class="section-title">пики клиентов (awg0)</div>
   <div class="traffic-card">
-    <div class="traffic-row"><div class="traffic-label">🏅 пик сегодня · клиенты</div><div class="traffic-val"><span class="arrow-down" id="v-pk-day-down">—</span> <span class="arrow-up" id="v-pk-day-up">—</span> <span style="font-size:10px;color:var(--text-dim)">Mbit/s</span></div></div>
-    <div class="traffic-row"><div class="traffic-label" style="color:var(--text-dim)">  сервер сегодня</div><div class="traffic-val" style="font-size:11px;color:var(--text-dim)" id="v-pk-day-eth">—</div></div>
-    <div class="traffic-row"><div class="traffic-label">🏆 пик за всё время · клиенты</div><div class="traffic-val"><span class="arrow-down" id="v-pk-all-down">—</span> <span class="arrow-up" id="v-pk-all-up">—</span> <span style="font-size:10px;color:var(--text-dim)">Mbit/s</span></div></div>
-    <div class="traffic-row"><div class="traffic-label" style="color:var(--text-dim)">  сервер за всё время</div><div class="traffic-val" style="font-size:11px;color:var(--text-dim)" id="v-pk-all-eth">—</div></div>
+    <div class="traffic-row"><div class="traffic-label">🏅 пик сегодня · клиенты</div><div class="traffic-val"><span class="arrow-down" id="v-pk-day-down">—</span> <span class="arrow-up" id="v-pk-day-up">—</span> <span style="font-size:11px;color:var(--text-mid)">Mbit/s</span></div></div>
+    <div class="traffic-row"><div class="traffic-label">  сервер сегодня</div><div class="traffic-val" style="font-size:12px;color:var(--text-mid)" id="v-pk-day-eth">—</div></div>
+    <div class="traffic-row"><div class="traffic-label">🏆 пик за всё время · клиенты</div><div class="traffic-val"><span class="arrow-down" id="v-pk-all-down">—</span> <span class="arrow-up" id="v-pk-all-up">—</span> <span style="font-size:11px;color:var(--text-mid)">Mbit/s</span></div></div>
+    <div class="traffic-row"><div class="traffic-label">  сервер за всё время</div><div class="traffic-val" style="font-size:12px;color:var(--text-mid)" id="v-pk-all-eth">—</div></div>
     <div class="traffic-row"><div class="traffic-label">📶 всего скачали (с рест.)</div><div class="traffic-val" style="color:var(--blue)" id="v-total-dl">—</div></div>
     <div class="traffic-row"><div class="traffic-label">📶 всего отдали (с рест.)</div><div class="traffic-val" style="color:var(--green)" id="v-total-ul">—</div></div>
   </div>
@@ -1822,8 +1823,8 @@ function buildDOM(d) {
   <div class="chart-card">
     <div class="chart-bars" id="v-chart-bars"></div>
     <div class="chart-legend">
-      <div><span class="legend-dot" style="background:var(--blue);border:1px solid var(--blue)"></span>прошлые</div>
-      <div><span class="legend-dot" style="background:var(--green-mid);border:1px solid var(--green)"></span>текущий</div>
+      <div><span class="legend-dot" style="background:var(--blue);border:1px solid var(--blue)"></span><span style="color:var(--text-mid)">прошлые</span></div>
+      <div><span class="legend-dot" style="background:var(--green-mid);border:1px solid var(--green)"></span><span style="color:var(--text-mid)">текущий</span></div>
     </div>
     <div style="margin-top:10px" id="v-monthly-list"></div>
   </div>`;
@@ -1836,8 +1837,8 @@ function buildDOM(d) {
       <div class="card-sub" id="v-online-sub">из —</div>
     </div>
     <div class="card">
-      <div class="card-label">uptime</div>
-      <div class="card-value blue" style="font-size:14px" id="v-uptime">—</div>
+      <div class="card-label">работает</div>
+      <div class="card-value blue" style="font-size:16px" id="v-uptime">—</div>
     </div>
   </div>`;
   }
@@ -1871,24 +1872,24 @@ function updateValues(d) {
 
   if (isAdmin) {
     // RAM
-    const ramColor = barColor(ramPct);
+    const rColor = ramColor(ramPct);
     setEl('v-ram', ramPct + '%');
     setEl('v-ram-sub', d.ram_used_mb + ' MB');
-    setClass('v-ram', 'card-value ' + ramColor);
+    setClass('v-ram', 'card-value ' + rColor);
     const bRam = document.getElementById('b-ram');
-    if (bRam) { bRam.style.width = ramPct + '%'; bRam.className = 'bar-fill ' + ramColor; }
+    if (bRam) { bRam.style.width = ramPct + '%'; bRam.className = 'bar-fill ' + rColor; }
 
     // Диск
-    const diskColor = barColor(d.disk_pct);
+    const dColor = diskColor(d.disk_pct);
     setEl('v-disk', d.disk_pct + '%');
     setEl('v-disk-sub', d.disk_used);
-    setClass('v-disk', 'card-value ' + diskColor);
+    setClass('v-disk', 'card-value ' + dColor);
     const bDisk = document.getElementById('b-disk');
-    if (bDisk) { bDisk.style.width = d.disk_pct + '%'; bDisk.className = 'bar-fill ' + diskColor; }
+    if (bDisk) { bDisk.style.width = d.disk_pct + '%'; bDisk.className = 'bar-fill ' + dColor; }
 
     // Онлайн bar
     const bOnline = document.getElementById('b-online');
-    if (bOnline) bOnline.style.width = (d.peers_total ? Math.round(d.peers_online/d.peers_total*100) : 0) + '%';
+    if (bOnline) { bOnline.style.width = (d.peers_total ? Math.round(d.peers_online/d.peers_total*100) : 0) + '%'; bOnline.className = 'bar-fill yellow'; }
 
     // Load
     const loadEl = document.getElementById('v-load');
@@ -1919,11 +1920,11 @@ function updateValues(d) {
     if (topEl && d.bw_top) {
       topEl.innerHTML = d.bw_top.map(r =>
         `<div class="traffic-row">
-          <div class="traffic-label" style="font-size:10px">${r.dt}</div>
-          <div class="traffic-val" style="font-size:11px">
+          <div class="traffic-label" style="font-size:12px">${r.dt}</div>
+          <div class="traffic-val" style="font-size:12px">
             <span class="arrow-down">↓${r.awg_down}</span>
             <span class="arrow-up"> ↑${r.awg_up}</span>
-            <span style="color:var(--text-dim);font-size:10px"> / сервер ↓${r.eth_down} ↑${r.eth_up} Mbit</span>
+            <span style="color:var(--text-mid);font-size:11px"> / сервер ↓${r.eth_down} ↑${r.eth_up} Mbit</span>
           </div>
         </div>`
       ).join('');
@@ -1943,11 +1944,11 @@ function updateValues(d) {
       if (listEl) {
         listEl.innerHTML = d.monthly.map(m =>
           `<div class="traffic-row">
-            <div class="traffic-label">${m.label}</div>
-            <div class="traffic-val" style="color:${m.current?'var(--green)':'var(--text-mid)'}">
+            <div class="traffic-label" style="${m.current?'color:var(--text)':'color:var(--text-mid)'}">${m.label}</div>
+            <div class="traffic-val">
               <span class="arrow-down">↓${m.rx_gb}</span> <span class="arrow-up">↑${m.tx_gb}</span>
-              = ${m.total_gb >= 1000 ? (m.total_gb/1000).toFixed(2)+' TB' : m.total_gb+' GB'}
-              ${m.current ? '<span style="color:var(--text-dim);font-size:10px">◀</span>' : ''}
+              <span style="color:${m.current?'var(--green)':'var(--text)'}"> = ${m.total_gb >= 1000 ? (m.total_gb/1000).toFixed(2)+' TB' : m.total_gb+' GB'}</span>
+              ${m.current ? '<span style="color:var(--green);font-size:12px"> ◀</span>' : ''}
             </div>
           </div>`
         ).join('');
@@ -1963,7 +1964,7 @@ function updateValues(d) {
       return `<div class="peer-row">
         <div class="peer-name">${_esc(p.name)}</div>
         <div class="peer-hs ${hs.cls}">${_esc(hs.text)}</div>
-        <div class="peer-traffic">↓${_esc(p.client_download)}<br>↑${_esc(p.client_upload)}</div>
+        <div class="peer-traffic"><span style="color:var(--blue)">↓${_esc(p.client_download)}</span><br><span style="color:var(--green)">↑${_esc(p.client_upload)}</span></div>
       </div>`;
     }).join('');
   }
@@ -1985,9 +1986,9 @@ function render(d) {
   const dot = document.getElementById('status-dot');
   const txt = document.getElementById('status-text');
   if (d.awg_status === 'running') {
-    dot.classList.remove('offline'); txt.textContent = 'online';
+    dot.classList.remove('offline'); txt.textContent = 'онлайн';
   } else {
-    dot.classList.add('offline'); txt.textContent = 'offline';
+    dot.classList.add('offline'); txt.textContent = 'офлайн';
   }
   document.querySelector('#last-update span').textContent =
     new Date().toLocaleTimeString('ru', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
