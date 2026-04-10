@@ -26,14 +26,15 @@ from awg_core import (
     ADMIN_ID, AWG_CONF, AWG_IFACE, BACKUP_DIR, CLIENTS_DIR, BOT_TOKEN,
     ENV_FILE, SERVER_ENDPOINT, SERVER_ENDPOINT_BACKUP, SERVER_IP, SERVER_PORT,
     PRIMARY_DNS, SECONDARY_DNS, USERS_FILE,
-    build_allowed_ips, collect_stats_basic, collect_stats_full,
-    create_backup, create_client, fmt_bytes,
-    get_all_clients, get_awg_dump, get_client_keys, get_client_pub,
-    get_maintenance, get_system_stats, get_user_clients, get_user_name,
+    build_allowed_ips, can_access_device, collect_stats_basic, collect_stats_full,
+    create_backup, create_client, device_short_name, fmt_bytes,
+    get_all_clients, get_allowed_ips_for_client, get_awg_dump,
+    get_client_keys, get_client_pub,
+    get_maintenance, get_sites_json, get_system_stats, get_user_clients, get_user_name,
     is_approved, load_client_excl, load_users, make_vpn_link, make_wg_conf,
     remove_client_from_awg, save_client_excl, save_users, set_maintenance,
 )
-from sites_data import CATEGORIES, DEFAULT_SELECTED, SITES
+from sites_data import DEFAULT_SELECTED
 
 logging.basicConfig(level=logging.WARNING)
 
@@ -170,12 +171,7 @@ def _resolve_allowed_ips(name: str, use_excl: bool) -> str:
     """Возвращает AllowedIPs для .conf: если use_excl=True и есть .excl.json — применяем исключения."""
     if not use_excl:
         return "0.0.0.0/0"
-    excl = load_client_excl(name)
-    if not excl:
-        return "0.0.0.0/0"
-    selected = set(excl.get("sites", [])) | set()
-    custom   = excl.get("custom_domains", [])
-    return build_allowed_ips(selected, extra_domains=custom)
+    return get_allowed_ips_for_client(name)
 
 
 def _send_file_via_bot(chat_id: int, filename: str, content: str,
@@ -296,8 +292,7 @@ def create_device(user_id):
 @require_auth
 def delete_device(user_id, name):
     """Удалить устройство."""
-    username = get_user_name(user_id)
-    if user_id != ADMIN_ID and not name.startswith(username + "."):
+    if not can_access_device(user_id, name):
         return jsonify({"error": "Нет доступа"}), 403
     if not os.path.exists(f"{CLIENTS_DIR}/{name}.conf"):
         return jsonify({"error": "Устройство не найдено"}), 404
@@ -324,8 +319,7 @@ def api_endpoints(user_id):
 @require_auth
 def device_qr(user_id, name):
     """QR-код в виде base64 PNG. Принимает ?endpoint=X для генерации на лету."""
-    username = get_user_name(user_id)
-    if user_id != ADMIN_ID and not name.startswith(username + "."):
+    if not can_access_device(user_id, name):
         return jsonify({"error": "Нет доступа"}), 403
     endpoint    = request.args.get("endpoint") or SERVER_ENDPOINT
     use_excl    = request.args.get("use_excl", "").lower() in ("1", "true")
@@ -353,8 +347,7 @@ def device_qr(user_id, name):
 @require_auth
 def device_vpnlink(user_id, name):
     """Ссылка vpn:// для AmneziaVPN. Принимает ?endpoint=X."""
-    username = get_user_name(user_id)
-    if user_id != ADMIN_ID and not name.startswith(username + "."):
+    if not can_access_device(user_id, name):
         return jsonify({"error": "Нет доступа"}), 403
     keys     = get_client_keys(name)
     if not keys:
@@ -374,8 +367,7 @@ def device_vpnlink(user_id, name):
 @require_auth
 def device_send(user_id, name):
     """Отправляет .conf файл в Telegram-чат пользователя через бота."""
-    username = get_user_name(user_id)
-    if user_id != ADMIN_ID and not name.startswith(username + "."):
+    if not can_access_device(user_id, name):
         return jsonify({"error": "Нет доступа"}), 403
     body        = request.get_json(silent=True) or {}
     endpoint    = body.get("endpoint") or SERVER_ENDPOINT
@@ -384,7 +376,7 @@ def device_send(user_id, name):
     conf_text   = _make_conf_for_endpoint(name, endpoint, allowed_ips)
     if conf_text is None:
         return jsonify({"error": "Устройство не найдено"}), 404
-    short      = name.split(".", 1)[1] if "." in name else name
+    short      = device_short_name(name)
     excl_note  = "\n🌐 С исключениями сайтов" if use_excl and allowed_ips != "0.0.0.0/0" else ""
     filename   = f"{name}.conf"
     caption    = (
@@ -402,8 +394,7 @@ def device_send(user_id, name):
 @require_auth
 def device_send_qr(user_id, name):
     """Генерирует QR-код и отправляет PNG в Telegram-чат пользователя."""
-    username = get_user_name(user_id)
-    if user_id != ADMIN_ID and not name.startswith(username + "."):
+    if not can_access_device(user_id, name):
         return jsonify({"error": "Нет доступа"}), 403
     body        = request.get_json(silent=True) or {}
     endpoint    = body.get("endpoint") or SERVER_ENDPOINT
@@ -422,7 +413,7 @@ def device_send_qr(user_id, name):
         )
     except Exception as e:
         return jsonify({"error": f"Ошибка генерации QR: {e}"}), 500
-    short      = name.split(".", 1)[1] if "." in name else name
+    short      = device_short_name(name)
     excl_note  = "\n🌐 С исключениями сайтов" if use_excl and allowed_ips != "0.0.0.0/0" else ""
     caption    = (
         f"📱 QR-код AmneziaWG — {short}\n"
@@ -458,8 +449,7 @@ def device_send_qr(user_id, name):
 @require_auth
 def device_sites_get(user_id, name):
     """Текущие site exclusions устройства."""
-    username = get_user_name(user_id)
-    if user_id != ADMIN_ID and not name.startswith(username + "."):
+    if not can_access_device(user_id, name):
         return jsonify({"error": "Нет доступа"}), 403
     conf_text = _get_conf_text(name)
     if conf_text is None:
@@ -468,7 +458,7 @@ def device_sites_get(user_id, name):
     current_allowed = m.group(1).strip() if m else "0.0.0.0/0"
     return jsonify({
         "allowed_ips": current_allowed,
-        "sites":       _sites_payload(),
+        "sites":       get_sites_json(),
     })
 
 
@@ -476,8 +466,7 @@ def device_sites_get(user_id, name):
 @require_auth
 def device_sites_put(user_id, name):
     """Обновить site exclusions и перегенерировать .conf."""
-    username = get_user_name(user_id)
-    if user_id != ADMIN_ID and not name.startswith(username + "."):
+    if not can_access_device(user_id, name):
         return jsonify({"error": "Нет доступа"}), 403
 
     body           = request.get_json(silent=True) or {}
@@ -508,8 +497,7 @@ def device_sites_put(user_id, name):
 @require_auth
 def device_excl_get(user_id, name):
     """Возвращает сохранённые исключения клиента."""
-    username = get_user_name(user_id)
-    if user_id != ADMIN_ID and not name.startswith(username + "."):
+    if not can_access_device(user_id, name):
         return jsonify({"error": "Нет доступа"}), 403
     if not os.path.exists(f"{CLIENTS_DIR}/{name}.conf"):
         return jsonify({"error": "Не найдено"}), 404
@@ -521,8 +509,7 @@ def device_excl_get(user_id, name):
 @require_auth
 def device_excl_put(user_id, name):
     """Сохраняет исключения клиента (не меняет сам .conf — применяется при создании QR/conf)."""
-    username = get_user_name(user_id)
-    if user_id != ADMIN_ID and not name.startswith(username + "."):
+    if not can_access_device(user_id, name):
         return jsonify({"error": "Нет доступа"}), 403
     if not os.path.exists(f"{CLIENTS_DIR}/{name}.conf"):
         return jsonify({"error": "Не найдено"}), 404
@@ -540,30 +527,10 @@ def device_excl_put(user_id, name):
 
 # ── Список сайтов ─────────────────────────────────────────────────────────────
 
-def _sites_payload() -> list:
-    """Возвращает категории со списком сайтов для UI."""
-    result = []
-    for cat_label, keys in CATEGORIES.items():
-        sites = []
-        for k in keys:
-            s = SITES.get(k)
-            if not s:
-                continue
-            sites.append({
-                "key":    k,
-                "name":   s["name"],
-                "emoji":  s.get("emoji", ""),
-                "locked": k in DEFAULT_SELECTED,
-            })
-        if sites:
-            result.append({"category": cat_label, "sites": sites})
-    return result
-
-
 @app.route("/api/sites")
 @require_auth
 def api_sites(user_id):
-    return jsonify(_sites_payload())
+    return jsonify(get_sites_json())
 
 
 # ── Пользователи (admin) ──────────────────────────────────────────────────────
@@ -760,16 +727,8 @@ def backup_restore(user_id, filename):
         return jsonify({"error": "Файл не найден"}), 404
 
     # Автобэкап перед восстановлением
-    os.makedirs(BACKUP_DIR, exist_ok=True)
-    ts          = time.strftime("%Y%m%d_%H%M%S")
-    auto_backup = os.path.join(BACKUP_DIR, f"pre_restore_{ts}.tar.gz")
     try:
-        with tarfile.open(auto_backup, "w:gz") as tar:
-            tar.add(AWG_CONF,    arcname=f"{AWG_IFACE}.conf")
-            tar.add(ENV_FILE,    arcname="server.env")
-            tar.add(CLIENTS_DIR, arcname="clients")
-            if os.path.exists(USERS_FILE):
-                tar.add(USERS_FILE, arcname="users.json")
+        auto_backup = create_backup(prefix="pre_restore")
     except Exception as e:
         return jsonify({"error": f"Не удалось создать автобэкап: {e}"}), 500
 

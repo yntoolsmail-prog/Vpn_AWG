@@ -823,11 +823,12 @@ def collect_stats_basic() -> dict:
     }
 
 # ── Бэкап ──────────────────────────────────────────────────────────────────────
-def create_backup() -> str:
-    """Создаёт tar.gz бэкап, возвращает путь к файлу"""
+def create_backup(prefix: str = "awg_backup") -> str:
+    """Создаёт tar.gz бэкап, возвращает путь к файлу.
+    prefix — префикс имени файла (по умолчанию 'awg_backup', для авто-бэкапов — 'pre_restore')."""
     os.makedirs(BACKUP_DIR, exist_ok=True)
     ts          = time.strftime("%Y%m%d_%H%M%S")
-    backup_path = f"{BACKUP_DIR}/awg_backup_{ts}.tar.gz"
+    backup_path = f"{BACKUP_DIR}/{prefix}_{ts}.tar.gz"
     with tarfile.open(backup_path, "w:gz") as tar:
         tar.add(AWG_CONF,    arcname=f"{AWG_IFACE}.conf")
         tar.add(ENV_FILE,    arcname="server.env")
@@ -849,3 +850,46 @@ def set_maintenance(enabled: bool, message: str = "", end_time: int = 0) -> dict
     with open(MAINTENANCE_FILE, "w") as f:
         json.dump(data, f)
     return data
+
+# ── Общие хелперы (используются и в bot.py и в tma_server.py) ─────────────────
+
+def can_access_device(user_id: int, name: str) -> bool:
+    """True если user_id == ADMIN_ID или устройство принадлежит пользователю."""
+    if user_id == ADMIN_ID:
+        return True
+    return name.startswith(get_user_name(user_id) + ".")
+
+def device_short_name(name: str) -> str:
+    """Возвращает имя устройства без префикса пользователя: 'Ivan.Phone' → 'Phone'."""
+    return name.split(".", 1)[1] if "." in name else name
+
+def get_allowed_ips_for_client(name: str) -> str:
+    """Возвращает строку AllowedIPs для клиента с учётом сохранённых исключений.
+    Если исключений нет — возвращает '0.0.0.0/0' (полный туннель)."""
+    excl = load_client_excl(name)
+    if not excl:
+        return "0.0.0.0/0"
+    sites  = set(excl.get("sites", [])) | set(DEFAULT_SELECTED)
+    custom = excl.get("custom_domains", [])
+    if not sites and not custom:
+        return "0.0.0.0/0"
+    return build_allowed_ips(sites, extra_domains=custom)
+
+def get_sites_json() -> list:
+    """Возвращает список категорий со списком сайтов для UI (TMA и любых других клиентов)."""
+    result = []
+    for cat_label, keys in CATEGORIES.items():
+        sites = []
+        for k in keys:
+            s = SITES.get(k)
+            if not s:
+                continue
+            sites.append({
+                "key":    k,
+                "name":   s["name"],
+                "emoji":  s.get("emoji", ""),
+                "locked": k in DEFAULT_SELECTED,
+            })
+        if sites:
+            result.append({"category": cat_label, "sites": sites})
+    return result
