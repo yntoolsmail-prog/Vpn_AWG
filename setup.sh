@@ -413,38 +413,8 @@ if [[ "${1}" == "--update" ]]; then
         fi
     done
 
-    # ── Миграция: переносим файлы со старых путей если нужно ────────────────────
-    mkdir -p /root/modules/bot /root/modules/tma
-    # bot.py: старый путь /root/bot.py → новый /root/modules/bot/bot.py
-    if [[ -f /root/bot.py && ! -f /root/modules/bot/bot.py ]]; then
-        mv /root/bot.py /root/modules/bot/bot.py
-        log "Перемещён bot.py → modules/bot/bot.py"
-    fi
-    # tma_server.py: старый путь /etc/amnezia/.../tma_server.py → новый /root/modules/tma/tma_server.py
-    if [[ -f "${AWG_DIR}/tma_server.py" && ! -f /root/modules/tma/tma_server.py ]]; then
-        mv "${AWG_DIR}/tma_server.py" /root/modules/tma/tma_server.py
-        log "Перемещён tma_server.py → modules/tma/tma_server.py"
-    fi
-    # Обновляем systemd-сервисы если ещё указывают на старые пути
-    if grep -q 'ExecStart=/usr/bin/python3 /root/bot.py' /etc/systemd/system/awg-bot.service 2>/dev/null; then
-        sed -i \
-            -e 's|ExecStart=/usr/bin/python3 /root/bot.py|ExecStart=/usr/bin/python3 /root/modules/bot/bot.py|' \
-            /etc/systemd/system/awg-bot.service
-        grep -q 'WorkingDirectory' /etc/systemd/system/awg-bot.service || \
-            sed -i '/^ExecStart/a WorkingDirectory=/root\nEnvironment=PYTHONPATH=/root' \
-            /etc/systemd/system/awg-bot.service
-        systemctl daemon-reload
-        log "awg-bot.service обновлён (новый путь к bot.py)"
-    fi
-    if grep -q "ExecStart=.*${AWG_DIR}/tma_server.py" /etc/systemd/system/awg-tma.service 2>/dev/null; then
-        sed -i \
-            "s|ExecStart=/usr/bin/python3 ${AWG_DIR}/tma_server.py|ExecStart=/usr/bin/python3 /root/modules/tma/tma_server.py|" \
-            /etc/systemd/system/awg-tma.service
-        systemctl daemon-reload
-        log "awg-tma.service обновлён (новый путь к tma_server.py)"
-    fi
-
     # Обновляем манифесты модулей (создаём папки если их ещё нет)
+    mkdir -p /root/modules/bot /root/modules/tma
     for _mf in "modules/__init__.py" "modules/bot/__init__.py" "modules/tma/__init__.py"; do
         if curl -fsSL "${REPO_RAW}/${_mf}" -o "/root/${_mf}.new" 2>/dev/null; then
             mv "/root/${_mf}.new" "/root/${_mf}"
