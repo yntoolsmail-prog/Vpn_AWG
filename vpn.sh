@@ -39,6 +39,7 @@ AWG_CONF="/etc/amnezia/amneziawg/${VPN_IFACE}.conf"
 PRIMARY_DNS="${PRIMARY_DNS:-1.1.1.1}"
 SECONDARY_DNS="${SECONDARY_DNS:-1.0.0.1}"
 SERVER_ENDPOINT="${SERVER_ENDPOINT:-$SERVER_IP}"
+BOT_SERVICE="${BOT_SERVICE:-awg-bot}"
 
 mkdir -p "$CLIENTS_DIR" "$BACKUP_DIR" "$DIAG_DIR"
 
@@ -334,7 +335,7 @@ show_status() {
     ip link show "${VPN_IFACE}" &>/dev/null \
         && AWG_STATUS="${GREEN}● работает${NC}" \
         || AWG_STATUS="${RED}● остановлен${NC}"
-    systemctl is-active --quiet awg-bot \
+    systemctl is-active --quiet ${BOT_SERVICE} \
         && BOT_STATUS="${GREEN}● работает${NC}" \
         || BOT_STATUS="${RED}● остановлен${NC}"
 
@@ -366,7 +367,7 @@ manage_services() {
         local AWG_ST BOT_ST
         ip link show "${VPN_IFACE}" &>/dev/null \
             && AWG_ST="${GREEN}работает${NC}" || AWG_ST="${RED}остановлен${NC}"
-        systemctl is-active --quiet awg-bot \
+        systemctl is-active --quiet ${BOT_SERVICE} \
             && BOT_ST="${GREEN}работает${NC}" || BOT_ST="${RED}остановлен${NC}"
 
         echo -e "  AWG:  ${AWG_ST}   |   Бот: ${BOT_ST}"
@@ -389,11 +390,11 @@ manage_services() {
                 sleep 2 ;;
             2) systemctl stop "awg-quick@${VPN_IFACE}"    && echo -e "${YELLOW}  AWG остановлен${NC}"; sleep 2 ;;
             3) systemctl start "awg-quick@${VPN_IFACE}"   && echo -e "${GREEN}  ✓ AWG запущен${NC}" || echo -e "${RED}  ✗ Ошибка${NC}"; sleep 2 ;;
-            4) systemctl restart awg-bot && echo -e "${GREEN}  ✓ Бот перезапущен${NC}" || echo -e "${RED}  ✗ Ошибка${NC}"; sleep 2 ;;
-            5) systemctl stop awg-bot    && echo -e "${YELLOW}  Бот остановлен${NC}"; sleep 2 ;;
-            6) systemctl start awg-bot   && echo -e "${GREEN}  ✓ Бот запущен${NC}" || echo -e "${RED}  ✗ Ошибка${NC}"; sleep 2 ;;
-            7) echo ""; journalctl -u awg-bot -n 50 --no-pager; press_enter ;;
-            8) journalctl -u awg-bot -f ;;
+            4) systemctl restart ${BOT_SERVICE} && echo -e "${GREEN}  ✓ Бот перезапущен${NC}" || echo -e "${RED}  ✗ Ошибка${NC}"; sleep 2 ;;
+            5) systemctl stop ${BOT_SERVICE}    && echo -e "${YELLOW}  Бот остановлен${NC}"; sleep 2 ;;
+            6) systemctl start ${BOT_SERVICE}   && echo -e "${GREEN}  ✓ Бот запущен${NC}" || echo -e "${RED}  ✗ Ошибка${NC}"; sleep 2 ;;
+            7) echo ""; journalctl -u ${BOT_SERVICE} -n 50 --no-pager; press_enter ;;
+            8) journalctl -u ${BOT_SERVICE} -f ;;
             0) return ;;
         esac
     done
@@ -433,7 +434,7 @@ manage_settings() {
                 sed -i "s/^BOT_TOKEN=.*/BOT_TOKEN=${NEW_TOKEN}/" "$BOT_ENV"
                 BOT_TOKEN="$NEW_TOKEN"
                 echo -e "${GREEN}  ✓ Токен обновлён. Перезапускаю бота...${NC}"
-                systemctl restart awg-bot; sleep 2
+                systemctl restart ${BOT_SERVICE}; sleep 2
                 ;;
             2)
                 read -p "  Новый Admin ID (число): " NEW_ID
@@ -441,7 +442,7 @@ manage_settings() {
                 sed -i "s/^ADMIN_ID=.*/ADMIN_ID=${NEW_ID}/" "$BOT_ENV"
                 ADMIN_ID="$NEW_ID"
                 echo -e "${GREEN}  ✓ Admin ID обновлён. Перезапускаю бота...${NC}"
-                systemctl restart awg-bot; sleep 2
+                systemctl restart ${BOT_SERVICE}; sleep 2
                 ;;
             3)
                 echo -e "  ${CYAN}Определяю внешний IP...${NC}"
@@ -464,7 +465,7 @@ manage_settings() {
                     SERVER_IP="$REAL_IP"
                     SERVER_ENDPOINT="${SERVER_ENDPOINT//$SERVER_IP/$REAL_IP}"
                     echo -e "${GREEN}  ✓ Обновлено. Перезапускаю бота...${NC}"
-                    systemctl restart awg-bot; sleep 2
+                    systemctl restart ${BOT_SERVICE}; sleep 2
                 fi
                 ;;
             4)
@@ -473,13 +474,13 @@ manage_settings() {
                 sed -i "s/^SERVER_ENDPOINT=.*/SERVER_ENDPOINT=${NEW_EP}/" "$ENV_FILE"
                 SERVER_ENDPOINT="$NEW_EP"
                 echo -e "${GREEN}  ✓ Endpoint обновлён. Перезапускаю бота...${NC}"
-                systemctl restart awg-bot; sleep 2
+                systemctl restart ${BOT_SERVICE}; sleep 2
                 ;;
             5)
                 read -p "  Резервный endpoint (пусто — убрать): " NEW_EP
                 sed -i "s/^SERVER_ENDPOINT_BACKUP=.*/SERVER_ENDPOINT_BACKUP=${NEW_EP}/" "$ENV_FILE"
                 echo -e "${GREEN}  ✓ Резервный endpoint обновлён. Перезапускаю бота...${NC}"
-                systemctl restart awg-bot; sleep 2
+                systemctl restart ${BOT_SERVICE}; sleep 2
                 ;;
             6)
                 read -p "  Основной DNS [${PRIMARY_DNS}]: " D1
@@ -487,7 +488,7 @@ manage_settings() {
                 [[ -n "$D1" ]] && sed -i "s/^PRIMARY_DNS=.*/PRIMARY_DNS=${D1}/" "$ENV_FILE" && PRIMARY_DNS="$D1"
                 [[ -n "$D2" ]] && sed -i "s/^SECONDARY_DNS=.*/SECONDARY_DNS=${D2}/" "$ENV_FILE" && SECONDARY_DNS="$D2"
                 echo -e "${GREEN}  ✓ DNS обновлён. Перезапускаю бота...${NC}"
-                systemctl restart awg-bot; sleep 2
+                systemctl restart ${BOT_SERVICE}; sleep 2
                 ;;
             7)
                 echo ""
@@ -611,7 +612,7 @@ manage_updates() {
                 # Устанавливаем инструменты диагностики сети если нет
                 apt-get install -y mtr-tiny traceroute &>/dev/null || true
                 echo -e "${GREEN}  ✓ Система обновлена. Перезапускаю бота...${NC}"
-                systemctl restart awg-bot
+                systemctl restart ${BOT_SERVICE}
                 press_enter
                 ;;
             3)
@@ -619,7 +620,7 @@ manage_updates() {
                 pip3 install -U "python-telegram-bot[job-queue]" --break-system-packages 2>/dev/null || \
                 pip3 install -U "python-telegram-bot[job-queue]"
                 echo -e "${GREEN}  ✓ Готово. Перезапускаю бота...${NC}"
-                systemctl restart awg-bot
+                systemctl restart ${BOT_SERVICE}
                 press_enter
                 ;;
             0) return ;;
@@ -847,15 +848,15 @@ run_diagnostics() {
 
         # ── БОТ ──────────────────────────────────────────────────────────────
         echo "━━━ TELEGRAM БОТ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "Статус сервиса: $(systemctl is-active awg-bot)"
+        echo "Статус сервиса: $(systemctl is-active ${BOT_SERVICE})"
         echo "python-telegram-bot: $(pip3 show python-telegram-bot 2>/dev/null | grep Version | awk '{print $2}')"
         echo "Python: $(python3 --version 2>&1)"
         echo ""
         echo "--- Ошибки за последние 24 часа ---"
-        journalctl -u awg-bot -p err --since "24 hours ago" --no-pager 2>/dev/null | tail -20 || echo "нет ошибок"
+        journalctl -u ${BOT_SERVICE} -p err --since "24 hours ago" --no-pager 2>/dev/null | tail -20 || echo "нет ошибок"
         echo ""
         echo "--- Последние 100 строк лога бота ---"
-        journalctl -u awg-bot -n 100 --no-pager 2>/dev/null
+        journalctl -u ${BOT_SERVICE} -n 100 --no-pager 2>/dev/null
         echo ""
         echo "--- Последние 20 строк лога AWG сервиса ---"
         journalctl -u "awg-quick@${VPN_IFACE}" -n 20 --no-pager 2>/dev/null
@@ -1232,7 +1233,7 @@ main_menu() {
         CLIENTS_COUNT=$(ls "$CLIENTS_DIR"/*.conf 2>/dev/null | wc -l)
         ip link show "${VPN_IFACE}" &>/dev/null \
             && AWG_ST="${GREEN}●${NC}" || AWG_ST="${RED}●${NC}"
-        systemctl is-active --quiet awg-bot \
+        systemctl is-active --quiet ${BOT_SERVICE} \
             && BOT_ST="${GREEN}●${NC}" || BOT_ST="${RED}●${NC}"
 
         echo -e "  ${BOLD}Endpoint:${NC} ${CYAN}${SERVER_ENDPOINT}:${SERVER_PORT}${NC}  |  Клиентов: ${CYAN}${CLIENTS_COUNT}${NC}  |  AWG: ${AWG_ST}  Бот: ${BOT_ST}"

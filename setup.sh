@@ -107,6 +107,8 @@ PROJECT_FILES=(
     "bot.py:/root/bot.py"
     "awg_core.py:/root/awg_core.py"
     "sites_data.py:/root/sites_data.py"
+    "module_loader.py:/root/module_loader.py"
+    "modules.conf:/root/modules.conf"
     "vpn.sh:/root/vpn.sh"
     "tma_server.py:${AWG_DIR}/tma_server.py"
     "tma/index.html:${AWG_DIR}/tma/index.html"
@@ -407,6 +409,17 @@ if [[ "${1}" == "--update" ]]; then
             warn "Не удалось обновить ${src_file}"
             rm -f "${dst_file}.new"
             FAILED=$((FAILED+1))
+        fi
+    done
+
+    # Обновляем манифесты модулей (создаём папки если их ещё нет)
+    mkdir -p /root/modules/bot /root/modules/tma
+    for _mf in "modules/__init__.py" "modules/bot/__init__.py" "modules/tma/__init__.py"; do
+        if curl -fsSL "${REPO_RAW}/${_mf}" -o "/root/${_mf}.new" 2>/dev/null; then
+            mv "/root/${_mf}.new" "/root/${_mf}"
+            UPDATED=$((UPDATED+1))
+        else
+            rm -f "/root/${_mf}.new"
         fi
     done
 
@@ -1164,7 +1177,18 @@ log "Загрузка скриптов управления (ветка: ${REPO_
 curl -fsSL "${REPO_RAW}/vpn.sh"        -o /root/vpn.sh        || err "Не удалось скачать vpn.sh"
 curl -fsSL "${REPO_RAW}/bot.py"        -o /root/bot.py        || err "Не удалось скачать bot.py"
 curl -fsSL "${REPO_RAW}/awg_core.py"   -o /root/awg_core.py   || err "Не удалось скачать awg_core.py"
-curl -fsSL "${REPO_RAW}/sites_data.py" -o /root/sites_data.py || err "Не удалось скачать sites_data.py"
+curl -fsSL "${REPO_RAW}/sites_data.py"    -o /root/sites_data.py    || err "Не удалось скачать sites_data.py"
+curl -fsSL "${REPO_RAW}/module_loader.py" -o /root/module_loader.py || err "Не удалось скачать module_loader.py"
+curl -fsSL "${REPO_RAW}/modules.conf"     -o /root/modules.conf     || err "Не удалось скачать modules.conf"
+
+# ── Модули: создаём структуру каталогов и манифесты ──────────────────────────
+mkdir -p /root/modules/bot /root/modules/tma
+# Скачиваем __init__.py манифесты; если не найдены — создаём пустые заглушки
+_dl_init() { curl -fsSL "${REPO_RAW}/$1" -o "/root/$1" 2>/dev/null || printf '# %s\n' "$1" > "/root/$1"; }
+_dl_init "modules/__init__.py"
+_dl_init "modules/bot/__init__.py"
+_dl_init "modules/tma/__init__.py"
+
 # Сохраняем setup.sh в /root/ — нужен для --update и --tma
 # Важно: cp "$0" нельзя использовать при bash <(curl ...) — $0 это тот же pipe,
 # из которого bash читает скрипт; cp съедает оставшийся скрипт → молчаливый crash.
