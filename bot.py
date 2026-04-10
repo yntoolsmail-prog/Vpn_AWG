@@ -713,7 +713,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 _rf.write(str(query.from_user.id))
         except Exception:
             pass
-        subprocess.Popen(["systemctl", "restart", "awg-bot"])
+        subprocess.Popen(["systemctl", "restart", BOT_SERVICE])
     elif data == "restart_awg" and is_admin:
         await query.edit_message_text("⚡ Перезапускаю AWG...\n\nVPN будет недоступен ~5 секунд.")
         async def _awg_restart_check(ctx: ContextTypes.DEFAULT_TYPE):
@@ -1206,7 +1206,7 @@ async def do_send_qr(query, name: str, ep_key: str):
                 parse_mode="Markdown"
             )
         else:
-            subprocess.run(["qrencode", "-o", qr_path, "-r", tmp_conf], check=True)
+            subprocess.run([QRENCODE_BIN, "-o", qr_path, "-r", tmp_conf], check=True)
             await query.message.reply_photo(
                 photo=open(qr_path, "rb"),
                 caption=(
@@ -1532,7 +1532,7 @@ async def confirm_restore(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 4. Поднимаем AWG с новым конфигом, перезапускаем бота
     subprocess.Popen(
         ["bash", "-c",
-         f"sleep 2 && systemctl start awg-quick@{AWG_IFACE} && systemctl restart awg-bot"],
+         f"sleep 2 && systemctl start awg-quick@{AWG_IFACE} && systemctl restart {BOT_SERVICE}"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
     return ConversationHandler.END
@@ -1698,7 +1698,7 @@ async def receive_tz_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"✅ Часовой пояс изменён на *{tz}*\n\nБот перезапускается...",
             parse_mode="Markdown"
         )
-        subprocess.Popen(["bash", "-c", "sleep 2 && systemctl restart awg-bot"])
+        subprocess.Popen(["bash", "-c", f"sleep 2 && systemctl restart {BOT_SERVICE}"])
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка: {e}")
     return ConversationHandler.END
@@ -1721,7 +1721,7 @@ async def do_set_tz(query, tz: str):
             f"✅ Часовой пояс изменён на *{tz}*\n\nБот перезапустится через 3 секунды...",
             parse_mode="Markdown"
         )
-        subprocess.Popen(["bash", "-c", "sleep 3 && systemctl restart awg-bot"])
+        subprocess.Popen(["bash", "-c", f"sleep 3 && systemctl restart {BOT_SERVICE}"])
     except Exception as e:
         await query.edit_message_text(
             f"❌ Ошибка: {e}",
@@ -1737,7 +1737,7 @@ async def do_maint_upgrade(query):
         "⏳ Запускаю apt upgrade...\n\nЭто займёт пару минут. Бот перезапустится автоматически."
     )
     subprocess.Popen(
-        ["bash", "-c", "apt-get update -qq && apt-get upgrade -y -qq && systemctl restart awg-bot"],
+        ["bash", "-c", f"apt-get update -qq && apt-get upgrade -y -qq && systemctl restart {BOT_SERVICE}"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
 
@@ -2348,7 +2348,7 @@ async def do_repo_update(query, sha: str):
             f"⏳ Бот перезапускается...",
             parse_mode="Markdown",
         )
-        subprocess.Popen(["bash", "-c", "sleep 2 && systemctl restart awg-bot"])
+        subprocess.Popen(["bash", "-c", f"sleep 2 && systemctl restart {BOT_SERVICE}"])
 
     except Exception as e:
         await query.edit_message_text(
@@ -2360,22 +2360,6 @@ async def do_repo_update(query, sha: str):
 # ══════════════════════════════════════════════════════════════════════════════
 # ПРОВЕРКА И ОБНОВЛЕНИЕ IP СЕРВЕРА
 # ══════════════════════════════════════════════════════════════════════════════
-
-def get_real_server_ip() -> str | None:
-    """Получает реальный внешний IPv4 сервера."""
-    for url in ["https://ifconfig.me", "https://api.ipify.org", "https://ifconfig.co"]:
-        try:
-            out = subprocess.check_output(
-                ["curl", "-4", "-s", "--max-time", "5", url],
-                text=True
-            ).strip()
-            if out and "." in out and ":" not in out:
-                return out
-        except:
-            pass
-    return None
-
-RESTART_FLAG_FILE = "/tmp/awg_bot_restart_flag"
 
 async def send_start_hello(context: ContextTypes.DEFAULT_TYPE):
     """Job: запускается через 5 секунд после старта бота.
@@ -2468,7 +2452,7 @@ async def do_update_ip(query, new_ip: str):
             f"⏳ Бот перезапускается...",
             parse_mode="Markdown"
         )
-        subprocess.Popen(["bash", "-c", "sleep 2 && systemctl restart awg-bot"])
+        subprocess.Popen(["bash", "-c", f"sleep 2 && systemctl restart {BOT_SERVICE}"])
     except Exception as e:
         await query.edit_message_text(f"❌ Ошибка обновления IP: {e}")
 

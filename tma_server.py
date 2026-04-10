@@ -23,8 +23,8 @@ from urllib.parse import unquote
 from flask import Flask, jsonify, request, Response, send_file
 
 from awg_core import (
-    ADMIN_ID, AWG_CONF, AWG_IFACE, BACKUP_DIR, CLIENTS_DIR, BOT_TOKEN,
-    ENV_FILE, SERVER_ENDPOINT, SERVER_ENDPOINT_BACKUP, SERVER_IP, SERVER_PORT,
+    ADMIN_ID, AWG_CONF, AWG_IFACE, AWG_SERVICE, BACKUP_DIR, BOT_SERVICE, CLIENTS_DIR, BOT_TOKEN,
+    ENV_FILE, QRENCODE_BIN, SERVER_ENDPOINT, SERVER_ENDPOINT_BACKUP, SERVER_IP, SERVER_PORT,
     PRIMARY_DNS, SECONDARY_DNS, USERS_FILE,
     build_allowed_ips, can_access_device, collect_stats_basic, collect_stats_full,
     create_backup, create_client, device_short_name, fmt_bytes,
@@ -334,7 +334,7 @@ def device_qr(user_id, name):
         conf_text   = _make_conf_for_endpoint(name, endpoint, allowed_ips)
     try:
         png_bytes = subprocess.check_output(
-            ["qrencode", "-t", "PNG", "-s", "6", "-o", "-"],
+            [QRENCODE_BIN, "-t", "PNG", "-s", "6", "-o", "-"],
             input=conf_text.encode(),
         )
         b64 = base64.b64encode(png_bytes).decode()
@@ -408,7 +408,7 @@ def device_send_qr(user_id, name):
         return jsonify({"error": "Конфиг слишком большой для QR — используйте .conf файл"}), 400
     try:
         png_bytes = subprocess.check_output(
-            ["qrencode", "-t", "PNG", "-s", "6", "-o", "-"],
+            [QRENCODE_BIN, "-t", "PNG", "-s", "6", "-o", "-"],
             input=conf_bytes,
         )
     except Exception as e:
@@ -752,7 +752,7 @@ def backup_restore(user_id, filename):
     # Поднимаем AWG и перезапускаем бота (через 2 сек, не блокируем ответ)
     subprocess.Popen(
         ["bash", "-c",
-         f"sleep 2 && systemctl start awg-quick@{AWG_IFACE} && systemctl restart awg-bot"],
+         f"sleep 2 && systemctl start awg-quick@{AWG_IFACE} && systemctl restart {BOT_SERVICE}"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     return jsonify({

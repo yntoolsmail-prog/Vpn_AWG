@@ -58,6 +58,24 @@ SERVER_ENDPOINT        = srv.get("SERVER_ENDPOINT", "") or SERVER_IP
 SERVER_ENDPOINT_BACKUP = srv.get("SERVER_ENDPOINT_BACKUP", "")
 TMA_URL                = srv.get("TMA_URL", "")
 
+# ── Системные константы (сервисы, бинарники, флаги) ───────────────────────────
+# Имена systemd-сервисов — можно переопределить через server.env
+BOT_SERVICE  = srv.get("BOT_SERVICE",  "awg-bot")
+AWG_SERVICE  = f"awg-quick@{AWG_IFACE}"
+
+# Внешние бинарники
+QRENCODE_BIN = srv.get("QRENCODE_BIN", "qrencode")
+
+# URL для определения внешнего IP сервера
+IP_CHECK_URLS = [
+    srv.get("IP_CHECK_URL_1", "https://ifconfig.me"),
+    srv.get("IP_CHECK_URL_2", "https://api.ipify.org"),
+    srv.get("IP_CHECK_URL_3", "https://ifconfig.co"),
+]
+
+# Флаг-файл для передачи chat_id при перезапуске бота
+RESTART_FLAG_FILE = srv.get("RESTART_FLAG_FILE", "/tmp/awg_bot_restart_flag")
+
 # Применяем часовой пояс
 os.environ["TZ"] = TZ
 try:
@@ -439,6 +457,21 @@ def fmt_handshake(ts: int) -> str:
     else:              return f"{diff//86400} д назад"
 
 # ── Сетевые утилиты ─────────────────────────────────────────────────────────────
+def get_real_server_ip() -> str | None:
+    """Определяет реальный внешний IPv4 сервера через публичные сервисы."""
+    for url in IP_CHECK_URLS:
+        if not url:
+            continue
+        try:
+            out = subprocess.check_output(
+                ["curl", "-4", "-s", "--max-time", "5", url], text=True
+            ).strip()
+            if out and "." in out and ":" not in out:
+                return out
+        except Exception:
+            pass
+    return None
+
 def get_host_iface() -> str:
     try:
         out = subprocess.check_output(["ip", "route", "get", "8.8.8.8"], text=True)
