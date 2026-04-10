@@ -868,11 +868,10 @@
     <div class="modal-handle"></div>
     <div class="modal-title">QR код</div>
     <div class="qr-wrap"><img id="qr-img" src="" alt=""></div>
-    <div style="text-align:center;font-size:11px;color:var(--text-dim);margin-bottom:4px">Отсканируйте в приложении AmneziaWG</div>
-    <div id="qr-note" style="text-align:center;font-size:11px;padding:4px 8px;min-height:16px"></div>
+    <div style="text-align:center;font-size:12px;color:var(--text-mid);margin-bottom:6px">Отсканируйте в приложении AmneziaWG</div>
+    <div id="qr-note" style="display:none;margin:0 0 10px;padding:10px 14px;background:var(--amber-dim);border:1px solid var(--amber);border-radius:10px;font-size:13px;color:var(--amber);line-height:1.5;text-align:center"></div>
     <div class="modal-actions">
-      <button class="btn btn-secondary" id="btn-qr-share" onclick="shareQR()">📤 Отправить в Telegram</button>
-      <button class="btn btn-ghost" onclick="closeModal('modal-qr')">Закрыть</button>
+      <button class="btn btn-ghost" style="flex:1" onclick="closeModal('modal-qr')">Закрыть</button>
     </div>
   </div>
 </div>
@@ -1235,7 +1234,7 @@ async function showQR(name) {
   img.src = ''; img.style.opacity = '.3';
   openModal('modal-qr');
   const note = document.getElementById('qr-note');
-  if (note) note.textContent = '';
+  if (note) { note.textContent = ''; note.style.display = 'none'; }
   try {
     const qs = `endpoint=${encodeURIComponent(endpoint)}&use_excl=${useExcl ? '1' : '0'}`;
     const resp = await API(`/api/devices/${encodeURIComponent(name)}/qr?${qs}`);
@@ -1244,40 +1243,12 @@ async function showQR(name) {
     img.src = data.qr;
     img.style.opacity = '1';
     if (data.too_large && note) {
-      note.textContent = 'ℹ️ QR без исключений — конфиг слишком большой. Используйте «.conf в Telegram».';
-      note.style.color = 'var(--yellow, #f59e0b)';
+      note.textContent = '⚠️ Исключения не вошли в QR — конфиг слишком большой. Для конфига с исключениями используйте «.conf в Telegram».';
+      note.style.display = 'block';
     }
   } catch(e) {
     img.alt = 'Ошибка: ' + e.message;
     img.style.opacity = '1';
-  }
-}
-
-// ── Отправить QR в Telegram ──
-async function shareQR() {
-  const img = document.getElementById('qr-img');
-  if (!img.src || img.style.opacity === '.3') return;
-  const btn = document.getElementById('btn-qr-share');
-  const orig = btn.textContent;
-  btn.textContent = '⏳ Отправка...';
-  btn.disabled = true;
-  try {
-    const resp = await API(`/api/devices/${encodeURIComponent(_qrContext.name)}/send_qr`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ endpoint: _qrContext.endpoint, use_excl: _qrContext.useExcl }),
-    });
-    const data = await resp.json();
-    if (data.ok) {
-      tg?.showAlert?.('QR-код отправлен в Telegram');
-    } else {
-      tg?.showAlert?.('Ошибка: ' + (data.error || 'неизвестная ошибка'));
-    }
-  } catch(e) {
-    tg?.showAlert?.('Ошибка: ' + e.message);
-  } finally {
-    btn.textContent = orig;
-    btn.disabled = false;
   }
 }
 
