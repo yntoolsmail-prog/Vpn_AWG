@@ -13,7 +13,7 @@ from awg_core import (
     CLIENTS_DIR, CONFIG_FILE, ENV_FILE, EXCL_EXT, QRENCODE_BIN,
     RESTART_FLAG_FILE, SERVER_ENDPOINT, SERVER_ENDPOINT_BACKUP,
     SERVER_IP, SERVER_PORT, TMA_URL, TZ,
-    can_access_device, create_backup, device_short_name,
+    can_access_device, create_backup, create_client, device_short_name,
     fmt_bytes, fmt_handshake, fmt_histogram,
     gen_obfs, get_all_clients, get_allowed_ips_for_client,
     get_awg_dump, get_bw_histogram, get_bw_histogram_day,
