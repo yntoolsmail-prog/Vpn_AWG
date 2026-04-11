@@ -1,18 +1,28 @@
 """modules/tma — Telegram Mini App (TMA) модуль.
 
-Этот модуль — обёртка над tma_server.py.
-Основной процесс запускается напрямую через `python tma_server.py` или systemd.
-При использовании module_loader этот манифест позволяет модулю регистрировать
-дополнительные Flask Blueprint'ы, которые другие модули могут добавить в TMA.
-
-BOT_HANDLERS и TMA_BLUEPRINTS остаются пустыми для базового TMA модуля —
-сам tma_server.py регистрирует свои маршруты внутри при запуске.
+Базовый TMA-модуль. tma_server.py регистрирует все маршруты напрямую при запуске.
+Этот манифест предоставляет интерфейс для module_loader'а — сторонние модули
+могут дополнять TMA через TMA_BLUEPRINTS в своих __init__.py.
 """
 
-BOT_HANDLERS   = []
 TMA_BLUEPRINTS = []
 
 
-def setup():
-    """Вызывается module_loader'ом при инициализации."""
+def register_handlers(app) -> None:
     pass
+
+
+def get_admin_menu_buttons() -> list:
+    return []
+
+
+def get_user_menu_buttons(user_id: int) -> list:
+    return []
+
+
+def get_background_jobs() -> list:
+    return []
+
+
+def health_check() -> bool:
+    return True

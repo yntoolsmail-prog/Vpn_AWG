@@ -30,6 +30,8 @@ from awg_core import (
 from sites_data import (
     SITES, CATEGORIES, DEFAULT_SELECTED, ALL_SELECTABLE,
 )
+from module_loader import load_modules
+_modules = load_modules()
 
 # ── Первый запуск: создаём bot.env если не существует ─────────────────────────
 def setup():
@@ -2531,6 +2533,7 @@ def main():
     app.add_handler(CommandHandler("panel",  cmd_panel))
     app.add_handler(CommandHandler("bot",    cmd_bot))
     app.add_handler(CallbackQueryHandler(button_handler))
+    _modules.register_bot_handlers(app)
 
     # Проверка напоминания о техобслуживании — раз в сутки
     app.job_queue.run_repeating(maintenance_reminder, interval=86400, first=60)

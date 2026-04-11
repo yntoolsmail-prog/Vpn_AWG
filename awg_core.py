@@ -5,8 +5,7 @@
 # Version: 1.0
 
 import os, subprocess, logging, json, zlib, base64, struct, time
-import tarfile, socket, ipaddress, threading, hashlib, hmac
-from urllib.parse import unquote
+import tarfile, socket, ipaddress, threading
 
 from sites_data import SITES, CATEGORIES, DEFAULT_SELECTED, ALL_SELECTABLE
 
@@ -975,36 +974,3 @@ def get_kernel_version() -> str:
     except Exception:
         return "неизвестно"
 
-# ── Telegram WebApp авторизация ───────────────────────────────────────────────
-
-def verify_telegram_init_data(init_data_raw: str) -> int | None:
-    """Проверяет HMAC-подпись initData Telegram WebApp.
-    Возвращает user_id (int) если подпись верна и не истёк 1 час, иначе None."""
-    if not init_data_raw or not BOT_TOKEN:
-        return None
-    try:
-        params = {}
-        for part in init_data_raw.split("&"):
-            if "=" in part:
-                k, v = part.split("=", 1)
-                params[unquote(k)] = unquote(v)
-        received_hash = params.pop("hash", None)
-        if not received_hash:
-            return None
-        data_check_string = "\n".join(
-            f"{k}={v}" for k, v in sorted(params.items())
-        )
-        secret_key = hmac.new(
-            b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256
-        ).digest()
-        expected_hash = hmac.new(
-            secret_key, data_check_string.encode(), hashlib.sha256
-        ).hexdigest()
-        if not hmac.compare_digest(expected_hash, received_hash):
-            return None
-        if time.time() - int(params.get("auth_date", "0")) > 3600:
-            return None
-        user = json.loads(params.get("user", "{}"))
-        return int(user.get("id", 0)) or None
-    except Exception:
-        return None

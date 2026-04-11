@@ -1,18 +1,27 @@
 """modules/bot — Telegram-бот модуль.
 
-Этот модуль — обёртка над bot.py.
-Основной процесс запускается напрямую через `python bot.py` или systemd.
-При использовании module_loader этот манифест позволяет модулю регистрировать
-дополнительные хендлеры, которые другие модули могут добавить в бот.
-
-BOT_HANDLERS и TMA_BLUEPRINTS остаются пустыми для базового модуля бота —
-сам бот регистрирует свои хендлеры внутри bot.py при запуске.
+Базовый модуль бота. Бот регистрирует все свои хендлеры напрямую в bot.py.
+Этот манифест предоставляет интерфейс для module_loader'а — сторонние модули
+могут дополнять бот через register_handlers(app) в своих __init__.py.
 """
 
-BOT_HANDLERS   = []
-TMA_BLUEPRINTS = []
 
-
-def setup():
-    """Вызывается module_loader'ом при инициализации."""
+def register_handlers(app) -> None:
+    """Вызывается module_loader'ом. Базовый бот регистрирует хендлеры сам в bot.py."""
     pass
+
+
+def get_admin_menu_buttons() -> list:
+    return []
+
+
+def get_user_menu_buttons(user_id: int) -> list:
+    return []
+
+
+def get_background_jobs() -> list:
+    return []
+
+
+def health_check() -> bool:
+    return True

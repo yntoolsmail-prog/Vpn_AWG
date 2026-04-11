@@ -6,6 +6,8 @@
 
 import asyncio
 import base64
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -16,13 +18,14 @@ import tarfile
 import tempfile
 import time
 from functools import wraps
+from urllib.parse import unquote
 
 from flask import Flask, jsonify, request, Response, send_file
 
 from awg_core import (
     ADMIN_ID, AWG_CONF, AWG_IFACE, AWG_SERVICE, BACKUP_DIR, BOT_SERVICE, CLIENTS_DIR, BOT_TOKEN,
     ENV_FILE, QRENCODE_BIN, SERVER_ENDPOINT, SERVER_ENDPOINT_BACKUP, SERVER_IP, SERVER_PORT,
-    PRIMARY_DNS, SECONDARY_DNS, USERS_FILE, verify_telegram_init_data,
+    PRIMARY_DNS, SECONDARY_DNS, USERS_FILE,
     build_allowed_ips, can_access_device, collect_stats_basic, collect_stats_full,
     create_backup, create_client, device_short_name, fmt_bytes,
     get_all_clients, get_allowed_ips_for_client, get_awg_dump,
@@ -42,6 +45,39 @@ LISTEN_PORT = 8080
 app = Flask(__name__, static_folder=TMA_DIR, static_url_path="")
 
 # ── Авторизация через Telegram initData ───────────────────────────────────────
+
+def verify_telegram_init_data(init_data_raw: str) -> int | None:
+    """Проверяет HMAC-подпись initData Telegram WebApp.
+    Возвращает user_id (int) если подпись верна и не истёк 1 час, иначе None."""
+    if not init_data_raw or not BOT_TOKEN:
+        return None
+    try:
+        params = {}
+        for part in init_data_raw.split("&"):
+            if "=" in part:
+                k, v = part.split("=", 1)
+                params[unquote(k)] = unquote(v)
+        received_hash = params.pop("hash", None)
+        if not received_hash:
+            return None
+        data_check_string = "\n".join(
+            f"{k}={v}" for k, v in sorted(params.items())
+        )
+        secret_key = hmac.new(
+            b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256
+        ).digest()
+        expected_hash = hmac.new(
+            secret_key, data_check_string.encode(), hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(expected_hash, received_hash):
+            return None
+        if time.time() - int(params.get("auth_date", "0")) > 3600:
+            return None
+        user = json.loads(params.get("user", "{}"))
+        return int(user.get("id", 0)) or None
+    except Exception:
+        return None
+
 
 def _get_uid() -> int | None:
     return verify_telegram_init_data(request.headers.get("X-Init-Data", ""))
