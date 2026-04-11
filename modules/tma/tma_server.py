@@ -6,8 +6,6 @@
 
 import asyncio
 import base64
-import hashlib
-import hmac
 import json
 import logging
 import os
@@ -18,20 +16,19 @@ import tarfile
 import tempfile
 import time
 from functools import wraps
-from urllib.parse import unquote
 
 from flask import Flask, jsonify, request, Response, send_file
 
 from awg_core import (
     ADMIN_ID, AWG_CONF, AWG_IFACE, AWG_SERVICE, BACKUP_DIR, BOT_SERVICE, CLIENTS_DIR, BOT_TOKEN,
     ENV_FILE, QRENCODE_BIN, SERVER_ENDPOINT, SERVER_ENDPOINT_BACKUP, SERVER_IP, SERVER_PORT,
-    PRIMARY_DNS, SECONDARY_DNS, USERS_FILE,
+    PRIMARY_DNS, SECONDARY_DNS, USERS_FILE, verify_telegram_init_data,
     build_allowed_ips, can_access_device, collect_stats_basic, collect_stats_full,
     create_backup, create_client, device_short_name, fmt_bytes,
     get_all_clients, get_allowed_ips_for_client, get_awg_dump,
     get_client_keys, get_client_pub,
     get_maintenance, get_sites_json, get_system_stats, get_user_clients, get_user_name,
-    is_approved, load_client_excl, load_users, make_vpn_link, make_wg_conf,
+    is_approved, load_client_excl, load_users, make_conf_for_client, make_vpn_link, make_wg_conf,
     remove_client_from_awg, save_client_excl, save_users, set_maintenance,
 )
 from sites_data import DEFAULT_SELECTED
@@ -45,45 +42,6 @@ LISTEN_PORT = 8080
 app = Flask(__name__, static_folder=TMA_DIR, static_url_path="")
 
 # ── Авторизация через Telegram initData ───────────────────────────────────────
-
-def verify_telegram_init_data(init_data_raw: str) -> int | None:
-    """Проверяет подпись initData, возвращает user_id или None."""
-    if not init_data_raw or not BOT_TOKEN:
-        return None
-    try:
-        params = {}
-        for part in init_data_raw.split("&"):
-            if "=" in part:
-                k, v = part.split("=", 1)
-                params[unquote(k)] = unquote(v)
-
-        received_hash = params.pop("hash", None)
-        if not received_hash:
-            return None
-
-        data_check_string = "\n".join(
-            f"{k}={v}" for k, v in sorted(params.items())
-        )
-        secret_key = hmac.new(
-            b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256
-        ).digest()
-        expected_hash = hmac.new(
-            secret_key, data_check_string.encode(), hashlib.sha256
-        ).hexdigest()
-
-        if not hmac.compare_digest(expected_hash, received_hash):
-            return None
-
-        auth_date = int(params.get("auth_date", "0"))
-        if time.time() - auth_date > 3600:
-            return None
-
-        user_json = params.get("user", "{}")
-        user = json.loads(user_json)
-        return int(user.get("id", 0)) or None
-    except Exception:
-        return None
-
 
 def _get_uid() -> int | None:
     return verify_telegram_init_data(request.headers.get("X-Init-Data", ""))
@@ -154,17 +112,6 @@ def _get_conf_text(name: str) -> str | None:
         return None
     with open(path) as f:
         return f.read()
-
-
-def _make_conf_for_endpoint(name: str, endpoint: str, allowed_ips: str = "0.0.0.0/0") -> str | None:
-    """Генерирует .conf на лету для заданного эндпоинта и AllowedIPs."""
-    keys = get_client_keys(name)
-    if not keys:
-        return None
-    return make_wg_conf(
-        keys["priv"], keys["ip"], keys["psk"], keys["obfs"],
-        endpoint=endpoint, allowed_ips=allowed_ips,
-    )
 
 
 def _resolve_allowed_ips(name: str, use_excl: bool) -> str:
@@ -324,14 +271,14 @@ def device_qr(user_id, name):
     endpoint    = request.args.get("endpoint") or SERVER_ENDPOINT
     use_excl    = request.args.get("use_excl", "").lower() in ("1", "true")
     allowed_ips = _resolve_allowed_ips(name, use_excl)
-    conf_text   = _make_conf_for_endpoint(name, endpoint, allowed_ips)
+    conf_text   = make_conf_for_client(name, endpoint, allowed_ips)
     if conf_text is None:
         return jsonify({"error": "Устройство не найдено"}), 404
     too_large = use_excl and len(conf_text.encode()) > 2900
     if too_large:
         # Генерируем QR без исключений — только базовое подключение
         allowed_ips = "0.0.0.0/0"
-        conf_text   = _make_conf_for_endpoint(name, endpoint, allowed_ips)
+        conf_text   = make_conf_for_client(name, endpoint, allowed_ips)
     try:
         png_bytes = subprocess.check_output(
             [QRENCODE_BIN, "-t", "PNG", "-s", "6", "-o", "-"],
@@ -373,7 +320,7 @@ def device_send(user_id, name):
     endpoint    = body.get("endpoint") or SERVER_ENDPOINT
     use_excl    = bool(body.get("use_excl", False))
     allowed_ips = _resolve_allowed_ips(name, use_excl)
-    conf_text   = _make_conf_for_endpoint(name, endpoint, allowed_ips)
+    conf_text   = make_conf_for_client(name, endpoint, allowed_ips)
     if conf_text is None:
         return jsonify({"error": "Устройство не найдено"}), 404
     short      = device_short_name(name)
@@ -400,7 +347,7 @@ def device_send_qr(user_id, name):
     endpoint    = body.get("endpoint") or SERVER_ENDPOINT
     use_excl    = bool(body.get("use_excl", False))
     allowed_ips = _resolve_allowed_ips(name, use_excl)
-    conf_text   = _make_conf_for_endpoint(name, endpoint, allowed_ips)
+    conf_text   = make_conf_for_client(name, endpoint, allowed_ips)
     if conf_text is None:
         return jsonify({"error": "Устройство не найдено"}), 404
     conf_bytes = conf_text.encode()

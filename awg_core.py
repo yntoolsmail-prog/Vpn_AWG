@@ -5,7 +5,8 @@
 # Version: 1.0
 
 import os, subprocess, logging, json, zlib, base64, struct, time
-import tarfile, socket, ipaddress, threading
+import tarfile, socket, ipaddress, threading, hashlib, hmac
+from urllib.parse import unquote
 
 from sites_data import SITES, CATEGORIES, DEFAULT_SELECTED, ALL_SELECTABLE
 
@@ -926,3 +927,84 @@ def get_sites_json() -> list:
         if sites:
             result.append({"category": cat_label, "sites": sites})
     return result
+
+# ── Эндпоинты и генерация конфигов ────────────────────────────────────────────
+
+def resolve_endpoint(ep_key: str) -> str:
+    """Преобразует символьный ключ эндпоинта в строку адреса.
+    ep_key: 'main' | 'backup' | 'ip'"""
+    if ep_key == "backup":
+        return SERVER_ENDPOINT_BACKUP
+    if ep_key == "ip":
+        return SERVER_IP
+    return SERVER_ENDPOINT
+
+def make_conf_for_client(name: str, endpoint: str,
+                         allowed_ips: str = "0.0.0.0/0") -> str | None:
+    """Генерирует .conf для клиента с заданным эндпоинтом и AllowedIPs.
+    Возвращает строку конфига или None если ключи не найдены."""
+    keys = get_client_keys(name)
+    if not keys:
+        return None
+    return make_wg_conf(
+        keys["priv"], keys["ip"], keys["psk"], keys["obfs"],
+        endpoint=endpoint, allowed_ips=allowed_ips,
+    )
+
+# ── Техобслуживание ───────────────────────────────────────────────────────────
+
+def log_maintenance_done():
+    """Сохраняет дату последнего техобслуживания, не затирая поля enabled/message."""
+    data = get_maintenance()
+    data["last_date"] = time.strftime("%d.%m.%Y")
+    data["last_ts"]   = int(time.time())
+    with open(MAINTENANCE_FILE, "w") as f:
+        json.dump(data, f)
+
+# ── Версии системных компонентов ──────────────────────────────────────────────
+
+def get_ubuntu_version() -> str:
+    try:
+        return subprocess.check_output(["lsb_release", "-ds"], text=True).strip()
+    except Exception:
+        return "неизвестно"
+
+def get_kernel_version() -> str:
+    try:
+        return subprocess.check_output(["uname", "-r"], text=True).strip()
+    except Exception:
+        return "неизвестно"
+
+# ── Telegram WebApp авторизация ───────────────────────────────────────────────
+
+def verify_telegram_init_data(init_data_raw: str) -> int | None:
+    """Проверяет HMAC-подпись initData Telegram WebApp.
+    Возвращает user_id (int) если подпись верна и не истёк 1 час, иначе None."""
+    if not init_data_raw or not BOT_TOKEN:
+        return None
+    try:
+        params = {}
+        for part in init_data_raw.split("&"):
+            if "=" in part:
+                k, v = part.split("=", 1)
+                params[unquote(k)] = unquote(v)
+        received_hash = params.pop("hash", None)
+        if not received_hash:
+            return None
+        data_check_string = "\n".join(
+            f"{k}={v}" for k, v in sorted(params.items())
+        )
+        secret_key = hmac.new(
+            b"WebAppData", BOT_TOKEN.encode(), hashlib.sha256
+        ).digest()
+        expected_hash = hmac.new(
+            secret_key, data_check_string.encode(), hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(expected_hash, received_hash):
+            return None
+        if time.time() - int(params.get("auth_date", "0")) > 3600:
+            return None
+        user = json.loads(params.get("user", "{}"))
+        return int(user.get("id", 0)) or None
+    except Exception:
+        return None

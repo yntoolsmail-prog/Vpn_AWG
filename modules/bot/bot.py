@@ -8,8 +8,28 @@ from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, filters, ContextTypes, ConversationHandler
 )
-from awg_core import *
-from sites_data import *
+from awg_core import (
+    ADMIN_ID, AWG_IFACE, BOT_SERVICE, BOT_TOKEN, BW_LOG_FILE,
+    CLIENTS_DIR, CONFIG_FILE, ENV_FILE, EXCL_EXT, QRENCODE_BIN,
+    RESTART_FLAG_FILE, SERVER_ENDPOINT, SERVER_ENDPOINT_BACKUP,
+    SERVER_IP, SERVER_PORT, TMA_URL, TZ,
+    can_access_device, create_backup, device_short_name,
+    fmt_bytes, fmt_handshake, fmt_histogram,
+    gen_obfs, get_all_clients, get_allowed_ips_for_client,
+    get_awg_dump, get_bw_histogram, get_bw_histogram_day,
+    get_bw_top, get_client_keys, get_client_pub,
+    get_host_iface, get_kernel_version, get_log_days,
+    get_maintenance, get_real_server_ip, get_system_stats,
+    get_ubuntu_version, get_user_clients, get_user_display,
+    get_user_name, get_vnstat_monthly,
+    is_approved, load_bw_peak, load_client_excl, load_users,
+    log_maintenance_done, make_conf_for_client, make_vpn_link,
+    read_iface_bytes, remove_client_from_awg, resolve_endpoint,
+    save_bw_peak, save_client_excl, save_users,
+)
+from sites_data import (
+    SITES, CATEGORIES, DEFAULT_SELECTED, ALL_SELECTABLE,
+)
 
 # ── Первый запуск: создаём bot.env если не существует ─────────────────────────
 def setup():
@@ -1081,22 +1101,6 @@ def _endpoint_kb(name: str, action: str) -> InlineKeyboardMarkup:
     rows.append([InlineKeyboardButton("◀️ Назад", callback_data=f"device_{name}")])
     return InlineKeyboardMarkup(rows)
 
-def _resolve_endpoint(ep_key: str) -> str:
-    """ep_key: 'main' | 'backup' | 'ip'  →  строка эндпоинта"""
-    if ep_key == "backup":
-        return SERVER_ENDPOINT_BACKUP
-    if ep_key == "ip":
-        return SERVER_IP
-    return SERVER_ENDPOINT
-
-def _conf_for_endpoint(name: str, ep_key: str, allowed_ips: str = "0.0.0.0/0") -> bytes:
-    """Читает базовый .conf, подставляет нужный эндпоинт и AllowedIPs, возвращает bytes."""
-    ep = _resolve_endpoint(ep_key)
-    with open(f"{CLIENTS_DIR}/{name}.conf") as f:
-        base = f.read()
-    result = re.sub(r"^Endpoint = .+$", f"Endpoint = {ep}:{SERVER_PORT}", base, flags=re.MULTILINE)
-    result = re.sub(r"^AllowedIPs = .+$", f"AllowedIPs = {allowed_ips}", result, flags=re.MULTILINE)
-    return result.encode()
 
 async def show_conf_ep_select(query, name: str, user_id: int):
     """Экран выбора эндпоинта для .conf"""
@@ -1157,8 +1161,8 @@ async def do_send_conf(query, name: str, ep_key: str):
     """Генерирует .conf в памяти (с сохранёнными исключениями) и отправляет в чат."""
     allowed_ips = get_allowed_ips_for_client(name)
     short    = device_short_name(name)
-    ep       = _resolve_endpoint(ep_key)
-    content  = _conf_for_endpoint(name, ep_key, allowed_ips)
+    ep       = resolve_endpoint(ep_key)
+    content  = (make_conf_for_client(name, ep, allowed_ips) or "").encode()
     filename = f"{name}.conf"
     ep_label = {"main": "Основной", "backup": "Резервный", "ip": "По IP"}.get(ep_key, ep_key)
     excl_note = "" if allowed_ips == "0.0.0.0/0" else "\n🌐 С исключениями сайтов"
@@ -1180,8 +1184,8 @@ async def do_send_qr(query, name: str, ep_key: str):
     """Генерирует .conf в памяти (с сохранёнными исключениями) → QR → отправляет."""
     allowed_ips = get_allowed_ips_for_client(name)
     short   = device_short_name(name)
-    ep      = _resolve_endpoint(ep_key)
-    content = _conf_for_endpoint(name, ep_key, allowed_ips)
+    ep      = resolve_endpoint(ep_key)
+    content = (make_conf_for_client(name, ep, allowed_ips) or "").encode()
     ep_label = {"main": "Основной", "backup": "Резервный", "ip": "По IP"}.get(ep_key, ep_key)
 
     # Пишем во временный файл только для qrencode — сразу удаляем
@@ -1232,7 +1236,7 @@ async def do_send_share(query, name: str, ep_key: str):
         await query.message.reply_text(f"❌ Не удалось прочитать ключи для {name}")
         return
     short    = device_short_name(name)
-    ep       = _resolve_endpoint(ep_key)
+    ep       = resolve_endpoint(ep_key)
     ep_label = {"main": "Основной", "backup": "Резервный", "ip": "По IP"}.get(ep_key, ep_key)
     vpn_link = make_vpn_link(
         keys["priv"], keys["pub"], keys["ip"], keys["psk"],
@@ -1541,17 +1545,6 @@ async def confirm_restore(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ТЕХОБСЛУЖИВАНИЕ
 # ══════════════════════════════════════════════════════════════════════════════
 
-def load_maintenance() -> dict:
-    try:
-        with open(MAINTENANCE_FILE) as f:
-            return json.load(f)
-    except:
-        return {"last_date": None, "last_ts": 0}
-
-def save_maintenance(data: dict):
-    with open(MAINTENANCE_FILE, "w") as f:
-        json.dump(data, f, indent=2)
-
 def get_ptb_version() -> str:
     try:
         import telegram
@@ -1559,20 +1552,8 @@ def get_ptb_version() -> str:
     except:
         return "неизвестно"
 
-def get_ubuntu_version() -> str:
-    try:
-        return subprocess.check_output(["lsb_release", "-ds"], text=True).strip()
-    except:
-        return "неизвестно"
-
-def get_kernel_version() -> str:
-    try:
-        return subprocess.check_output(["uname", "-r"], text=True).strip()
-    except:
-        return "неизвестно"
-
 async def show_maintenance(query):
-    m         = load_maintenance()
+    m         = get_maintenance()
     last_date = m.get("last_date") or "никогда"
     ptb_ver   = get_ptb_version()
     ubuntu    = get_ubuntu_version()
@@ -1759,8 +1740,7 @@ async def do_maint_ptb(query):
     await query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
 
 async def do_maint_done(query):
-    now = time.strftime("%d.%m.%Y")
-    save_maintenance({"last_date": now, "last_ts": int(time.time())})
+    log_maintenance_done()
     await query.edit_message_text(
         f"✅ Техобслуживание отмечено\n\nДата: {now}\nСледующее напоминание через 6 месяцев.",
         reply_markup=back_kb()
@@ -1768,7 +1748,7 @@ async def do_maint_done(query):
 
 async def maintenance_reminder(context: ContextTypes.DEFAULT_TYPE):
     """Напоминание раз в 6 месяцев — запускается через job_queue"""
-    m       = load_maintenance()
+    m       = get_maintenance()
     last_ts = m.get("last_ts", 0)
     now_ts  = int(time.time())
     # 6 месяцев = 183 дня
