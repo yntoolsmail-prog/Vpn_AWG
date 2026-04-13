@@ -79,16 +79,71 @@ if [[ -z "$SERVER_IP" ]]; then
 fi
 [[ -n "$SERVER_IP" ]] && info "IP сервера: $SERVER_IP"
 
+# ── Выбор адреса сервера в ссылке (IP или домен) ──────────────────────────────
+FOUND_DOMAINS=()
+_ep=$(grep "^SERVER_ENDPOINT=" /etc/amnezia/amneziawg/server.env 2>/dev/null | cut -d= -f2 || true)
+if [[ -n "$_ep" && "$_ep" != "$SERVER_IP" && ! "$_ep" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    FOUND_DOMAINS+=("$_ep")
+fi
+if command -v nginx &>/dev/null; then
+    while IFS= read -r _d; do
+        [[ -n "$_d" && "$_d" != "_" && "$_d" != "$SERVER_IP" \
+           && ! "$_d" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && FOUND_DOMAINS+=("$_d")
+    done < <(grep -h "server_name" /etc/nginx/sites-enabled/* 2>/dev/null \
+             | awk '{print $2}' | tr -d ';' | sort -u)
+fi
+FOUND_DOMAINS=($(printf "%s\n" "${FOUND_DOMAINS[@]}" | sort -u))
+
+MTP_SERVER="$SERVER_IP"
+if [[ ${#FOUND_DOMAINS[@]} -gt 0 ]]; then
+    echo ""
+    echo -e "  ${CYAN}${BOLD}Адрес сервера в ссылке на прокси:${NC}"
+    echo -e "  Можно использовать IP или домен — оба работают."
+    echo ""
+    echo -e "  ${CYAN}1)${NC} ${SERVER_IP}  ${GREEN}(IP адрес)${NC}"
+    _di=2
+    for _d in "${FOUND_DOMAINS[@]}"; do
+        echo -e "  ${CYAN}${_di})${NC} ${_d}  (домен)"
+        ((_di++))
+    done
+    echo ""
+    while true; do
+        read -p "  Ваш выбор [1]: " _dch; _dch=${_dch:-1}
+        [[ "$_dch" =~ ^[0-9]+$ && "$_dch" -ge 1 && "$_dch" -lt $_di ]] && break
+        warn "Неверный выбор."
+    done
+    if [[ "$_dch" -gt 1 ]]; then
+        MTP_SERVER="${FOUND_DOMAINS[$((_dch - 2))]}"
+        info "Адрес в ссылке: ${MTP_SERVER}"
+    fi
+fi
+
 # ── Порт ──────────────────────────────────────────────────────────────────────
 echo ""
+
+# Определяем занятость порта 443 — часто занят nginx/TMA
+_PORT_443_OWNER=$(ss -tlnp 2>/dev/null | awk '/:443 /{match($0,/users:\(\("([^"]+)/,a); if(a[1]) print a[1]}' | head -1 || true)
+if [[ -n "$_PORT_443_OWNER" ]]; then
+    warn "Порт 443 занят процессом: ${_PORT_443_OWNER}"
+    warn "Стандартная альтернатива для MTProxy — порт 8443."
+    _DEFAULT_PORT=8443
+else
+    _DEFAULT_PORT=443
+fi
+
 while true; do
-    read -p "  Порт MTProxy [443]: " MTP_PORT
-    MTP_PORT=${MTP_PORT:-443}
+    read -p "  Порт MTProxy [${_DEFAULT_PORT}]: " MTP_PORT
+    MTP_PORT=${MTP_PORT:-$_DEFAULT_PORT}
     [[ "$MTP_PORT" =~ ^[0-9]+$ && "$MTP_PORT" -ge 1 && "$MTP_PORT" -le 65535 ]] && break
     warn "Введите корректный порт (1–65535)."
 done
-ss -tlnp 2>/dev/null | grep -q ":${MTP_PORT} " && \
-    warn "Порт ${MTP_PORT} уже занят. Проверьте после установки."
+
+# Проверяем выбранный порт
+_CHOSEN_PORT_OWNER=$(ss -tlnp 2>/dev/null | awk -v p=":${MTP_PORT} " '$0 ~ p {match($0,/users:\(\("([^"]+)/,a); if(a[1]) print a[1]}' | head -1 || true)
+if [[ -n "$_CHOSEN_PORT_OWNER" ]]; then
+    warn "Порт ${MTP_PORT} занят: ${_CHOSEN_PORT_OWNER}"
+    warn "Освободите порт или выберите другой — MTProxy не запустится пока порт занят."
+fi
 
 # ── Тип секрета ───────────────────────────────────────────────────────────────
 echo ""
@@ -128,7 +183,8 @@ case "$ST" in
 esac
 
 # ── Сохраняем в конфиг ────────────────────────────────────────────────────────
-[[ -n "$SERVER_IP" ]] && _set_conf "SERVER_IP" "$SERVER_IP"
+[[ -n "$SERVER_IP" ]] && _set_conf "SERVER_IP"  "$SERVER_IP"
+_set_conf "MTP_SERVER" "$MTP_SERVER"
 _set_conf "MTP_PORT"   "$MTP_PORT"
 _set_conf "MTP_SECRET" "$MTP_SECRET"
 
@@ -168,10 +224,9 @@ echo -e "  ${GREEN}${BOLD}MTProxy установлен!${NC}"
 echo ""
 echo -e "  Режим:  ${SECRET_MODE}"
 echo -e "  Порт:   ${MTP_PORT}"
-if [[ -n "$SERVER_IP" ]]; then
-    MTP_LINK="https://t.me/proxy?server=${SERVER_IP}&port=${MTP_PORT}&secret=${MTP_SECRET}"
-    echo -e "  Ссылка: ${CYAN}${MTP_LINK}${NC}"
-fi
+MTP_LINK="https://t.me/proxy?server=${MTP_SERVER}&port=${MTP_PORT}&secret=${MTP_SECRET}"
+echo -e "  Адрес:  ${MTP_SERVER}"
+echo -e "  Ссылка: ${CYAN}${MTP_LINK}${NC}"
 echo ""
 echo -e "  Управление (старт/стоп/смена секрета) — через бота: 📡 Прокси Telegram"
 echo ""

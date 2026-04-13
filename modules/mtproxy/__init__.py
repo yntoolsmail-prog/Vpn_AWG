@@ -57,7 +57,7 @@ def _save_conf(data: dict):
 
 
 def _get_server_ip() -> str:
-    """Читает IP сначала из awg_core, потом из конфига прокси."""
+    """Читает IP сервера для диагностики."""
     try:
         from awg_core import SERVER_IP
         if SERVER_IP:
@@ -74,6 +74,14 @@ def _get_server_ip() -> str:
         ).strip()
     except Exception:
         return "—"
+
+
+def _get_proxy_address() -> str:
+    """Адрес сервера для ссылки — может быть доменом если задан при установке."""
+    conf = _load_conf()
+    if conf.get("MTP_SERVER"):
+        return conf["MTP_SERVER"]
+    return _get_server_ip()
 
 
 # ── Статус и хелперы ──────────────────────────────────────────────────────────
@@ -223,7 +231,7 @@ async def _show_mtp_user(query):
         return
     secret = _mtp_get_secret()
     port   = _mtp_get_port()
-    ip     = _get_server_ip()
+    ip     = _get_proxy_address()
     if secret and ip != "—":
         link = _mtp_build_link(secret, port, ip)
         st   = _svc_status()
@@ -270,7 +278,7 @@ async def _show_mtp_admin(query):
     st     = _svc_status()
     secret = _mtp_get_secret()
     port   = _mtp_get_port()
-    ip     = _get_server_ip()
+    ip     = _get_proxy_address()
     link   = _mtp_build_link(secret, port, ip) if secret and ip != "—" else "—"
     if secret.startswith("ee"):
         mode = "EE (TLS 1.3)"
