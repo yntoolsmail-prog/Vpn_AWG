@@ -249,35 +249,40 @@ def gen_obfs() -> dict:
         "Jmax": srv.get("JMAX", "70"),
         "S1":   srv.get("S1",   "0"),
         "S2":   srv.get("S2",   "0"),
-        "H1":   srv.get("H1",   "1"),
-        "H2":   srv.get("H2",   "2"),
-        "H3":   srv.get("H3",   "3"),
-        "H4":   srv.get("H4",   "4"),
+        "H1":   srv.get("H1",   "1..4"),
+        "H2":   srv.get("H2",   "1..4"),
+        "H3":   srv.get("H3",   "1..4"),
+        "H4":   srv.get("H4",   "1..4"),
+        "i1":   srv.get("I1",   ""),
     }
 
 def make_wg_conf(priv, ip, psk, obfs, endpoint: str = None,
                  allowed_ips: str = "0.0.0.0/0") -> str:
     ep = endpoint or SERVER_ENDPOINT
-    return "\n".join([
+    parts = [
         "[Interface]",
         f"PrivateKey = {priv}", f"Address = {ip}/32",
         f"DNS = {PRIMARY_DNS}, {SECONDARY_DNS}",
         f"Jc = {obfs['Jc']}", f"Jmin = {obfs['Jmin']}", f"Jmax = {obfs['Jmax']}",
         f"S1 = {obfs['S1']}", f"S2 = {obfs['S2']}",
         f"H1 = {obfs['H1']}", f"H2 = {obfs['H2']}", f"H3 = {obfs['H3']}", f"H4 = {obfs['H4']}",
-        "", "[Peer]", f"PublicKey = {SERVER_PUBLIC}", f"PresharedKey = {psk}",
-        f"Endpoint = {ep}:{SERVER_PORT}", f"AllowedIPs = {allowed_ips}",
-        "PersistentKeepalive = 25",
-    ]) + "\n"
+    ]
+    if obfs.get("i1"):
+        parts.append(f"i1 = {obfs['i1']}")
+    parts += ["", "[Peer]", f"PublicKey = {SERVER_PUBLIC}", f"PresharedKey = {psk}",
+              f"Endpoint = {ep}:{SERVER_PORT}", f"AllowedIPs = {allowed_ips}",
+              "PersistentKeepalive = 25"]
+    return "\n".join(parts) + "\n"
 
 def make_vpn_link(priv, pub, ip, psk, obfs, name, endpoint: str = None) -> str:
     ep = endpoint or SERVER_ENDPOINT
+    i1_line = f"i1 = {obfs['i1']}\n" if obfs.get("i1") else ""
     wg = (
         f"[Interface]\nAddress = {ip}/32\nDNS = {PRIMARY_DNS}, {SECONDARY_DNS}\n"
         f"PrivateKey = {priv}\nJc = {obfs['Jc']}\nJmin = {obfs['Jmin']}\nJmax = {obfs['Jmax']}\n"
         f"S1 = {obfs['S1']}\nS2 = {obfs['S2']}\nH1 = {obfs['H1']}\nH2 = {obfs['H2']}\n"
-        f"H3 = {obfs['H3']}\nH4 = {obfs['H4']}\n\n"
-        f"[Peer]\nPublicKey = {SERVER_PUBLIC}\nPresharedKey = {psk}\n"
+        f"H3 = {obfs['H3']}\nH4 = {obfs['H4']}\n{i1_line}"
+        f"\n[Peer]\nPublicKey = {SERVER_PUBLIC}\nPresharedKey = {psk}\n"
         f"AllowedIPs = 0.0.0.0/0, ::/0\nEndpoint = {ep}:{SERVER_PORT}\n"
         f"PersistentKeepalive = 25\n"
     )

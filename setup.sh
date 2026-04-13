@@ -1030,22 +1030,23 @@ chmod 600 /etc/amnezia/amneziawg/server_private.key
 SERVER_PRIVATE=$(cat /etc/amnezia/amneziawg/server_private.key)
 SERVER_PUBLIC=$(cat /etc/amnezia/amneziawg/server_public.key)
 
-# ── Шаг 5: Генерация параметров обфускации ───────────────────────────────────
-log "Генерация случайных параметров обфускации..."
-read JC JMIN JMAX S1 S2 H1 H2 H3 H4 < <(python3 -c "
+# ── Шаг 5: Генерация параметров обфускации (AWG 2.0) ─────────────────────────
+log "Генерация параметров обфускации AWG 2.0..."
+read JC JMIN JMAX I1 < <(python3 -c "
 import random
 print(
     random.randint(3,10),
     random.randint(10,50),
     random.randint(51,100),
-    random.randint(20,100),
-    random.randint(20,100),
-    random.randint(100000000,2000000000),
-    random.randint(100000000,2000000000),
-    random.randint(100000000,2000000000),
-    random.randint(100000000,2000000000),
+    random.randint(1, 2**64-1),
 )")
-info "Jc=$JC Jmin=$JMIN Jmax=$JMAX S1=$S1 S2=$S2"
+S1=0
+S2=0
+H1="1..4"
+H2="1..4"
+H3="1..4"
+H4="1..4"
+info "Jc=$JC Jmin=$JMIN Jmax=$JMAX H1-H4=1..4 i1=$I1"
 
 # ── Шаг 6: Конфиг AWG ────────────────────────────────────────────────────────
 log "Создание конфига интерфейса ${VPN_IFACE}..."
@@ -1057,6 +1058,7 @@ log "Создание конфига интерфейса ${VPN_IFACE}..."
     printf "Jc = %s\nJmin = %s\nJmax = %s\n" "$JC" "$JMIN" "$JMAX"
     printf "S1 = %s\nS2 = %s\n" "$S1" "$S2"
     printf "H1 = %s\nH2 = %s\nH3 = %s\nH4 = %s\n" "$H1" "$H2" "$H3" "$H4"
+    printf "i1 = %s\n" "$I1"
     printf "\n"
     printf "PostUp = iptables -A FORWARD -i %s -j ACCEPT; iptables -A FORWARD -o %s -j ACCEPT; iptables -t nat -A POSTROUTING -o %s -j MASQUERADE\n" \
         "$VPN_IFACE" "$VPN_IFACE" "$IFACE"
@@ -1163,8 +1165,8 @@ printf "SERVER_IP=%s\nSERVER_PORT=%s\nSERVER_PUBLIC=%s\nVPN_IFACE=%s\nVPN_SUBNET
 printf "SERVER_ENDPOINT=%s\nSERVER_ENDPOINT_BACKUP=%s\n" \
     "$SERVER_ENDPOINT" "$SERVER_ENDPOINT_BACKUP" \
     >> /etc/amnezia/amneziawg/server.env
-printf "JC=%s\nJMIN=%s\nJMAX=%s\nS1=%s\nS2=%s\nH1=%s\nH2=%s\nH3=%s\nH4=%s\n" \
-    "$JC" "$JMIN" "$JMAX" "$S1" "$S2" "$H1" "$H2" "$H3" "$H4" \
+printf "JC=%s\nJMIN=%s\nJMAX=%s\nS1=%s\nS2=%s\nH1=%s\nH2=%s\nH3=%s\nH4=%s\nI1=%s\n" \
+    "$JC" "$JMIN" "$JMAX" "$S1" "$S2" "$H1" "$H2" "$H3" "$H4" "$I1" \
     >> /etc/amnezia/amneziawg/server.env
 printf "PRIMARY_DNS=1.1.1.1\nSECONDARY_DNS=1.0.0.1\n" \
     >> /etc/amnezia/amneziawg/server.env

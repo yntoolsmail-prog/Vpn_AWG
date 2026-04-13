@@ -151,6 +151,7 @@ add_client() {
         printf "Jc = %s\nJmin = %s\nJmax = %s\nS1 = %s\nS2 = %s\n" \
             "$JC" "$JMIN" "$JMAX" "$S1" "$S2"
         printf "H1 = %s\nH2 = %s\nH3 = %s\nH4 = %s\n" "$H1" "$H2" "$H3" "$H4"
+        [[ -n "$I1" ]] && printf "i1 = %s\n" "$I1"
         printf "\n[Peer]\nPublicKey = %s\nPresharedKey = %s\n" "$SERVER_PUBLIC" "$CLIENT_PSK"
         printf "Endpoint = %s:%s\nAllowedIPs = 0.0.0.0/0\nPersistentKeepalive = 25\n" \
             "$SERVER_ENDPOINT" "$SERVER_PORT"
@@ -968,7 +969,7 @@ analyze_configs() {
     fi
 
     # Читаем параметры сервера из awg.conf
-    local SRV_JC SRV_JMIN SRV_JMAX SRV_S1 SRV_S2 SRV_H1 SRV_H2 SRV_H3 SRV_H4 SRV_PORT SRV_PUB
+    local SRV_JC SRV_JMIN SRV_JMAX SRV_S1 SRV_S2 SRV_H1 SRV_H2 SRV_H3 SRV_H4 SRV_I1 SRV_PORT SRV_PUB
     SRV_JC=$(awk   '/^\[Interface\]/,/^\[Peer\]/' "$AWG_CONF" | grep "^Jc "   | awk '{print $3}')
     SRV_JMIN=$(awk '/^\[Interface\]/,/^\[Peer\]/' "$AWG_CONF" | grep "^Jmin " | awk '{print $3}')
     SRV_JMAX=$(awk '/^\[Interface\]/,/^\[Peer\]/' "$AWG_CONF" | grep "^Jmax " | awk '{print $3}')
@@ -978,6 +979,7 @@ analyze_configs() {
     SRV_H2=$(awk   '/^\[Interface\]/,/^\[Peer\]/' "$AWG_CONF" | grep "^H2 "   | awk '{print $3}')
     SRV_H3=$(awk   '/^\[Interface\]/,/^\[Peer\]/' "$AWG_CONF" | grep "^H3 "   | awk '{print $3}')
     SRV_H4=$(awk   '/^\[Interface\]/,/^\[Peer\]/' "$AWG_CONF" | grep "^H4 "   | awk '{print $3}')
+    SRV_I1=$(awk   '/^\[Interface\]/,/^\[Peer\]/' "$AWG_CONF" | grep "^i1 "   | awk '{print $3}')
     SRV_PORT=$(grep "^ListenPort" "$AWG_CONF" | awk '{print $3}')
     SRV_PUB="$SERVER_PUBLIC"
 
@@ -1027,6 +1029,7 @@ analyze_configs() {
         echo "  H2:          ${SRV_H2}"
         echo "  H3:          ${SRV_H3}"
         echo "  H4:          ${SRV_H4}"
+        [[ -n "$SRV_I1" ]] && echo "  i1:          ${SRV_I1}"
         echo "  Endpoint(s): ${SERVER_ENDPOINT}:${SERVER_PORT}"
         [[ -n "$SERVER_ENDPOINT_BACKUP" ]] && echo "  Резерв:      ${SERVER_ENDPOINT_BACKUP}:${SERVER_PORT}"
         echo ""
@@ -1037,7 +1040,7 @@ analyze_configs() {
 
             echo "━━━ КЛИЕНТ: ${CNAME} ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-            local C_IP C_DNS C_JC C_JMIN C_JMAX C_S1 C_S2 C_H1 C_H2 C_H3 C_H4
+            local C_IP C_DNS C_JC C_JMIN C_JMAX C_S1 C_S2 C_H1 C_H2 C_H3 C_H4 C_I1
             local C_SRVPUB C_EP C_AIPS C_KEEPALIVE
             C_IP=$(awk       '/^Address/{print $3}'        "$CONF")
             C_DNS=$(awk      '/^DNS/{print $3,$4}'         "$CONF")
@@ -1050,6 +1053,7 @@ analyze_configs() {
             C_H2=$(awk       '/^H2 /{print $3}'            "$CONF")
             C_H3=$(awk       '/^H3 /{print $3}'            "$CONF")
             C_H4=$(awk       '/^H4 /{print $3}'            "$CONF")
+            C_I1=$(awk       '/^i1 /{print $3}'            "$CONF")
             C_SRVPUB=$(awk   '/^PublicKey/{print $3}'      "$CONF")
             C_EP=$(awk       '/^Endpoint/{print $3}'       "$CONF")
             C_AIPS=$(awk     '/^AllowedIPs/{print $3}'     "$CONF")
@@ -1077,6 +1081,7 @@ analyze_configs() {
             cmp_val       "H2"             "$C_H2"       "$SRV_H2"
             cmp_val       "H3"             "$C_H3"       "$SRV_H3"
             cmp_val       "H4"             "$C_H4"       "$SRV_H4"
+            [[ -n "$SRV_I1" ]] && cmp_val "i1"          "$C_I1"       "$SRV_I1"
             cmp_val       "ServerPublicKey" "$C_SRVPUB"  "$SRV_PUB"
             cmp_val_noref "Endpoint"       "$C_EP"
             cmp_val_noref "AllowedIPs"     "$C_AIPS"
