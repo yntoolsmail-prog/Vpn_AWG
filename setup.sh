@@ -411,6 +411,11 @@ _modules_conf_set() {
     fi
 }
 
+# Проверить, установлен ли модуль (системные компоненты)
+_mod_is_installed() {
+    [[ -f "/root/modules/${1}/.installed" ]]
+}
+
 # Применить изменения: скачать файлы для включаемых модулей, запустить install.sh
 _apply_modules() {
     local -n _desired=$1   # associative array name=on|off
@@ -438,17 +443,21 @@ _apply_modules() {
             fi
 
             # Скачать install.sh (если есть в репо)
-            if curl -fsSL "${REPO_RAW}/modules/${name}/install.sh" \
-                    -o "/root/modules/${name}/install.sh.new" 2>/dev/null; then
-                mv "/root/modules/${name}/install.sh.new" "/root/modules/${name}/install.sh"
-                chmod +x "/root/modules/${name}/install.sh"
+            curl -fsSL "${REPO_RAW}/modules/${name}/install.sh" \
+                    -o "/root/modules/${name}/install.sh.new" 2>/dev/null \
+                && mv "/root/modules/${name}/install.sh.new" "/root/modules/${name}/install.sh" \
+                && chmod +x "/root/modules/${name}/install.sh" \
+                || rm -f "/root/modules/${name}/install.sh.new"
+
+            # Запускать install.sh только если ещё не установлен (нет sentinel)
+            if _mod_is_installed "$name"; then
+                info "Модуль ${name} уже установлен — пропускаю установщик."
+            elif [[ -f "/root/modules/${name}/install.sh" ]]; then
                 log "Запуск установщика модуля ${name}..."
                 bash "/root/modules/${name}/install.sh" || {
                     warn "Установщик модуля ${name} завершился с ошибкой."
-                    warn "Модуль будет включён в modules.conf — исправьте и перезапустите бота."
+                    warn "Модуль будет включён в modules.conf — исправьте вручную при необходимости."
                 }
-            else
-                rm -f "/root/modules/${name}/install.sh.new"
             fi
 
             _modules_conf_set "$name" "on"
@@ -458,7 +467,7 @@ _apply_modules() {
             log "Отключение модуля: ${name}..."
             _modules_conf_set "$name" "off"
             changed=1
-            ok "Модуль ${name} отключён (файлы сохранены, можно включить снова)"
+            ok "Модуль ${name} отключён (системные компоненты сохранены, можно включить снова)"
         fi
     done
 
@@ -472,6 +481,57 @@ _apply_modules() {
     fi
 }
 
+# Удалить модуль: запустить uninstall.sh, убрать директорию, убрать из modules.conf
+_delete_module() {
+    local name="$1"
+
+    # Безопасность: нельзя удалять базовые модули
+    _is_base_module "$name" && { warn "Базовый модуль ${name} нельзя удалить."; return 1; }
+
+    # Нельзя удалять включённый модуль
+    local _have
+    _have=$(grep "^${name}=" /root/modules.conf 2>/dev/null | cut -d= -f2 || echo "off")
+    if [[ "$_have" == "on" ]]; then
+        warn "Отключите модуль ${name} перед удалением (переключите в [ ] и примените)."
+        return 1
+    fi
+
+    echo ""
+    warn "Будет удалено: системные компоненты модуля ${name}."
+    warn "Данные конфигурации сохраняются в /etc/proxy-bot/ или /etc/awg-socks5/ (зависит от модуля)."
+    read -p "  Подтвердить удаление? [y/N]: " _confirm
+    [[ "$_confirm" =~ ^[Yy]$ ]] || { info "Отмена."; return 0; }
+
+    local _mod_dir="/root/modules/${name}"
+
+    # Скачать актуальный uninstall.sh если его нет
+    if [[ ! -f "${_mod_dir}/uninstall.sh" ]]; then
+        curl -fsSL "${REPO_RAW}/modules/${name}/uninstall.sh" \
+            -o "${_mod_dir}/uninstall.sh.new" 2>/dev/null \
+            && mv "${_mod_dir}/uninstall.sh.new" "${_mod_dir}/uninstall.sh" \
+            && chmod +x "${_mod_dir}/uninstall.sh" \
+            || rm -f "${_mod_dir}/uninstall.sh.new"
+    fi
+
+    if [[ -f "${_mod_dir}/uninstall.sh" ]]; then
+        log "Запуск удалятора модуля ${name}..."
+        bash "${_mod_dir}/uninstall.sh" || warn "Удалятор завершился с ошибкой — продолжаю."
+    else
+        warn "uninstall.sh не найден — удаляю только директорию модуля."
+    fi
+
+    # Удалить директорию модуля
+    if [[ -d "$_mod_dir" ]]; then
+        rm -rf "$_mod_dir"
+        ok "Директория ${_mod_dir} удалена."
+    fi
+
+    # Убрать из modules.conf
+    sed -i "/^${name}=/d" /root/modules.conf
+
+    ok "Модуль ${name} полностью удалён."
+}
+
 # Интерактивное меню выбора модулей
 _modules_menu() {
     # Получаем список доступных опциональных модулей из репо
@@ -481,14 +541,23 @@ _modules_menu() {
         return
     }
 
-    # Парсим доступные опциональные модули
+    # Парсим доступные опциональные модули (сохраняем описания из комментариев над строкой)
     local -a _avail=()
-    while IFS='=' read -r _n _s; do
-        _n="${_n//[[:space:]]/}"
-        [[ -z "$_n" || "$_n" == \#* ]] && continue
-        _is_base_module "$_n" && continue
-        _avail+=("$_n")
-    done <<< "$(echo "$_repo_conf" | grep -v '^#' | grep '=')"
+    declare -A _repo_desc=()
+    local _last_comment=""
+    while IFS= read -r _line; do
+        if [[ "$_line" =~ ^#[[:space:]]*(.*) ]]; then
+            _last_comment="${BASH_REMATCH[1]}"
+        elif [[ "$_line" =~ ^([a-zA-Z0-9_-]+)= ]]; then
+            local _rn="${BASH_REMATCH[1]}"
+            _is_base_module "$_rn" && { _last_comment=""; continue; }
+            _avail+=("$_rn")
+            [[ -n "$_last_comment" ]] && _repo_desc["$_rn"]="$_last_comment"
+            _last_comment=""
+        else
+            _last_comment=""
+        fi
+    done <<< "$_repo_conf"
 
     if [[ ${#_avail[@]} -eq 0 ]]; then
         warn "Дополнительных модулей в репозитории не найдено."
@@ -527,29 +596,71 @@ _modules_menu() {
         local _i=1
         for _n in "${_avail[@]}"; do
             local _st="${_new_state[$_n]:-off}"
-            local _desc="${_MOD_DESC[$_n]:-$_n}"
-            if [[ "$_st" == "on" ]]; then
+            local _desc="${_repo_desc[$_n]:-${_MOD_DESC[$_n]:-$_n}}"
+            local _installed=false
+            _mod_is_installed "$_n" && _installed=true
+
+            if [[ "$_st" == "on" && "$_installed" == "true" ]]; then
+                # Установлен И включён
                 echo -e "  ${CYAN}${_i})${NC} ${GREEN}[✓]${NC} ${_n}  — ${_desc}"
+            elif [[ "$_installed" == "true" ]]; then
+                # Установлен, но выключен
+                echo -e "  ${CYAN}${_i})${NC} ${YELLOW}[○]${NC} ${_n}  — ${_desc}  ${YELLOW}(установлен, выкл)${NC}"
+            elif [[ "$_st" == "on" ]]; then
+                # Включён в conf, но не установлен (sentinel отсутствует)
+                echo -e "  ${CYAN}${_i})${NC} ${CYAN}[~]${NC} ${_n}  — ${_desc}  ${CYAN}(будет установлен)${NC}"
             else
+                # Не установлен, выключен
                 echo -e "  ${CYAN}${_i})${NC} [ ] ${_n}  — ${_desc}"
             fi
             ((_i++))
         done
         echo ""
-        echo -e "  ${CYAN}a)${NC} Применить"
-        echo -e "  ${CYAN}0)${NC} Выход без изменений"
+        echo -e "  ${BOLD}Команды:${NC}"
+        echo -e "  ${CYAN}<N>${NC}    — переключить модуль вкл/выкл"
+        echo -e "  ${CYAN}d<N>${NC}  — удалить установленный модуль (только если выкл)"
+        echo -e "  ${CYAN}a${NC}     — применить изменения"
+        echo -e "  ${CYAN}0${NC}     — выход без изменений"
         echo ""
-        read -p "  Номер для переключения, 'a' — применить, '0' — выход: " _ch
+        read -p "  > " _ch
 
         case "$_ch" in
             0) return ;;
             a|A)
                 echo ""
                 _apply_modules _new_state _avail
-                return
+                # Обновляем _cur_state после применения
+                while IFS='=' read -r _n _s; do
+                    _n="${_n//[[:space:]]/}"; _s="${_s//[[:space:]]/}"
+                    [[ -z "$_n" ]] && continue
+                    _cur_state["$_n"]="$_s"
+                done < <(grep -v '^#' /root/modules.conf 2>/dev/null | grep '=')
+                # Даём пользователю увидеть результат
+                read -p "  Нажмите Enter для возврата в меню..." _dummy
+                ;;
+            d[0-9]*)
+                # Команда удаления: d<N>
+                local _dnum="${_ch#d}"
+                local _didx=$((_dnum - 1))
+                if [[ "$_dnum" =~ ^[0-9]+$ && $_didx -ge 0 && $_didx -lt ${#_avail[@]} ]]; then
+                    local _dname="${_avail[$_didx]}"
+                    # Принудительно применяем текущее off в рабочем массиве для этого модуля
+                    _new_state["$_dname"]="off"
+                    # Синхронизируем modules.conf если был on
+                    if [[ "${_cur_state[$_dname]:-off}" == "on" ]]; then
+                        _modules_conf_set "$_dname" "off"
+                        systemctl restart awg-bot 2>/dev/null || true
+                        _cur_state["$_dname"]="off"
+                    fi
+                    _delete_module "$_dname"
+                    read -p "  Нажмите Enter для возврата в меню..." _dummy
+                else
+                    warn "Неверный номер модуля."
+                    sleep 1
+                fi
                 ;;
             ''|*[!0-9]*)
-                warn "Введите номер, 'a' или '0'."
+                warn "Введите номер, 'd<N>', 'a' или '0'."
                 sleep 1
                 ;;
             *)
@@ -620,12 +731,14 @@ if [[ "${1}" == "--update" ]]; then
         if curl -fsSL "${REPO_RAW}/modules/${_mod}/__init__.py" \
                 -o "${_mod_dir}/__init__.py.new" 2>/dev/null; then
             mv "${_mod_dir}/__init__.py.new" "${_mod_dir}/__init__.py"
-            # Также обновляем install.sh (не запускаем — только файл)
-            curl -fsSL "${REPO_RAW}/modules/${_mod}/install.sh" \
-                -o "${_mod_dir}/install.sh.new" 2>/dev/null \
-                && mv "${_mod_dir}/install.sh.new" "${_mod_dir}/install.sh" \
-                && chmod +x "${_mod_dir}/install.sh" \
-                || rm -f "${_mod_dir}/install.sh.new"
+            # Также обновляем install.sh и uninstall.sh (не запускаем — только файлы)
+            for _sh in install.sh uninstall.sh; do
+                curl -fsSL "${REPO_RAW}/modules/${_mod}/${_sh}" \
+                    -o "${_mod_dir}/${_sh}.new" 2>/dev/null \
+                    && mv "${_mod_dir}/${_sh}.new" "${_mod_dir}/${_sh}" \
+                    && chmod +x "${_mod_dir}/${_sh}" \
+                    || rm -f "${_mod_dir}/${_sh}.new"
+            done
             ok "Модуль ${_mod} обновлён"
             UPDATED=$((UPDATED+1))
         else

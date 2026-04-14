@@ -166,3 +166,7 @@ echo -e "  ${CYAN}Следующий шаг:${NC}"
 echo -e "  Откройте бота → 🧦 SOCKS5 прокси → выберите клиента"
 echo -e "  Бот запросит адрес SOCKS5 сервера и применит маршрутизацию."
 echo ""
+
+# ── Sentinel: модуль установлен ───────────────────────────────────────────────
+mkdir -p "/root/modules/socks5"
+touch "/root/modules/socks5/.installed"

@@ -230,3 +230,7 @@ echo -e "  Ссылка: ${CYAN}${MTP_LINK}${NC}"
 echo ""
 echo -e "  Управление (старт/стоп/смена секрета) — через бота: 📡 Прокси Telegram"
 echo ""
+
+# ── Sentinel: модуль установлен ───────────────────────────────────────────────
+mkdir -p "/root/modules/mtproxy"
+touch "/root/modules/mtproxy/.installed"
