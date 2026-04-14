@@ -1254,13 +1254,13 @@ main_menu() {
         echo "  6) Настройки (токен, IP, DNS...)"
         echo "  7) Бэкапы"
         echo "  8) Обновление"
-        echo "  13) Управление модулями"
+        echo "  9) Управление модулями"
         echo ""
         echo "  ── Диагностика ──────────────────────"
-        echo "  9) Полный диагностический отчёт"
-        echo " 10) Анализ конфигов клиентов"
-        echo " 11) Просмотр предыдущих диагностик"
-        echo " 12) Проверить целостность клиентов"
+        echo " 10) Полный диагностический отчёт"
+        echo " 11) Анализ конфигов клиентов"
+        echo " 12) Просмотр предыдущих диагностик"
+        echo " 13) Проверить целостность клиентов"
         echo ""
         echo "  0) Выход"
         echo ""
@@ -1275,11 +1275,11 @@ main_menu() {
             6)  manage_settings ;;
             7)  manage_backups ;;
             8)  manage_updates ;;
-            9)  run_diagnostics ;;
-            10) analyze_configs ;;
-            11) view_old_diagnostics ;;
-            12) check_peer_integrity ;;
-            13) bash /root/setup.sh --modules ;;
+            9)  bash /root/setup.sh --modules ;;
+            10) run_diagnostics ;;
+            11) analyze_configs ;;
+            12) view_old_diagnostics ;;
+            13) check_peer_integrity ;;
             0|"")  echo ""; exit 0 ;;
             *)  echo -e "  ${RED}Неверный выбор${NC}"; sleep 1 ;;
         esac

@@ -731,6 +731,8 @@ def get_system_stats() -> dict:
     try:    load = open("/proc/loadavg").read().split()[:3]
     except: load = ["0", "0", "0"]
 
+    cpu_count = os.cpu_count() or 1
+
     return {
         "uptime":     uptime,
         "ram_used":   ram_used,
@@ -739,6 +741,7 @@ def get_system_stats() -> dict:
         "disk_total": disk_total,
         "disk_pct":   disk_pct,
         "load":       load,
+        "cpu_count":  cpu_count,
     }
 
 
@@ -758,6 +761,7 @@ def collect_stats_full() -> dict:
     disk_used  = sys["disk_used"]; disk_total = sys["disk_total"]
     disk_pct   = sys["disk_pct"]
     load       = sys["load"]
+    cpu_count  = sys["cpu_count"]
 
     # Текущая скорость из последней записи пиков
     last_bw = peak.get("last", {})
@@ -800,6 +804,7 @@ def collect_stats_full() -> dict:
         "eth_iface":       iface,
         "uptime":          uptime,
         "load":            load,
+        "cpu_count":       cpu_count,
         "ram_used_mb":     ram_used,
         "ram_total_mb":    ram_total,
         "disk_used":       disk_used,
@@ -840,10 +845,22 @@ def collect_stats_full() -> dict:
             "up":   allp.get("eth_up",   0),
         },
 
-        "bw_top":  get_bw_top(5),
-        "monthly": get_vnstat_monthly(),
-        "peers":   peers_list,
+        "bw_top":      get_bw_top(5),
+        "bw_histogram": _histogram_for_tma(get_bw_histogram(7)),
+        "monthly":     get_vnstat_monthly(),
+        "peers":       peers_list,
     }
+
+def _histogram_for_tma(hist: dict | None) -> dict | None:
+    """Конвертирует гистограмму для передачи в TMA (JSON-совместимый формат)."""
+    if not hist:
+        return None
+    return {
+        "buckets": [[lo, hi, label.strip()] for lo, hi, label in hist["buckets"]],
+        "counts":  hist["counts"],
+        "total":   hist["total"],
+    }
+
 
 def collect_stats_basic() -> dict:
     """Урезанная статистика — для обычных пользователей"""
@@ -851,13 +868,37 @@ def collect_stats_basic() -> dict:
     now    = int(time.time())
     online = sum(1 for p in peers.values()
                  if p.get("handshake") and now - p["handshake"] < 180)
-    uptime = get_system_stats()["uptime"]
+    sys_s  = get_system_stats()
+    uptime = sys_s["uptime"]
+    load   = sys_s["load"]
+    cpu_count = sys_s["cpu_count"]
+    peak   = load_bw_peak()
+    day    = peak.get("day",  {})
+    allp   = peak.get("all",  {})
+    try:
+        with open(USERS_FILE) as f:
+            users = json.load(f)
+        users_count = len(users.get("approved", {}))
+    except Exception:
+        users_count = 0
     return {
         "awg_status":      "running",
         "server_endpoint": SERVER_ENDPOINT,
         "uptime":          uptime,
+        "load":            load,
+        "cpu_count":       cpu_count,
         "peers_total":     len(get_all_clients()),
         "peers_online":    online,
+        "users_count":     users_count,
+        "awg_peak_day": {
+            "down": day.get("awg_down", 0),
+            "up":   day.get("awg_up",   0),
+            "date": day.get("date", "—"),
+        },
+        "awg_peak_all": {
+            "down": allp.get("awg_down", 0),
+            "up":   allp.get("awg_up",   0),
+        },
     }
 
 # ── Бэкап ──────────────────────────────────────────────────────────────────────

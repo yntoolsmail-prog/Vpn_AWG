@@ -125,9 +125,19 @@
   .status-dot {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
     font-size: 12px;
     color: var(--green);
+  }
+  .status-counts {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .status-count {
+    font-size: 11px;
+    color: var(--text-dim);
+    letter-spacing: 0.05em;
   }
   .dot {
     width: 9px; height: 9px;
@@ -142,15 +152,54 @@
   }
   .dot.offline { background: var(--red); box-shadow: 0 0 8px var(--red); }
 
-  /* Last update */
-  .last-update {
-    text-align: center;
-    font-size: 12px;
-    color: var(--text-mid);
-    margin-bottom: 10px;
-    letter-spacing: 0.05em;
+  /* Ring meter */
+  .ring-wrap {
+    position: relative;
+    width: 58px; height: 58px;
+    margin: 6px auto 4px;
   }
-  .last-update span { color: var(--text); }
+  .ring {
+    width: 58px; height: 58px;
+    transform: rotate(-90deg);
+  }
+  .ring-bg  { fill: none; stroke: var(--surface2); stroke-width: 5; }
+  .ring-fill {
+    fill: none; stroke-width: 5; stroke-linecap: round;
+    stroke-dasharray: 138.2;
+    stroke-dashoffset: 138.2;
+    transition: stroke-dashoffset .8s cubic-bezier(.4,0,.2,1), stroke .3s;
+  }
+  .ring-fill.green  { stroke: var(--green);  filter: drop-shadow(0 0 4px var(--green)); }
+  .ring-fill.blue   { stroke: var(--blue);   filter: drop-shadow(0 0 4px var(--blue)); }
+  .ring-fill.amber  { stroke: var(--amber);  filter: drop-shadow(0 0 4px var(--amber)); }
+  .ring-fill.red    { stroke: var(--red);    filter: drop-shadow(0 0 4px var(--red)); }
+  .ring-fill.yellow { stroke: var(--yellow); filter: drop-shadow(0 0 4px var(--yellow)); }
+  .ring-center {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; font-weight: 700;
+  }
+  .ring-center.green  { color: var(--green); }
+  .ring-center.blue   { color: var(--blue); }
+  .ring-center.amber  { color: var(--amber); }
+  .ring-center.red    { color: var(--red); }
+  .ring-center.yellow { color: var(--yellow); }
+
+  /* Mini load chart */
+  .load-mini-wrap { display: flex; gap: 8px; margin-top: 6px; align-items: flex-end; height: 44px; }
+  .load-mini-col  { display: flex; flex-direction: column; align-items: center; flex: 1; }
+  .load-mini-bar  {
+    width: 100%; border-radius: 3px 3px 0 0; min-height: 4px;
+    transition: height .6s ease, background-color .3s;
+  }
+  .load-mini-bar.green  { background: var(--green); }
+  .load-mini-bar.amber  { background: var(--amber); }
+  .load-mini-bar.red    { background: var(--red); }
+  .load-mini-lbl { font-size: 10px; color: var(--text-dim); margin-top: 2px; }
+  .uptime-small {
+    font-size: 11px; color: var(--text-mid); margin-bottom: 4px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
 
   /* Grid layout */
   .grid-2 {
@@ -202,24 +251,6 @@
     margin-top: 4px;
   }
 
-  /* Bar meter */
-  .bar-wrap {
-    background: var(--surface2);
-    border-radius: 3px;
-    height: 4px;
-    margin-top: 8px;
-    overflow: hidden;
-  }
-  .bar-fill {
-    height: 100%;
-    border-radius: 3px;
-    transition: width 0.8s cubic-bezier(0.4,0,0.2,1);
-  }
-  .bar-fill.green  { background: var(--green);  box-shadow: 0 0 6px var(--green); }
-  .bar-fill.amber  { background: var(--amber);  box-shadow: 0 0 6px var(--amber); }
-  .bar-fill.red    { background: var(--red);    box-shadow: 0 0 6px var(--red); }
-  .bar-fill.blue   { background: var(--blue);   box-shadow: 0 0 6px var(--blue); }
-  .bar-fill.yellow { background: var(--yellow); box-shadow: 0 0 6px var(--yellow); }
 
   /* Wide card */
   .card.wide {
@@ -368,27 +399,6 @@
   .peak-row:last-child { border-bottom: none; }
   .peak-label { font-size: 12px; color: var(--text); }
   .peak-val   { font-size: 14px; font-weight: 500; color: var(--amber); }
-
-  /* Load avg */
-  .load-bars {
-    display: flex;
-    gap: 6px;
-    margin-top: 8px;
-    align-items: center;
-  }
-  .load-item {
-    flex: 1;
-    text-align: center;
-  }
-  .load-num {
-    font-size: 20px;
-    font-weight: 700;
-    margin-bottom: 4px;
-  }
-  .load-period {
-    font-size: 11px;
-    color: var(--text-mid);
-  }
 
   @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -589,10 +599,13 @@
       </div>
       <div class="status-dot" id="status-indicator">
         <div class="dot" id="status-dot"></div>
-        <span id="status-text">онлайн</span>
+        <div class="status-counts">
+          <span id="status-text">онлайн</span>
+          <span class="status-count" id="hdr-users">—</span>
+          <span class="status-count" id="hdr-devices">—</span>
+        </div>
       </div>
     </div>
-    <div class="last-update" id="last-update">обновлено: <span>—</span></div>
     <div id="content"></div>
   </div>
 
@@ -1765,27 +1778,55 @@ function buildDOM(d) {
   <div class="grid-3">
     <div class="card">
       <div class="card-label">онлайн</div>
-      <div class="card-value yellow" id="v-online">—</div>
+      <div class="ring-wrap">
+        <svg class="ring" viewBox="0 0 58 58">
+          <circle cx="29" cy="29" r="22" class="ring-bg"/>
+          <circle cx="29" cy="29" r="22" class="ring-fill yellow" id="r-online"/>
+        </svg>
+        <div class="ring-center yellow" id="v-online">—</div>
+      </div>
       <div class="card-sub" id="v-online-sub">из —</div>
-      <div class="bar-wrap"><div class="bar-fill yellow" id="b-online" style="width:0%"></div></div>
     </div>
     <div class="card">
       <div class="card-label">RAM</div>
-      <div class="card-value blue" id="v-ram">—</div>
+      <div class="ring-wrap">
+        <svg class="ring" viewBox="0 0 58 58">
+          <circle cx="29" cy="29" r="22" class="ring-bg"/>
+          <circle cx="29" cy="29" r="22" class="ring-fill blue" id="r-ram"/>
+        </svg>
+        <div class="ring-center blue" id="v-ram">—</div>
+      </div>
       <div class="card-sub" id="v-ram-sub">— MB</div>
-      <div class="bar-wrap"><div class="bar-fill blue" id="b-ram" style="width:0%"></div></div>
     </div>
     <div class="card">
       <div class="card-label">диск</div>
-      <div class="card-value amber" id="v-disk">—</div>
+      <div class="ring-wrap">
+        <svg class="ring" viewBox="0 0 58 58">
+          <circle cx="29" cy="29" r="22" class="ring-bg"/>
+          <circle cx="29" cy="29" r="22" class="ring-fill amber" id="r-disk"/>
+        </svg>
+        <div class="ring-center amber" id="v-disk">—</div>
+      </div>
       <div class="card-sub" id="v-disk-sub">—</div>
-      <div class="bar-wrap"><div class="bar-fill amber" id="b-disk" style="width:0%"></div></div>
     </div>
   </div>
-  <div class="card wide">
-    <div class="card-label">Время работы · Нагрузка</div>
-    <div class="uptime-tag" id="v-uptime">—</div>
-    <div class="load-bars" id="v-load"></div>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-label">ЦП · нагрузка</div>
+      <div class="ring-wrap">
+        <svg class="ring" viewBox="0 0 58 58">
+          <circle cx="29" cy="29" r="22" class="ring-bg"/>
+          <circle cx="29" cy="29" r="22" class="ring-fill green" id="r-cpu"/>
+        </svg>
+        <div class="ring-center green" id="v-cpu">—</div>
+      </div>
+      <div class="card-sub">LA 1 мин</div>
+    </div>
+    <div class="card">
+      <div class="card-label">нагрузка 1/5/15 мин</div>
+      <div class="uptime-small" id="v-uptime">—</div>
+      <div class="load-mini-wrap" id="v-load-mini"></div>
+    </div>
   </div>
   <div class="section-title">клиенты · скорость сейчас (awg0)</div>
   <div class="grid-2">
@@ -1811,14 +1852,14 @@ function buildDOM(d) {
   <div class="section-title">пики клиентов (awg0)</div>
   <div class="traffic-card">
     <div class="traffic-row"><div class="traffic-label">🏅 пик сегодня · клиенты</div><div class="traffic-val"><span class="arrow-down" id="v-pk-day-down">—</span> <span class="arrow-up" id="v-pk-day-up">—</span> <span style="font-size:11px;color:var(--text-mid)">Mbit/s</span></div></div>
-    <div class="traffic-row"><div class="traffic-label">  сервер сегодня</div><div class="traffic-val" style="font-size:12px;color:var(--text-mid)" id="v-pk-day-eth">—</div></div>
     <div class="traffic-row"><div class="traffic-label">🏆 пик за всё время · клиенты</div><div class="traffic-val"><span class="arrow-down" id="v-pk-all-down">—</span> <span class="arrow-up" id="v-pk-all-up">—</span> <span style="font-size:11px;color:var(--text-mid)">Mbit/s</span></div></div>
-    <div class="traffic-row"><div class="traffic-label">  сервер за всё время</div><div class="traffic-val" style="font-size:12px;color:var(--text-mid)" id="v-pk-all-eth">—</div></div>
     <div class="traffic-row"><div class="traffic-label">📶 всего скачали (с рест.)</div><div class="traffic-val" style="color:var(--blue)" id="v-total-dl">—</div></div>
     <div class="traffic-row"><div class="traffic-label">📶 всего отдали (с рест.)</div><div class="traffic-val" style="color:var(--green)" id="v-total-ul">—</div></div>
   </div>
   <div class="section-title">топ-5 нагруженных минут</div>
   <div class="traffic-card" id="v-bwtop"></div>
+  <div class="section-title">распределение нагрузки · 7 дней</div>
+  <div class="traffic-card" id="v-bwhist"></div>
   <div class="section-title">трафик сервера · eth0 · лимит провайдера</div>
   <div class="chart-card">
     <div class="chart-bars" id="v-chart-bars"></div>
@@ -1830,16 +1871,39 @@ function buildDOM(d) {
   </div>`;
   } else {
     html += `
+  <div class="card wide">
+    <div class="card-label">онлайн клиентов</div>
+    <div class="ring-wrap">
+      <svg class="ring" viewBox="0 0 58 58">
+        <circle cx="29" cy="29" r="22" class="ring-bg"/>
+        <circle cx="29" cy="29" r="22" class="ring-fill green" id="r-online"/>
+      </svg>
+      <div class="ring-center green" id="v-online">—</div>
+    </div>
+    <div class="card-sub" id="v-online-sub">из —</div>
+  </div>
   <div class="grid-2">
     <div class="card">
-      <div class="card-label">онлайн клиентов</div>
-      <div class="card-value green" id="v-online">—</div>
-      <div class="card-sub" id="v-online-sub">из —</div>
+      <div class="card-label">ЦП · нагрузка</div>
+      <div class="ring-wrap">
+        <svg class="ring" viewBox="0 0 58 58">
+          <circle cx="29" cy="29" r="22" class="ring-bg"/>
+          <circle cx="29" cy="29" r="22" class="ring-fill green" id="r-cpu"/>
+        </svg>
+        <div class="ring-center green" id="v-cpu">—</div>
+      </div>
+      <div class="card-sub">LA 1 мин</div>
     </div>
     <div class="card">
-      <div class="card-label">работает</div>
-      <div class="card-value blue" style="font-size:16px" id="v-uptime">—</div>
+      <div class="card-label">нагрузка 1/5/15 мин</div>
+      <div class="uptime-small" id="v-uptime">—</div>
+      <div class="load-mini-wrap" id="v-load-mini"></div>
     </div>
+  </div>
+  <div class="section-title">пики клиентов (awg0)</div>
+  <div class="traffic-card">
+    <div class="traffic-row"><div class="traffic-label">🏅 пик сегодня</div><div class="traffic-val"><span class="arrow-down" id="v-pk-day-down">—</span> <span class="arrow-up" id="v-pk-day-up">—</span> <span style="font-size:11px;color:var(--text-mid)">Mbit/s</span></div></div>
+    <div class="traffic-row"><div class="traffic-label">🏆 пик за всё время</div><div class="traffic-val"><span class="arrow-down" id="v-pk-all-down">—</span> <span class="arrow-up" id="v-pk-all-up">—</span> <span style="font-size:11px;color:var(--text-mid)">Mbit/s</span></div></div>
   </div>`;
   }
 
@@ -1853,6 +1917,15 @@ function buildDOM(d) {
   document.getElementById('content').innerHTML = html;
 }
 
+// ─── RING HELPER ──────────────────────────────────────────────────────────────
+function setRing(id, pct, color) {
+  const C = 138.2;
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.style.strokeDashoffset = (C * (1 - Math.min(pct, 100) / 100)).toFixed(2);
+  el.className = 'ring-fill ' + color;
+}
+
 // ─── UPDATE VALUES (последующие рендеры) ──────────────────────────────────────
 function updateValues(d) {
   const isAdmin = !!d.is_admin;
@@ -1863,41 +1936,58 @@ function updateValues(d) {
   const ethUp   = n(d.eth_current_up);
   const overhead = Math.max(0, ethDown - awgDown).toFixed(2);
 
-  // Онлайн
+  // Шапка — пользователи и устройства
+  setEl('hdr-users',   (d.users_count  ?? '—') + ' польз.');
+  setEl('hdr-devices', (d.peers_total  ?? '—') + ' устр.');
+
+  // Онлайн (кольцо)
+  const onlinePct = d.peers_total ? Math.round(d.peers_online / d.peers_total * 100) : 0;
   setEl('v-online', d.peers_online);
   setEl('v-online-sub', 'из ' + d.peers_total);
+  setRing('r-online', onlinePct, isAdmin ? 'yellow' : 'green');
 
   // Uptime
   setEl('v-uptime', d.uptime);
 
+  // Мини-график нагрузки (и у админа, и у юзера)
+  const loadMiniEl = document.getElementById('v-load-mini');
+  if (loadMiniEl && d.load) {
+    const maxL = Math.max(...d.load.map(parseFloat), 0.1);
+    loadMiniEl.innerHTML = d.load.map((v, i) => {
+      const pct = Math.min(parseFloat(v) / maxL * 100, 100);
+      const col = loadColor(v);
+      return `<div class="load-mini-col">
+        <div class="load-mini-bar ${col}" style="height:${Math.max(4, Math.round(pct * 34 / 100))}px"></div>
+        <div class="load-mini-lbl">${[1,5,15][i]}м</div>
+      </div>`;
+    }).join('');
+  }
+
+  // ЦП кольцо (и у админа, и у юзера)
+  {
+    const la = d.load ? parseFloat(d.load[0]) : 0;
+    const cpuCount = d.cpu_count || 1;
+    const cpuPct = Math.min(la / cpuCount * 100, 100);
+    const cpuColor = loadColor(d.load?.[0] ?? '0');
+    setEl('v-cpu', d.load?.[0] ?? '—');
+    setClass('v-cpu', 'ring-center ' + cpuColor);
+    setRing('r-cpu', cpuPct, cpuColor);
+  }
+
   if (isAdmin) {
-    // RAM
+    // RAM кольцо
     const rColor = ramColor(ramPct);
     setEl('v-ram', ramPct + '%');
     setEl('v-ram-sub', d.ram_used_mb + ' MB');
-    setClass('v-ram', 'card-value ' + rColor);
-    const bRam = document.getElementById('b-ram');
-    if (bRam) { bRam.style.width = ramPct + '%'; bRam.className = 'bar-fill ' + rColor; }
+    setClass('v-ram', 'ring-center ' + rColor);
+    setRing('r-ram', ramPct, rColor);
 
-    // Диск
+    // Диск кольцо
     const dColor = diskColor(d.disk_pct);
     setEl('v-disk', d.disk_pct + '%');
     setEl('v-disk-sub', d.disk_used);
-    setClass('v-disk', 'card-value ' + dColor);
-    const bDisk = document.getElementById('b-disk');
-    if (bDisk) { bDisk.style.width = d.disk_pct + '%'; bDisk.className = 'bar-fill ' + dColor; }
-
-    // Онлайн bar
-    const bOnline = document.getElementById('b-online');
-    if (bOnline) { bOnline.style.width = (d.peers_total ? Math.round(d.peers_online/d.peers_total*100) : 0) + '%'; bOnline.className = 'bar-fill yellow'; }
-
-    // Load
-    const loadEl = document.getElementById('v-load');
-    if (loadEl && d.load) {
-      loadEl.innerHTML = d.load.map((v,i) =>
-        `<div class="load-item"><div class="load-num" style="color:var(--${loadColor(v)})">${v}</div><div class="load-period">${[1,5,15][i]} мин</div></div>`
-      ).join('');
-    }
+    setClass('v-disk', 'ring-center ' + dColor);
+    setRing('r-disk', d.disk_pct, dColor);
 
     // Скорость
     setEl('v-awg-down', awgDown); setEl('v-awg-up', awgUp);
@@ -1905,13 +1995,7 @@ function updateValues(d) {
     setEl('v-t-ethdown', ethDown); setEl('v-t-ethup', ethUp);
     setEl('v-t-overhead', overhead + ' Mbit/s');
 
-    // Пики
-    setEl('v-pk-day-down', '↓' + n(d.awg_peak_day?.down));
-    setEl('v-pk-day-up',   '↑' + n(d.awg_peak_day?.up));
-    setEl('v-pk-day-eth',  '↓' + n(d.eth_peak_day?.down) + ' ↑' + n(d.eth_peak_day?.up) + ' Mbit/s');
-    setEl('v-pk-all-down', '↓' + n(d.awg_peak_all?.down));
-    setEl('v-pk-all-up',   '↑' + n(d.awg_peak_all?.up));
-    setEl('v-pk-all-eth',  '↓' + n(d.eth_peak_all?.down) + ' ↑' + n(d.eth_peak_all?.up) + ' Mbit/s');
+    // Пики (admin extra)
     setEl('v-total-dl', d.clients_total_download || '—');
     setEl('v-total-ul', d.clients_total_upload   || '—');
 
@@ -1928,6 +2012,27 @@ function updateValues(d) {
           </div>
         </div>`
       ).join('');
+    }
+
+    // Гистограмма скоростей
+    const histEl = document.getElementById('v-bwhist');
+    if (histEl && d.bw_histogram && d.bw_histogram.total > 0) {
+      histEl.innerHTML = d.bw_histogram.counts.map((cnt, i) => {
+        if (!cnt) return '';
+        const [lo, , label] = d.bw_histogram.buckets[i];
+        const pct = (cnt / d.bw_histogram.total * 100).toFixed(1);
+        const color = lo >= 500 ? 'red' : lo >= 300 ? 'amber' : lo >= 200 ? 'yellow' : lo >= 100 ? 'green' : '';
+        const barW = Math.max(4, Math.round(parseFloat(pct)));
+        return `<div class="traffic-row">
+          <div class="traffic-label" style="font-size:12px">${label} Mbit/s</div>
+          <div style="flex:1;margin:0 8px">
+            <div style="background:var(--surface2);border-radius:3px;height:4px;overflow:hidden">
+              <div style="width:${barW}%;height:100%;background:var(--${color || 'text-mid'})"></div>
+            </div>
+          </div>
+          <div class="traffic-val" style="font-size:12px;color:var(--${color || 'text-mid'})">${pct}%<span style="color:var(--text-dim);font-size:11px"> ${cnt}м</span></div>
+        </div>`;
+      }).join('');
     }
 
     // Месячный трафик
@@ -1955,6 +2060,12 @@ function updateValues(d) {
       }
     }
   }
+
+  // Пики (и у админа, и у юзера)
+  setEl('v-pk-day-down', '↓' + n(d.awg_peak_day?.down));
+  setEl('v-pk-day-up',   '↑' + n(d.awg_peak_day?.up));
+  setEl('v-pk-all-down', '↓' + n(d.awg_peak_all?.down));
+  setEl('v-pk-all-up',   '↑' + n(d.awg_peak_all?.up));
 
   // Устройства
   const peersEl = document.getElementById('v-peers');
@@ -1990,8 +2101,6 @@ function render(d) {
   } else {
     dot.classList.add('offline'); txt.textContent = 'офлайн';
   }
-  document.querySelector('#last-update span').textContent =
-    new Date().toLocaleTimeString('ru', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
 }
 
 // ─── LOAD ─────────────────────────────────────────────────────────────────────

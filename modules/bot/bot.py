@@ -459,11 +459,20 @@ def _tma_button() -> InlineKeyboardButton | None:
 
 
 async def show_start_screen(msg, user_id: int, edit: bool = False):
-    """Стартовый экран: для пользователей — единое меню, для админа — статус + TMA."""
+    """Стартовый экран:
+    - Обычный пользователь → главное меню.
+    - Администратор с TMA → статус-экран с кнопкой «Открыть VPN» + «Режим бота».
+    - Администратор без TMA → сразу главное меню (промежуточный экран бессмысленен).
+    """
     is_admin = (user_id == ADMIN_ID)
 
-    # Для обычных пользователей — единое главное меню без дублирования
     if not is_admin:
+        await main_menu(msg, user_id, edit=edit)
+        return
+
+    # Если TMA не настроен — показываем сразу полное меню администратора
+    tma_btn = _tma_button()
+    if not tma_btn:
         await main_menu(msg, user_id, edit=edit)
         return
 
@@ -489,13 +498,10 @@ async def show_start_screen(msg, user_id: int, edit: bool = False):
         f"📱 Клиентов: {total} | 👥 Польз.: {len(users['approved'])}{pending_note}"
     )
 
-    tma_btn = _tma_button()
-    kb = []
-    if tma_btn:
-        kb.append([tma_btn])
-    kb.append([InlineKeyboardButton("📱 Режим бота", callback_data="back")])
-
-    markup = InlineKeyboardMarkup(kb)
+    markup = InlineKeyboardMarkup([
+        [tma_btn],
+        [InlineKeyboardButton("📱 Режим бота", callback_data="back")],
+    ])
     if edit:
         await msg.edit_message_text(text, reply_markup=markup, parse_mode="Markdown")
     else:

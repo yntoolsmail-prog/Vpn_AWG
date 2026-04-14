@@ -114,286 +114,16 @@ PROJECT_FILES=(
 )
 # modules.conf намеренно исключён — это пользовательский конфиг.
 # Управление модулями: bash /root/setup.sh --modules
-# ── Функция установки TMA ─────────────────────────────────────────────────────
-_install_tma() {
-    local TMA_DIR="${AWG_DIR}/tma"
-    local TMA_SERVER_DST="/root/modules/tma/tma_server.py"
-    local TMA_HTML_DST="${TMA_DIR}/index.html"
-    local NGINX_CONF="/etc/nginx/sites-available/awg-tma"
-    local NGINX_ENABLED="/etc/nginx/sites-enabled/awg-tma"
-    local TMA_PORT=8080
-
-    source <(grep -v '^#' ${AWG_DIR}/server.env | grep '=')
-    source <(grep -v '^#' ${AWG_DIR}/bot.env    | grep '=')
-
-    echo ""
-    echo -e "  ${BOLD}Установка TMA — веб-панель${NC}"
-    echo ""
-
-    # ── Поиск доменов ─────────────────────────────────────────────────────────
-    local FOUND_DOMAINS=()
-    local _ep _ep_bak
-    _ep=$(grep    "^SERVER_ENDPOINT="        "${AWG_DIR}/server.env" 2>/dev/null | cut -d= -f2)
-    _ep_bak=$(grep "^SERVER_ENDPOINT_BACKUP=" "${AWG_DIR}/server.env" 2>/dev/null | cut -d= -f2)
-    [[ -n "$_ep"     && "$_ep"     != "$SERVER_IP" && ! "$_ep"     =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && FOUND_DOMAINS+=("$_ep")
-    [[ -n "$_ep_bak" && "$_ep_bak" != "$SERVER_IP" && ! "$_ep_bak" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && FOUND_DOMAINS+=("$_ep_bak")
-    if command -v nginx &>/dev/null; then
-        while IFS= read -r _d; do
-            [[ -n "$_d" && "$_d" != "_" && "$_d" != "$SERVER_IP" && ! "$_d" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && FOUND_DOMAINS+=("$_d")
-        done < <(grep -h "server_name" /etc/nginx/sites-enabled/* 2>/dev/null | awk '{print $2}' | tr -d ';' | sort -u)
-    fi
-    FOUND_DOMAINS=($(printf "%s\n" "${FOUND_DOMAINS[@]}" | sort -u))
-
-    # ── Выбор домена ──────────────────────────────────────────────────────────
-    echo ""
-    echo -e "  ${BOLD}Домен для TMA${NC}"
-    echo -e "  Telegram не открывает страницы без HTTPS."
-    echo ""
-
-    local _i=1 TMA_DOMAIN="" USE_SSL=0 LE_EMAIL=""
-    if [[ ${#FOUND_DOMAINS[@]} -gt 0 ]]; then
-        echo -e "  ${GREEN}Найдены домены в конфигурации:${NC}"
-        echo ""
-        for _d in "${FOUND_DOMAINS[@]}"; do
-            echo -e "  ${CYAN}${_i})${NC} ${_d}"; ((_i++))
-        done
-        echo -e "  ${CYAN}${_i})${NC} Ввести другой домен"
-        echo -e "  ${CYAN}$((_i+1)))${NC} Без домена (тест в браузере, в Telegram не работает)"
-        echo ""
-        local _choice
-        while true; do
-            read -p "  Ваш выбор [1]: " _choice
-            _choice=${_choice:-1}
-            [[ "$_choice" =~ ^[0-9]+$ && "$_choice" -ge 1 && "$_choice" -le $((_i+1)) ]] && break
-            warn "Неверный выбор."
-        done
-        if [[ "$_choice" -le ${#FOUND_DOMAINS[@]} ]]; then
-            TMA_DOMAIN="${FOUND_DOMAINS[$((_choice-1))]}"; USE_SSL=1
-            ok "Выбран: ${TMA_DOMAIN}"
-        elif [[ "$_choice" -eq $_i ]]; then
-            TMA_DOMAIN=""; USE_SSL=1
-        else
-            TMA_DOMAIN="$SERVER_IP"; USE_SSL=0
-            warn "Режим без SSL — TMA в Telegram работать не будет."
-        fi
-    else
-        echo -e "  Вариант 1 — домен с A-записью на этот сервер ${GREEN}(рекомендуется)${NC}"
-        echo -e "  Вариант 2 — без домена, только тест в браузере"
-        echo ""
-        local _input
-        read -p "  Введите домен (или Enter чтобы пропустить SSL): " _input
-        _input=$(echo "$_input" | tr -d " " | tr "[:upper:]" "[:lower:]")
-        if [[ -n "$_input" ]]; then
-            TMA_DOMAIN="$_input"; USE_SSL=1
-        else
-            TMA_DOMAIN="$SERVER_IP"; USE_SSL=0
-            warn "Режим без SSL — TMA в Telegram работать не будет."
-        fi
-    fi
-
-    # Если выбрали "ввести другой" — спрашиваем
-    if [[ -z "$TMA_DOMAIN" && "$USE_SSL" -eq 1 ]]; then
-        echo ""
-        echo -e "  A-запись домена должна указывать на ${CYAN}${SERVER_IP}${NC}"
-        echo ""
-        while true; do
-            read -p "  Введите домен: " TMA_DOMAIN
-            TMA_DOMAIN=$(echo "$TMA_DOMAIN" | tr -d " " | tr "[:upper:]" "[:lower:]")
-            [[ "$TMA_DOMAIN" =~ ^[a-z0-9][a-z0-9.-]+\.[a-z]{2,}$ ]] && break
-            warn "Неверный формат домена."
-        done
-    fi
-
-    # Email для certbot
-    if [[ "$USE_SSL" -eq 1 ]]; then
-        echo ""
-        while true; do
-            read -p "  Email для Let's Encrypt: " LE_EMAIL
-            [[ "$LE_EMAIL" =~ ^[^@]+@[^@]+\.[^@]+$ ]] && break
-            warn "Неверный формат email."
-        done
-    fi
-
-    # Зависимости
-    log "Установка nginx..."
-    apt-get install -y -qq nginx
-    if [[ "$USE_SSL" -eq 1 ]]; then
-        apt-get install -y -qq certbot python3-certbot-nginx
-    fi
-    command -v dig  &>/dev/null || apt-get install -y -qq dnsutils 2>/dev/null || true
-
-    # Файлы
-    mkdir -p "$TMA_DIR"
-    mkdir -p /root/modules/tma
-    log "Скачиваю tma_server.py..."
-    curl -fsSL "${REPO_RAW}/modules/tma/tma_server.py" -o "${TMA_SERVER_DST}.new"
-    mv "${TMA_SERVER_DST}.new" "$TMA_SERVER_DST"
-    chmod 750 "$TMA_SERVER_DST"
-
-    log "Скачиваю index.html..."
-    curl -fsSL "${REPO_RAW}/tma/index.html" -o "${TMA_HTML_DST}.new"
-    mv "${TMA_HTML_DST}.new" "$TMA_HTML_DST"
-
-    chmod o+x /etc/amnezia /etc/amnezia/amneziawg "$TMA_DIR"
-    chmod o+r "$TMA_HTML_DST"
-
-    # systemd
-    log "Создаю сервис awg-tma..."
-    cat > /etc/systemd/system/awg-tma.service << EOF2
-[Unit]
-Description=AmneziaWG TMA Stats Server
-After=network.target awg-bot.service
-Wants=awg-bot.service
-
-[Service]
-Type=simple
-ExecStart=/usr/bin/python3 ${TMA_SERVER_DST}
-Restart=always
-RestartSec=5
-User=root
-WorkingDirectory=/root
-Environment=PYTHONPATH=/root
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=awg-tma
-
-[Install]
-WantedBy=multi-user.target
-EOF2
-    systemctl daemon-reload
-    systemctl enable awg-tma
-    systemctl restart awg-tma
-    sleep 2
-    systemctl is-active --quiet awg-tma || err "awg-tma не запустился. Проверьте: journalctl -u awg-tma -n 30"
-
-    # nginx
-    rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
-    if [[ "$USE_SSL" -eq 1 ]]; then
-        cat > "$NGINX_CONF" << EOF2
-server {
-    listen 80;
-    server_name ${TMA_DOMAIN};
-    location /.well-known/acme-challenge/ { root /var/www/html; }
-    location / { return 301 https://\$host\$request_uri; }
-}
-EOF2
-        ln -sf "$NGINX_CONF" "$NGINX_ENABLED" 2>/dev/null || true
-        nginx -t -q && systemctl reload nginx
-
-        certbot certonly --nginx --non-interactive --agree-tos             --email "$LE_EMAIL" --domain "$TMA_DOMAIN" 2>&1 | sed 's/^/  /'
-
-        cat > "$NGINX_CONF" << EOF2
-server {
-    listen 80;
-    server_name ${TMA_DOMAIN};
-    return 301 https://\$host\$request_uri;
-}
-server {
-    listen 443 ssl;
-    server_name ${TMA_DOMAIN};
-    ssl_certificate     /etc/letsencrypt/live/${TMA_DOMAIN}/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/${TMA_DOMAIN}/privkey.pem;
-    include             /etc/letsencrypt/options-ssl-nginx.conf;
-    ssl_dhparam         /etc/letsencrypt/ssl-dhparams.pem;
-    root ${TMA_DIR};
-    index index.html;
-    location / { try_files \$uri \$uri/ /index.html; }
-    location /api/ {
-        proxy_pass         http://127.0.0.1:${TMA_PORT};
-        proxy_http_version 1.1;
-        proxy_set_header   Host \$host;
-        proxy_set_header   X-Real-IP \$remote_addr;
-        proxy_set_header   X-Init-Data \$http_x_init_data;
-        proxy_read_timeout 10s;
-    }
-    add_header X-Frame-Options        "SAMEORIGIN" always;
-    add_header X-Content-Type-Options "nosniff"    always;
-    access_log /var/log/nginx/awg-tma-access.log;
-    error_log  /var/log/nginx/awg-tma-error.log;
-}
-EOF2
-        nginx -t -q && systemctl reload nginx
-        (crontab -l 2>/dev/null | grep -q certbot) ||             (crontab -l 2>/dev/null; echo "0 3 * * * certbot renew --quiet --nginx && systemctl reload nginx") | crontab -
-        TMA_URL="https://${TMA_DOMAIN}"
-    else
-        cat > "$NGINX_CONF" << EOF2
-server {
-    listen ${TMA_PORT} default_server;
-    server_name _;
-    root ${TMA_DIR};
-    index index.html;
-    location / { try_files \$uri \$uri/ /index.html; }
-    location /api/ {
-        proxy_pass         http://127.0.0.1:${TMA_PORT};
-        proxy_set_header   X-Init-Data \$http_x_init_data;
-        proxy_read_timeout 10s;
-    }
-}
-EOF2
-        ln -sf "$NGINX_CONF" "$NGINX_ENABLED" 2>/dev/null || true
-        nginx -t -q && systemctl reload nginx
-        TMA_URL="http://${SERVER_IP}:${TMA_PORT}"
-    fi
-
-    # Сохраняем TMA_URL в server.env
-    if grep -q "^TMA_URL=" "${AWG_DIR}/server.env" 2>/dev/null; then
-        sed -i "s|^TMA_URL=.*|TMA_URL=${TMA_URL}|" "${AWG_DIR}/server.env"
-    else
-        printf "TMA_URL=%s\n" "$TMA_URL" >> "${AWG_DIR}/server.env"
-    fi
-
-    echo ""
-    log "TMA установлена!"
-    info "URL: ${TMA_URL}"
-    echo ""
-    echo -e "  ${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "  ${BOLD}  Команды бота — настройка в BotFather (Edit Commands)${NC}"
-    echo -e "  ${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo ""
-    echo -e "  ${CYAN}Команды регистрируются автоматически при запуске бота.${NC}"
-    echo -e "  Если хотите проверить или настроить вручную:"
-    echo ""
-    echo -e "  ${CYAN}1.${NC} Открой Telegram и найди ${YELLOW}@BotFather${NC}"
-    echo -e "  ${CYAN}2.${NC} Отправь команду: ${YELLOW}/mybots${NC}"
-    echo -e "  ${CYAN}3.${NC} Выбери своего бота → ${YELLOW}Bot Settings${NC} → ${YELLOW}Edit Commands${NC}"
-    echo -e "  ${CYAN}4.${NC} Вставь блок команд:"
-    echo ""
-    echo -e "  ${GREEN}start - 🏠 Главная${NC}"
-    echo -e "  ${GREEN}cancel - ❌ Отмена${NC}"
-    echo ""
-    echo -e "  ${YELLOW}Готово!${NC} Команды появятся в кнопке «/» рядом с полем ввода."
-    echo -e "  ${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo ""
-
-    # Перезапускаем бота чтобы он подхватил TMA_URL из server.env
-    if systemctl is-active --quiet awg-bot 2>/dev/null; then
-        systemctl restart awg-bot && ok "awg-bot перезапущен с новым TMA_URL"
-    fi
-}
-
-# ── Опциональная установка TMA ────────────────────────────────────────────────
-_ask_install_tma() {
-    echo ""
-    echo -e "  ${BOLD}Установить веб-панель TMA?${NC}"
-    echo -e "  TMA — это веб-интерфейс бота который открывается прямо в Telegram."
-    echo -e "  Требует домен с SSL. Можно установить позже: ${CYAN}bash setup.sh --tma${NC}"
-    echo ""
-    read -p "  Установить TMA сейчас? [y/N]: " INSTALL_TMA
-    if [[ "$INSTALL_TMA" == "y" || "$INSTALL_TMA" == "Y" ]]; then
-        _install_tma
-    else
-        info "TMA пропущена. Установить позже: bash setup.sh --tma"
-    fi
-}
 
 # ── Управление модулями ───────────────────────────────────────────────────────
 
 # Описания модулей (дублируем сюда комментарии из modules.conf для отображения в меню)
 declare -A _MOD_DESC=(
+    ["tma"]="Веб-панель TMA (Telegram Mini App)"
     ["mtproxy"]="Прокси Telegram (MTProxy)"
     ["socks5"]="SOCKS5 маршрутизация клиентов"
 )
-_BASE_MODS=("bot" "tma")
+_BASE_MODS=("bot")
 
 _is_base_module() {
     local name="$1"
@@ -784,7 +514,16 @@ fi
 if [[ "${1}" == "--tma" ]]; then
     [[ ! -f "${AWG_DIR}/bot.env" ]]    && err "Не найден bot.env — сначала установите бота (setup.sh)"
     [[ ! -f "${AWG_DIR}/server.env" ]] && err "Не найден server.env — сначала установите AWG (setup.sh)"
-    _install_tma
+    _TMA_INSTALLER="/root/modules/tma/install.sh"
+    if [[ ! -f "$_TMA_INSTALLER" ]]; then
+        log "Скачиваю установщик TMA..."
+        mkdir -p /root/modules/tma
+        curl -fsSL "${REPO_RAW}/modules/tma/install.sh" -o "${_TMA_INSTALLER}.new" \
+            || err "Не удалось скачать modules/tma/install.sh"
+        mv "${_TMA_INSTALLER}.new" "$_TMA_INSTALLER"
+        chmod +x "$_TMA_INSTALLER"
+    fi
+    bash "$_TMA_INSTALLER"
     exit 0
 fi
 
@@ -1368,21 +1107,19 @@ SERVER_PUBLIC=$(cat /etc/amnezia/amneziawg/server_public.key)
 
 # ── Шаг 5: Генерация параметров обфускации (AWG 2.0) ─────────────────────────
 log "Генерация параметров обфускации AWG 2.0..."
-read JC JMIN JMAX I1 < <(python3 -c "
+read JC JMIN JMAX I1 H1 H2 H3 H4 < <(python3 -c "
 import random
+h = random.sample(range(5, 2**32), 4)
 print(
     random.randint(3,10),
     random.randint(10,50),
     random.randint(51,100),
     random.randint(1, 2**64-1),
+    *h,
 )")
 S1=0
 S2=0
-H1=1
-H2=2
-H3=3
-H4=4
-info "Jc=$JC Jmin=$JMIN Jmax=$JMAX H1-H4=1..4 i1=$I1"
+info "Jc=$JC Jmin=$JMIN Jmax=$JMAX H1=$H1 H2=$H2 H3=$H3 H4=$H4 i1=$I1"
 
 # ── Шаг 6: Конфиг AWG ────────────────────────────────────────────────────────
 log "Создание конфига интерфейса ${VPN_IFACE}..."
@@ -1639,13 +1376,10 @@ else
 fi
 
 
-# ── Вопрос про TMA ───────────────────────────────────────────────────────────
-_ask_install_tma
-
 # ── Выбор дополнительных модулей ─────────────────────────────────────────────
 echo ""
 echo -e "  ${BOLD}Дополнительные модули${NC}"
-echo -e "  Хотите настроить дополнительные модули (MTProxy, SOCKS5)?"
+echo -e "  Хотите настроить дополнительные модули (TMA, MTProxy, SOCKS5)?"
 echo ""
 read -p "  Открыть меню модулей? [y/N]: " _ASK_MODS
 if [[ "${_ASK_MODS,,}" == "y" ]]; then
@@ -1670,9 +1404,6 @@ echo ""
 echo -e "${CYAN}${BOLD}  Обновление всех файлов проекта:${NC}"
 echo -e "  bash /root/setup.sh --update"
 echo ""
-echo -e "${CYAN}${BOLD}  Управление модулями (MTProxy, SOCKS5, ...):${NC}"
+echo -e "${CYAN}${BOLD}  Управление модулями (TMA, MTProxy, SOCKS5, ...):${NC}"
 echo -e "  bash /root/setup.sh --modules"
-echo ""
-echo -e "${CYAN}${BOLD}  Доустановить TMA позже:${NC}"
-echo -e "  bash /root/setup.sh --tma"
 echo ""
