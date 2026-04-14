@@ -218,18 +218,19 @@ def api_stats():
             return jsonify({"error": "forbidden"}), 403
         data = collect_stats_basic()
         data["is_admin"] = False
-        # Добавляем устройства пользователя в монитор
+        # Устройства пользователя в монитор
         dump  = get_awg_dump()
         now   = int(time.time())
         names = get_user_clients(uid)
         data["peers"] = [_device_info(n, dump, now) for n in names]
-        # Счётчик — только свои устройства
-        data["peers_total"] = len(names)
-        # Суммарный трафик своих устройств (личный, не системный)
-        user_dl = sum(dump.get(get_client_pub(n) or "", {}).get("tx", 0) for n in names)
-        user_ul = sum(dump.get(get_client_pub(n) or "", {}).get("rx", 0) for n in names)
-        data["clients_total_download"] = fmt_bytes(user_dl)
-        data["clients_total_upload"]   = fmt_bytes(user_ul)
+        # Кольцо онлайн — только свои устройства
+        data["user_peers_total"]  = len(names)
+        data["user_peers_online"] = sum(
+            1 for n in names
+            if (pub := get_client_pub(n)) and
+               dump.get(pub, {}).get("handshake") and
+               now - dump[pub]["handshake"] < 180
+        )
     return jsonify(data)
 
 
@@ -246,7 +247,7 @@ def list_devices(user_id):
 
 
 @app.route("/api/bw_histogram")
-@require_admin
+@require_auth
 def api_bw_histogram(user_id):
     """Гистограмма нагрузки за N дней (admin). days=0 — всё время."""
     days = request.args.get("days", "7")

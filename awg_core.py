@@ -883,9 +883,6 @@ def collect_stats_basic() -> dict:
     online = sum(1 for p in peers.values()
                  if p.get("handshake") and now - p["handshake"] < 180)
     sys_s  = get_system_stats()
-    uptime = sys_s["uptime"]
-    load   = sys_s["load"]
-    cpu_count = sys_s["cpu_count"]
     peak    = load_bw_peak()
     day     = peak.get("day",  {})
     allp    = peak.get("all",  {})
@@ -896,16 +893,25 @@ def collect_stats_basic() -> dict:
         users_count = len(users.get("approved", {}))
     except Exception:
         users_count = 0
+    total_awg_up   = sum(p.get("rx", 0) for p in peers.values())
+    total_awg_down = sum(p.get("tx", 0) for p in peers.values())
     return {
         "awg_status":      "running",
         "server_endpoint": SERVER_ENDPOINT,
-        "uptime":          uptime,
-        "load":            load,
-        "cpu_count":       cpu_count,
+        "uptime":          sys_s["uptime"],
+        "load":            sys_s["load"],
+        "cpu_count":       sys_s["cpu_count"],
         "cpu_pct":         sys_s["cpu_pct"],
+        "ram_used_mb":     sys_s["ram_used"],
+        "ram_total_mb":    sys_s["ram_total"],
+        "disk_used":       sys_s["disk_used"],
+        "disk_total":      sys_s["disk_total"],
+        "disk_pct":        sys_s["disk_pct"],
         "peers_total":     len(get_all_clients()),
         "peers_online":    online,
         "users_count":     users_count,
+        "clients_total_download": fmt_bytes(total_awg_down),
+        "clients_total_upload":   fmt_bytes(total_awg_up),
         "awg_current_down": last_bw.get("awg_down", 0),
         "awg_current_up":   last_bw.get("awg_up",   0),
         "awg_peak_day": {
@@ -917,6 +923,7 @@ def collect_stats_basic() -> dict:
             "down": allp.get("awg_down", 0),
             "up":   allp.get("awg_up",   0),
         },
+        "bw_histogram": _histogram_for_tma(get_bw_histogram(7)),
     }
 
 # ── Бэкап ──────────────────────────────────────────────────────────────────────
