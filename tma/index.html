@@ -1871,17 +1871,28 @@ function buildDOM(d) {
   </div>`;
   } else {
     html += `
+  <div class="card wide">
+    <div class="card-label">онлайн клиентов</div>
+    <div class="ring-wrap">
+      <svg class="ring" viewBox="0 0 58 58">
+        <circle cx="29" cy="29" r="22" class="ring-bg"/>
+        <circle cx="29" cy="29" r="22" class="ring-fill green" id="r-online"/>
+      </svg>
+      <div class="ring-center green" id="v-online">—</div>
+    </div>
+    <div class="card-sub" id="v-online-sub">из —</div>
+  </div>
   <div class="grid-2">
     <div class="card">
-      <div class="card-label">онлайн клиентов</div>
+      <div class="card-label">ЦП · нагрузка</div>
       <div class="ring-wrap">
         <svg class="ring" viewBox="0 0 58 58">
           <circle cx="29" cy="29" r="22" class="ring-bg"/>
-          <circle cx="29" cy="29" r="22" class="ring-fill green" id="r-online"/>
+          <circle cx="29" cy="29" r="22" class="ring-fill green" id="r-cpu"/>
         </svg>
-        <div class="ring-center green" id="v-online">—</div>
+        <div class="ring-center green" id="v-cpu">—</div>
       </div>
-      <div class="card-sub" id="v-online-sub">из —</div>
+      <div class="card-sub">LA 1 мин</div>
     </div>
     <div class="card">
       <div class="card-label">нагрузка 1/5/15 мин</div>
@@ -1952,6 +1963,17 @@ function updateValues(d) {
     }).join('');
   }
 
+  // ЦП кольцо (и у админа, и у юзера)
+  {
+    const la = d.load ? parseFloat(d.load[0]) : 0;
+    const cpuCount = d.cpu_count || 1;
+    const cpuPct = Math.min(la / cpuCount * 100, 100);
+    const cpuColor = loadColor(d.load?.[0] ?? '0');
+    setEl('v-cpu', d.load?.[0] ?? '—');
+    setClass('v-cpu', 'ring-center ' + cpuColor);
+    setRing('r-cpu', cpuPct, cpuColor);
+  }
+
   if (isAdmin) {
     // RAM кольцо
     const rColor = ramColor(ramPct);
@@ -1966,14 +1988,6 @@ function updateValues(d) {
     setEl('v-disk-sub', d.disk_used);
     setClass('v-disk', 'ring-center ' + dColor);
     setRing('r-disk', d.disk_pct, dColor);
-
-    // ЦП кольцо
-    const la = d.load ? parseFloat(d.load[0]) : 0;
-    const cpuPct = Math.min(la / 2 * 100, 100);
-    const cpuColor = loadColor(d.load?.[0] ?? '0');
-    setEl('v-cpu', d.load?.[0] ?? '—');
-    setClass('v-cpu', 'ring-center ' + cpuColor);
-    setRing('r-cpu', cpuPct, cpuColor);
 
     // Скорость
     setEl('v-awg-down', awgDown); setEl('v-awg-up', awgUp);
