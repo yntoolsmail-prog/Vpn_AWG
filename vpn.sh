@@ -1254,6 +1254,7 @@ main_menu() {
         echo "  6) Настройки (токен, IP, DNS...)"
         echo "  7) Бэкапы"
         echo "  8) Обновление"
+        echo "  13) Управление модулями"
         echo ""
         echo "  ── Диагностика ──────────────────────"
         echo "  9) Полный диагностический отчёт"
@@ -1278,6 +1279,7 @@ main_menu() {
             10) analyze_configs ;;
             11) view_old_diagnostics ;;
             12) check_peer_integrity ;;
+            13) bash /root/setup.sh --modules ;;
             0|"")  echo ""; exit 0 ;;
             *)  echo -e "  ${RED}Неверный выбор${NC}"; sleep 1 ;;
         esac

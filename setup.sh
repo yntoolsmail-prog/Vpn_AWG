@@ -108,11 +108,12 @@ PROJECT_FILES=(
     "awg_core.py:/root/awg_core.py"
     "sites_data.py:/root/sites_data.py"
     "module_loader.py:/root/module_loader.py"
-    "modules.conf:/root/modules.conf"
     "vpn.sh:/root/vpn.sh"
     "modules/tma/tma_server.py:/root/modules/tma/tma_server.py"
     "tma/index.html:${AWG_DIR}/tma/index.html"
 )
+# modules.conf намеренно исключён — это пользовательский конфиг.
+# Управление модулями: bash /root/setup.sh --modules
 # ── Функция установки TMA ─────────────────────────────────────────────────────
 _install_tma() {
     local TMA_DIR="${AWG_DIR}/tma"
@@ -385,6 +386,301 @@ _ask_install_tma() {
     fi
 }
 
+# ── Управление модулями ───────────────────────────────────────────────────────
+
+# Описания модулей (дублируем сюда комментарии из modules.conf для отображения в меню)
+declare -A _MOD_DESC=(
+    ["mtproxy"]="Прокси Telegram (MTProxy)"
+    ["socks5"]="SOCKS5 маршрутизация клиентов"
+)
+_BASE_MODS=("bot" "tma")
+
+_is_base_module() {
+    local name="$1"
+    for b in "${_BASE_MODS[@]}"; do [[ "$b" == "$name" ]] && return 0; done
+    return 1
+}
+
+# Обновить или добавить строку в /root/modules.conf
+_modules_conf_set() {
+    local name="$1" state="$2"
+    if grep -q "^${name}=" /root/modules.conf 2>/dev/null; then
+        sed -i "s|^${name}=.*|${name}=${state}|" /root/modules.conf
+    else
+        echo "${name}=${state}" >> /root/modules.conf
+    fi
+}
+
+# Проверить, установлен ли модуль (системные компоненты)
+_mod_is_installed() {
+    [[ -f "/root/modules/${1}/.installed" ]]
+}
+
+# Применить изменения: скачать файлы для включаемых модулей, запустить install.sh
+_apply_modules() {
+    local -n _desired=$1   # associative array name=on|off
+    local -n _names=$2     # indexed array of module names
+
+    local changed=0
+
+    for name in "${_names[@]}"; do
+        local want="${_desired[$name]:-off}"
+        local have
+        have=$(grep "^${name}=" /root/modules.conf 2>/dev/null | cut -d= -f2 || echo "off")
+
+        if [[ "$want" == "on" && "$have" != "on" ]]; then
+            log "Включение модуля: ${name}..."
+            mkdir -p "/root/modules/${name}"
+
+            # Скачать __init__.py
+            if curl -fsSL "${REPO_RAW}/modules/${name}/__init__.py" \
+                    -o "/root/modules/${name}/__init__.py.new" 2>/dev/null; then
+                mv "/root/modules/${name}/__init__.py.new" "/root/modules/${name}/__init__.py"
+                ok "Файлы модуля ${name} загружены"
+            else
+                warn "Не удалось скачать модуль ${name} — пропуск."
+                continue
+            fi
+
+            # Скачать install.sh (если есть в репо)
+            curl -fsSL "${REPO_RAW}/modules/${name}/install.sh" \
+                    -o "/root/modules/${name}/install.sh.new" 2>/dev/null \
+                && mv "/root/modules/${name}/install.sh.new" "/root/modules/${name}/install.sh" \
+                && chmod +x "/root/modules/${name}/install.sh" \
+                || rm -f "/root/modules/${name}/install.sh.new"
+
+            # Запускать install.sh только если ещё не установлен (нет sentinel)
+            if _mod_is_installed "$name"; then
+                info "Модуль ${name} уже установлен — пропускаю установщик."
+            elif [[ -f "/root/modules/${name}/install.sh" ]]; then
+                log "Запуск установщика модуля ${name}..."
+                bash "/root/modules/${name}/install.sh" || {
+                    warn "Установщик модуля ${name} завершился с ошибкой."
+                    warn "Модуль будет включён в modules.conf — исправьте вручную при необходимости."
+                }
+            fi
+
+            _modules_conf_set "$name" "on"
+            changed=1
+
+        elif [[ "$want" == "off" && "$have" == "on" ]]; then
+            log "Отключение модуля: ${name}..."
+            _modules_conf_set "$name" "off"
+            changed=1
+            ok "Модуль ${name} отключён (системные компоненты сохранены, можно включить снова)"
+        fi
+    done
+
+    if [[ $changed -eq 1 ]]; then
+        log "Перезапускаю awg-bot..."
+        systemctl restart awg-bot 2>/dev/null && ok "awg-bot перезапущен" || warn "awg-bot не запущен"
+        echo ""
+        ok "Готово."
+    else
+        info "Изменений нет."
+    fi
+}
+
+# Удалить модуль: запустить uninstall.sh, убрать директорию, убрать из modules.conf
+_delete_module() {
+    local name="$1"
+
+    # Безопасность: нельзя удалять базовые модули
+    _is_base_module "$name" && { warn "Базовый модуль ${name} нельзя удалить."; return 1; }
+
+    # Нельзя удалять включённый модуль
+    local _have
+    _have=$(grep "^${name}=" /root/modules.conf 2>/dev/null | cut -d= -f2 || echo "off")
+    if [[ "$_have" == "on" ]]; then
+        warn "Отключите модуль ${name} перед удалением (переключите в [ ] и примените)."
+        return 1
+    fi
+
+    echo ""
+    warn "Будет удалено: системные компоненты модуля ${name}."
+    warn "Данные конфигурации сохраняются в /etc/proxy-bot/ или /etc/awg-socks5/ (зависит от модуля)."
+    read -p "  Подтвердить удаление? [y/N]: " _confirm
+    [[ "$_confirm" =~ ^[Yy]$ ]] || { info "Отмена."; return 0; }
+
+    local _mod_dir="/root/modules/${name}"
+
+    # Скачать актуальный uninstall.sh если его нет
+    if [[ ! -f "${_mod_dir}/uninstall.sh" ]]; then
+        curl -fsSL "${REPO_RAW}/modules/${name}/uninstall.sh" \
+            -o "${_mod_dir}/uninstall.sh.new" 2>/dev/null \
+            && mv "${_mod_dir}/uninstall.sh.new" "${_mod_dir}/uninstall.sh" \
+            && chmod +x "${_mod_dir}/uninstall.sh" \
+            || rm -f "${_mod_dir}/uninstall.sh.new"
+    fi
+
+    if [[ -f "${_mod_dir}/uninstall.sh" ]]; then
+        log "Запуск удалятора модуля ${name}..."
+        bash "${_mod_dir}/uninstall.sh" || warn "Удалятор завершился с ошибкой — продолжаю."
+    else
+        warn "uninstall.sh не найден — удаляю только директорию модуля."
+    fi
+
+    # Удалить директорию модуля
+    if [[ -d "$_mod_dir" ]]; then
+        rm -rf "$_mod_dir"
+        ok "Директория ${_mod_dir} удалена."
+    fi
+
+    # Убрать из modules.conf
+    sed -i "/^${name}=/d" /root/modules.conf
+
+    ok "Модуль ${name} полностью удалён."
+}
+
+# Интерактивное меню выбора модулей
+_modules_menu() {
+    # Получаем список доступных опциональных модулей из репо
+    local _repo_conf
+    _repo_conf=$(curl -fsSL "${REPO_RAW}/modules.conf" 2>/dev/null) || {
+        warn "Не удалось загрузить список модулей из репозитория."
+        return
+    }
+
+    # Парсим доступные опциональные модули (сохраняем описания из комментариев над строкой)
+    local -a _avail=()
+    declare -A _repo_desc=()
+    local _last_comment=""
+    while IFS= read -r _line; do
+        if [[ "$_line" =~ ^#[[:space:]]*(.*) ]]; then
+            _last_comment="${BASH_REMATCH[1]}"
+        elif [[ "$_line" =~ ^([a-zA-Z0-9_-]+)= ]]; then
+            local _rn="${BASH_REMATCH[1]}"
+            _is_base_module "$_rn" && { _last_comment=""; continue; }
+            _avail+=("$_rn")
+            [[ -n "$_last_comment" ]] && _repo_desc["$_rn"]="$_last_comment"
+            _last_comment=""
+        else
+            _last_comment=""
+        fi
+    done <<< "$_repo_conf"
+
+    if [[ ${#_avail[@]} -eq 0 ]]; then
+        warn "Дополнительных модулей в репозитории не найдено."
+        return
+    fi
+
+    # Текущее состояние из /root/modules.conf
+    declare -A _cur_state=()
+    while IFS='=' read -r _n _s; do
+        _n="${_n//[[:space:]]/}"; _s="${_s//[[:space:]]/}"
+        [[ -z "$_n" ]] && continue
+        _cur_state["$_n"]="$_s"
+    done < <(grep -v '^#' /root/modules.conf 2>/dev/null | grep '=')
+
+    # Рабочий массив (то, что пользователь ещё не применил)
+    declare -A _new_state=()
+    for _n in "${_avail[@]}"; do
+        _new_state["$_n"]="${_cur_state[$_n]:-off}"
+    done
+
+    # Цикл меню
+    while true; do
+        clear
+        echo -e "${CYAN}${BOLD}"
+        echo "  ╔══════════════════════════════════════════╗"
+        echo "  ║    AmneziaWG — Управление модулями      ║"
+        echo "  ╚══════════════════════════════════════════╝"
+        echo -e "${NC}"
+        echo ""
+        echo -e "  ${BOLD}Базовые (всегда активны):${NC}"
+        echo -e "  ${GREEN}[✓]${NC} bot  — Telegram бот"
+        echo -e "  ${GREEN}[✓]${NC} tma  — Веб-панель"
+        echo ""
+        echo -e "  ${BOLD}Дополнительные:${NC}"
+        echo ""
+        local _i=1
+        for _n in "${_avail[@]}"; do
+            local _st="${_new_state[$_n]:-off}"
+            local _desc="${_repo_desc[$_n]:-${_MOD_DESC[$_n]:-$_n}}"
+            local _installed=false
+            _mod_is_installed "$_n" && _installed=true
+
+            if [[ "$_st" == "on" && "$_installed" == "true" ]]; then
+                # Установлен И включён
+                echo -e "  ${CYAN}${_i})${NC} ${GREEN}[✓]${NC} ${_n}  — ${_desc}"
+            elif [[ "$_installed" == "true" ]]; then
+                # Установлен, но выключен
+                echo -e "  ${CYAN}${_i})${NC} ${YELLOW}[○]${NC} ${_n}  — ${_desc}  ${YELLOW}(установлен, выкл)${NC}"
+            elif [[ "$_st" == "on" ]]; then
+                # Включён в conf, но не установлен (sentinel отсутствует)
+                echo -e "  ${CYAN}${_i})${NC} ${CYAN}[~]${NC} ${_n}  — ${_desc}  ${CYAN}(будет установлен)${NC}"
+            else
+                # Не установлен, выключен
+                echo -e "  ${CYAN}${_i})${NC} [ ] ${_n}  — ${_desc}"
+            fi
+            ((_i++))
+        done
+        echo ""
+        echo -e "  ${BOLD}Команды:${NC}"
+        echo -e "  ${CYAN}<N>${NC}    — переключить модуль вкл/выкл"
+        echo -e "  ${CYAN}d<N>${NC}  — удалить установленный модуль (только если выкл)"
+        echo -e "  ${CYAN}a${NC}     — применить изменения"
+        echo -e "  ${CYAN}0${NC}     — выход без изменений"
+        echo ""
+        read -p "  > " _ch
+
+        case "$_ch" in
+            0) return ;;
+            a|A)
+                echo ""
+                _apply_modules _new_state _avail
+                # Обновляем _cur_state после применения
+                while IFS='=' read -r _n _s; do
+                    _n="${_n//[[:space:]]/}"; _s="${_s//[[:space:]]/}"
+                    [[ -z "$_n" ]] && continue
+                    _cur_state["$_n"]="$_s"
+                done < <(grep -v '^#' /root/modules.conf 2>/dev/null | grep '=')
+                # Даём пользователю увидеть результат
+                read -p "  Нажмите Enter для возврата в меню..." _dummy
+                ;;
+            d[0-9]*)
+                # Команда удаления: d<N>
+                local _dnum="${_ch#d}"
+                local _didx=$((_dnum - 1))
+                if [[ "$_dnum" =~ ^[0-9]+$ && $_didx -ge 0 && $_didx -lt ${#_avail[@]} ]]; then
+                    local _dname="${_avail[$_didx]}"
+                    # Принудительно применяем текущее off в рабочем массиве для этого модуля
+                    _new_state["$_dname"]="off"
+                    # Синхронизируем modules.conf если был on
+                    if [[ "${_cur_state[$_dname]:-off}" == "on" ]]; then
+                        _modules_conf_set "$_dname" "off"
+                        systemctl restart awg-bot 2>/dev/null || true
+                        _cur_state["$_dname"]="off"
+                    fi
+                    _delete_module "$_dname"
+                    read -p "  Нажмите Enter для возврата в меню..." _dummy
+                else
+                    warn "Неверный номер модуля."
+                    sleep 1
+                fi
+                ;;
+            ''|*[!0-9]*)
+                warn "Введите номер, 'd<N>', 'a' или '0'."
+                sleep 1
+                ;;
+            *)
+                local _idx=$((_ch - 1))
+                if [[ $_idx -ge 0 && $_idx -lt ${#_avail[@]} ]]; then
+                    local _name="${_avail[$_idx]}"
+                    if [[ "${_new_state[$_name]}" == "on" ]]; then
+                        _new_state["$_name"]="off"
+                    else
+                        _new_state["$_name"]="on"
+                    fi
+                else
+                    warn "Нет модуля с таким номером."
+                    sleep 1
+                fi
+                ;;
+        esac
+    done
+}
+
 # ── Режим --update ────────────────────────────────────────────────────────────
 if [[ "${1}" == "--update" ]]; then
     echo -e "${CYAN}${BOLD}"
@@ -413,7 +709,7 @@ if [[ "${1}" == "--update" ]]; then
         fi
     done
 
-    # Обновляем манифесты модулей (создаём папки если их ещё нет)
+    # Обновляем манифесты базовых модулей (создаём папки если их ещё нет)
     mkdir -p /root/modules/bot /root/modules/tma
     for _mf in "modules/__init__.py" "modules/bot/__init__.py" "modules/tma/__init__.py"; do
         if curl -fsSL "${REPO_RAW}/${_mf}" -o "/root/${_mf}.new" 2>/dev/null; then
@@ -423,6 +719,33 @@ if [[ "${1}" == "--update" ]]; then
             rm -f "/root/${_mf}.new"
         fi
     done
+
+    # Обновляем файлы активных дополнительных модулей
+    log "Обновление активных модулей..."
+    while IFS='=' read -r _mod _state; do
+        _mod="${_mod//[[:space:]]/}"; _state="${_state//[[:space:]]/}"
+        [[ -z "$_mod" || "$_state" != "on" ]] && continue
+        _is_base_module "$_mod" && continue
+        _mod_dir="/root/modules/${_mod}"
+        [[ ! -d "$_mod_dir" ]] && { warn "Директория модуля ${_mod} не найдена — пропуск."; continue; }
+        if curl -fsSL "${REPO_RAW}/modules/${_mod}/__init__.py" \
+                -o "${_mod_dir}/__init__.py.new" 2>/dev/null; then
+            mv "${_mod_dir}/__init__.py.new" "${_mod_dir}/__init__.py"
+            # Также обновляем install.sh и uninstall.sh (не запускаем — только файлы)
+            for _sh in install.sh uninstall.sh; do
+                curl -fsSL "${REPO_RAW}/modules/${_mod}/${_sh}" \
+                    -o "${_mod_dir}/${_sh}.new" 2>/dev/null \
+                    && mv "${_mod_dir}/${_sh}.new" "${_mod_dir}/${_sh}" \
+                    && chmod +x "${_mod_dir}/${_sh}" \
+                    || rm -f "${_mod_dir}/${_sh}.new"
+            done
+            ok "Модуль ${_mod} обновлён"
+            UPDATED=$((UPDATED+1))
+        else
+            warn "Не удалось обновить модуль ${_mod}"
+            FAILED=$((FAILED+1))
+        fi
+    done < <(grep -v '^#' /root/modules.conf 2>/dev/null | grep '=')
 
     # Обновляем setup.sh последним — нельзя перезаписывать запущенный скрипт раньше времени
     log "Обновляю setup.sh..."
@@ -462,6 +785,19 @@ if [[ "${1}" == "--tma" ]]; then
     [[ ! -f "${AWG_DIR}/bot.env" ]]    && err "Не найден bot.env — сначала установите бота (setup.sh)"
     [[ ! -f "${AWG_DIR}/server.env" ]] && err "Не найден server.env — сначала установите AWG (setup.sh)"
     _install_tma
+    exit 0
+fi
+
+# ── Режим --modules ───────────────────────────────────────────────────────────
+if [[ "${1}" == "--modules" ]]; then
+    [[ ! -f "/root/modules.conf" ]] && \
+        err "modules.conf не найден — сначала установите систему (setup.sh)"
+    echo -e "${CYAN}${BOLD}"
+    echo "  ╔══════════════════════════════════════════╗"
+    echo "  ║    AmneziaWG — Управление модулями      ║"
+    echo "  ╚══════════════════════════════════════════╝"
+    echo -e "${NC}"
+    _modules_menu
     exit 0
 fi
 
@@ -1303,8 +1639,18 @@ else
 fi
 
 
-# ── Вопрос про TMA ──────────────────────────────────────────────────────────
+# ── Вопрос про TMA ───────────────────────────────────────────────────────────
 _ask_install_tma
+
+# ── Выбор дополнительных модулей ─────────────────────────────────────────────
+echo ""
+echo -e "  ${BOLD}Дополнительные модули${NC}"
+echo -e "  Хотите настроить дополнительные модули (MTProxy, SOCKS5)?"
+echo ""
+read -p "  Открыть меню модулей? [y/N]: " _ASK_MODS
+if [[ "${_ASK_MODS,,}" == "y" ]]; then
+    _modules_menu
+fi
 
 # ── Готово ────────────────────────────────────────────────────────────────────
 echo ""
@@ -1323,6 +1669,9 @@ echo -e "  Логи:     ${YELLOW}journalctl -u awg-bot -f${NC}"
 echo ""
 echo -e "${CYAN}${BOLD}  Обновление всех файлов проекта:${NC}"
 echo -e "  bash /root/setup.sh --update"
+echo ""
+echo -e "${CYAN}${BOLD}  Управление модулями (MTProxy, SOCKS5, ...):${NC}"
+echo -e "  bash /root/setup.sh --modules"
 echo ""
 echo -e "${CYAN}${BOLD}  Доустановить TMA позже:${NC}"
 echo -e "  bash /root/setup.sh --tma"

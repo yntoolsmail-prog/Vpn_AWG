@@ -621,6 +621,8 @@ async def main_menu(msg, user_id: int, edit=False):
             [InlineKeyboardButton("🔧 Техобслуживание",      callback_data="maintenance")],
             [InlineKeyboardButton("📖 Инструкция",           callback_data="help")],
         ]
+        kb.extend(_modules.get_user_menu_buttons(user_id))
+        kb.extend(_modules.get_admin_menu_buttons())
     else:
         my_clients   = get_user_clients(user_id)
         display_name = get_user_display(user_id)
@@ -653,6 +655,7 @@ async def main_menu(msg, user_id: int, edit=False):
         kb.append([InlineKeyboardButton("🧲 Добавить устройство",  callback_data="add")])
         kb.append([InlineKeyboardButton("📊 Статус сервера",       callback_data="status")])
         kb.append([InlineKeyboardButton("📖 Инструкция",           callback_data="help")])
+        kb.extend(_modules.get_user_menu_buttons(user_id))
 
     if edit:
         await msg.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
