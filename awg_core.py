@@ -733,6 +733,17 @@ def get_system_stats() -> dict:
 
     cpu_count = os.cpu_count() or 1
 
+    try:
+        def _rs():
+            v = list(map(int, open("/proc/stat").readline().split()[1:]))
+            return v[3] + v[4], sum(v)   # idle, total
+        idle1, tot1 = _rs()
+        time.sleep(0.15)
+        idle2, tot2 = _rs()
+        cpu_pct = round(100 * (1 - (idle2 - idle1) / max(tot2 - tot1, 1)), 1)
+    except Exception:
+        cpu_pct = 0.0
+
     return {
         "uptime":     uptime,
         "ram_used":   ram_used,
@@ -742,6 +753,7 @@ def get_system_stats() -> dict:
         "disk_pct":   disk_pct,
         "load":       load,
         "cpu_count":  cpu_count,
+        "cpu_pct":    cpu_pct,
     }
 
 
@@ -762,6 +774,7 @@ def collect_stats_full() -> dict:
     disk_pct   = sys["disk_pct"]
     load       = sys["load"]
     cpu_count  = sys["cpu_count"]
+    cpu_pct    = sys["cpu_pct"]
 
     # Текущая скорость из последней записи пиков
     last_bw = peak.get("last", {})
@@ -805,6 +818,7 @@ def collect_stats_full() -> dict:
         "uptime":          uptime,
         "load":            load,
         "cpu_count":       cpu_count,
+        "cpu_pct":         cpu_pct,
         "ram_used_mb":     ram_used,
         "ram_total_mb":    ram_total,
         "disk_used":       disk_used,
@@ -869,27 +883,37 @@ def collect_stats_basic() -> dict:
     online = sum(1 for p in peers.values()
                  if p.get("handshake") and now - p["handshake"] < 180)
     sys_s  = get_system_stats()
-    uptime = sys_s["uptime"]
-    load   = sys_s["load"]
-    cpu_count = sys_s["cpu_count"]
-    peak   = load_bw_peak()
-    day    = peak.get("day",  {})
-    allp   = peak.get("all",  {})
+    peak    = load_bw_peak()
+    day     = peak.get("day",  {})
+    allp    = peak.get("all",  {})
+    last_bw = peak.get("last", {})
     try:
         with open(USERS_FILE) as f:
             users = json.load(f)
         users_count = len(users.get("approved", {}))
     except Exception:
         users_count = 0
+    total_awg_up   = sum(p.get("rx", 0) for p in peers.values())
+    total_awg_down = sum(p.get("tx", 0) for p in peers.values())
     return {
         "awg_status":      "running",
         "server_endpoint": SERVER_ENDPOINT,
-        "uptime":          uptime,
-        "load":            load,
-        "cpu_count":       cpu_count,
+        "uptime":          sys_s["uptime"],
+        "load":            sys_s["load"],
+        "cpu_count":       sys_s["cpu_count"],
+        "cpu_pct":         sys_s["cpu_pct"],
+        "ram_used_mb":     sys_s["ram_used"],
+        "ram_total_mb":    sys_s["ram_total"],
+        "disk_used":       sys_s["disk_used"],
+        "disk_total":      sys_s["disk_total"],
+        "disk_pct":        sys_s["disk_pct"],
         "peers_total":     len(get_all_clients()),
         "peers_online":    online,
         "users_count":     users_count,
+        "clients_total_download": fmt_bytes(total_awg_down),
+        "clients_total_upload":   fmt_bytes(total_awg_up),
+        "awg_current_down": last_bw.get("awg_down", 0),
+        "awg_current_up":   last_bw.get("awg_up",   0),
         "awg_peak_day": {
             "down": day.get("awg_down", 0),
             "up":   day.get("awg_up",   0),
@@ -899,6 +923,7 @@ def collect_stats_basic() -> dict:
             "down": allp.get("awg_down", 0),
             "up":   allp.get("awg_up",   0),
         },
+        "bw_histogram": _histogram_for_tma(get_bw_histogram(7)),
     }
 
 # ── Бэкап ──────────────────────────────────────────────────────────────────────

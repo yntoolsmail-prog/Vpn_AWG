@@ -28,11 +28,12 @@ from awg_core import (
     PRIMARY_DNS, SECONDARY_DNS, USERS_FILE,
     build_allowed_ips, can_access_device, collect_stats_basic, collect_stats_full,
     create_backup, create_client, device_short_name, fmt_bytes,
-    get_all_clients, get_allowed_ips_for_client, get_awg_dump,
+    get_all_clients, get_allowed_ips_for_client, get_awg_dump, get_bw_histogram,
     get_client_keys, get_client_pub,
     get_maintenance, get_sites_json, get_system_stats, get_user_clients, get_user_name,
     is_approved, load_client_excl, load_users, make_conf_for_client, make_vpn_link, make_wg_conf,
     remove_client_from_awg, save_client_excl, save_users, set_maintenance,
+    _histogram_for_tma,
 )
 from sites_data import DEFAULT_SELECTED
 
@@ -217,11 +218,19 @@ def api_stats():
             return jsonify({"error": "forbidden"}), 403
         data = collect_stats_basic()
         data["is_admin"] = False
-        # Добавляем устройства пользователя в монитор
+        # Устройства пользователя в монитор
         dump  = get_awg_dump()
         now   = int(time.time())
         names = get_user_clients(uid)
         data["peers"] = [_device_info(n, dump, now) for n in names]
+        # Кольцо онлайн — только свои устройства
+        data["user_peers_total"]  = len(names)
+        data["user_peers_online"] = sum(
+            1 for n in names
+            if (pub := get_client_pub(n)) and
+               dump.get(pub, {}).get("handshake") and
+               now - dump[pub]["handshake"] < 180
+        )
     return jsonify(data)
 
 
@@ -235,6 +244,19 @@ def list_devices(user_id):
     now   = int(time.time())
     names = get_user_clients(user_id)
     return jsonify([_device_info(n, dump, now) for n in names])
+
+
+@app.route("/api/bw_histogram")
+@require_auth
+def api_bw_histogram(user_id):
+    """Гистограмма нагрузки за N дней (admin). days=0 — всё время."""
+    days = request.args.get("days", "7")
+    try:
+        days = int(days)
+    except ValueError:
+        days = 7
+    hist = get_bw_histogram(0 if days == 0 else days)
+    return jsonify(_histogram_for_tma(hist) or {})
 
 
 @app.route("/api/devices/all")
