@@ -28,11 +28,12 @@ from awg_core import (
     PRIMARY_DNS, SECONDARY_DNS, USERS_FILE,
     build_allowed_ips, can_access_device, collect_stats_basic, collect_stats_full,
     create_backup, create_client, device_short_name, fmt_bytes,
-    get_all_clients, get_allowed_ips_for_client, get_awg_dump,
+    get_all_clients, get_allowed_ips_for_client, get_awg_dump, get_bw_histogram,
     get_client_keys, get_client_pub,
     get_maintenance, get_sites_json, get_system_stats, get_user_clients, get_user_name,
     is_approved, load_client_excl, load_users, make_conf_for_client, make_vpn_link, make_wg_conf,
     remove_client_from_awg, save_client_excl, save_users, set_maintenance,
+    _histogram_for_tma,
 )
 from sites_data import DEFAULT_SELECTED
 
@@ -222,6 +223,13 @@ def api_stats():
         now   = int(time.time())
         names = get_user_clients(uid)
         data["peers"] = [_device_info(n, dump, now) for n in names]
+        # Счётчик — только свои устройства
+        data["peers_total"] = len(names)
+        # Суммарный трафик своих устройств (личный, не системный)
+        user_dl = sum(dump.get(get_client_pub(n) or "", {}).get("tx", 0) for n in names)
+        user_ul = sum(dump.get(get_client_pub(n) or "", {}).get("rx", 0) for n in names)
+        data["clients_total_download"] = fmt_bytes(user_dl)
+        data["clients_total_upload"]   = fmt_bytes(user_ul)
     return jsonify(data)
 
 
@@ -235,6 +243,19 @@ def list_devices(user_id):
     now   = int(time.time())
     names = get_user_clients(user_id)
     return jsonify([_device_info(n, dump, now) for n in names])
+
+
+@app.route("/api/bw_histogram")
+@require_admin
+def api_bw_histogram(user_id):
+    """Гистограмма нагрузки за N дней (admin). days=0 — всё время."""
+    days = request.args.get("days", "7")
+    try:
+        days = int(days)
+    except ValueError:
+        days = 7
+    hist = get_bw_histogram(0 if days == 0 else days)
+    return jsonify(_histogram_for_tma(hist) or {})
 
 
 @app.route("/api/devices/all")

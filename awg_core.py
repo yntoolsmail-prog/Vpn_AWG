@@ -733,6 +733,17 @@ def get_system_stats() -> dict:
 
     cpu_count = os.cpu_count() or 1
 
+    try:
+        def _rs():
+            v = list(map(int, open("/proc/stat").readline().split()[1:]))
+            return v[3] + v[4], sum(v)   # idle, total
+        idle1, tot1 = _rs()
+        time.sleep(0.15)
+        idle2, tot2 = _rs()
+        cpu_pct = round(100 * (1 - (idle2 - idle1) / max(tot2 - tot1, 1)), 1)
+    except Exception:
+        cpu_pct = 0.0
+
     return {
         "uptime":     uptime,
         "ram_used":   ram_used,
@@ -742,6 +753,7 @@ def get_system_stats() -> dict:
         "disk_pct":   disk_pct,
         "load":       load,
         "cpu_count":  cpu_count,
+        "cpu_pct":    cpu_pct,
     }
 
 
@@ -762,6 +774,7 @@ def collect_stats_full() -> dict:
     disk_pct   = sys["disk_pct"]
     load       = sys["load"]
     cpu_count  = sys["cpu_count"]
+    cpu_pct    = sys["cpu_pct"]
 
     # Текущая скорость из последней записи пиков
     last_bw = peak.get("last", {})
@@ -805,6 +818,7 @@ def collect_stats_full() -> dict:
         "uptime":          uptime,
         "load":            load,
         "cpu_count":       cpu_count,
+        "cpu_pct":         cpu_pct,
         "ram_used_mb":     ram_used,
         "ram_total_mb":    ram_total,
         "disk_used":       disk_used,
@@ -872,9 +886,10 @@ def collect_stats_basic() -> dict:
     uptime = sys_s["uptime"]
     load   = sys_s["load"]
     cpu_count = sys_s["cpu_count"]
-    peak   = load_bw_peak()
-    day    = peak.get("day",  {})
-    allp   = peak.get("all",  {})
+    peak    = load_bw_peak()
+    day     = peak.get("day",  {})
+    allp    = peak.get("all",  {})
+    last_bw = peak.get("last", {})
     try:
         with open(USERS_FILE) as f:
             users = json.load(f)
@@ -887,9 +902,12 @@ def collect_stats_basic() -> dict:
         "uptime":          uptime,
         "load":            load,
         "cpu_count":       cpu_count,
+        "cpu_pct":         sys_s["cpu_pct"],
         "peers_total":     len(get_all_clients()),
         "peers_online":    online,
         "users_count":     users_count,
+        "awg_current_down": last_bw.get("awg_down", 0),
+        "awg_current_up":   last_bw.get("awg_up",   0),
         "awg_peak_day": {
             "down": day.get("awg_down", 0),
             "up":   day.get("awg_up",   0),

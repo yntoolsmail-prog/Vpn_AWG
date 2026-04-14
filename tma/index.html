@@ -124,7 +124,7 @@
   }
   .status-dot {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 8px;
     font-size: 12px;
     color: var(--green);
@@ -132,12 +132,23 @@
   .status-counts {
     display: flex;
     flex-direction: column;
-    gap: 1px;
+    gap: 3px;
+    align-items: flex-end;
   }
   .status-count {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+  }
+  .status-num {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--green);
+  }
+  .status-lbl {
     font-size: 11px;
     color: var(--text-dim);
-    letter-spacing: 0.05em;
   }
   .dot {
     width: 9px; height: 9px;
@@ -579,6 +590,13 @@
   .toggle::after { content: ''; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: var(--text-mid); transition: left .2s, background .2s; box-shadow: 0 1px 3px rgba(0,0,0,.4); }
   .toggle.on::after { left: 23px; background: var(--bg); }
 
+  /* ── Period tabs (histogram) ── */
+  .period-tabs { display: flex; gap: 5px; }
+  .period-btn  { padding: 3px 10px; border-radius: 12px; font-size: 11px; cursor: pointer;
+                 border: 1px solid var(--border); background: var(--surface2); color: var(--text-mid);
+                 font-family: inherit; }
+  .period-btn.active { background: var(--accent, var(--green)); color: #fff; border-color: var(--accent, var(--green)); }
+
   /* ── Backup row ── */
   .backup-row { display: flex; align-items: center; padding: 11px 14px; border-bottom: 1px solid var(--border); gap: 10px; }
   .backup-row:last-child { border-bottom: none; }
@@ -598,11 +616,17 @@
         <div class="header-subtitle">AmneziaWG · Статистика клиентов</div>
       </div>
       <div class="status-dot" id="status-indicator">
-        <div class="dot" id="status-dot"></div>
+        <div class="dot" id="status-dot" style="margin-top:3px"></div>
         <div class="status-counts">
-          <span id="status-text">онлайн</span>
-          <span class="status-count" id="hdr-users">—</span>
-          <span class="status-count" id="hdr-devices">—</span>
+          <span id="status-text" style="font-size:12px;color:var(--green)">онлайн</span>
+          <span class="status-count">
+            <span class="status-num" id="hdr-users">—</span>
+            <span class="status-lbl">польз.</span>
+          </span>
+          <span class="status-count">
+            <span class="status-num" id="hdr-devices">—</span>
+            <span class="status-lbl">устр.</span>
+          </span>
         </div>
       </div>
     </div>
@@ -1820,7 +1844,7 @@ function buildDOM(d) {
         </svg>
         <div class="ring-center green" id="v-cpu">—</div>
       </div>
-      <div class="card-sub">LA 1 мин</div>
+      <div class="card-sub">% ЦП</div>
     </div>
     <div class="card">
       <div class="card-label">нагрузка 1/5/15 мин</div>
@@ -1858,7 +1882,14 @@ function buildDOM(d) {
   </div>
   <div class="section-title">топ-5 нагруженных минут</div>
   <div class="traffic-card" id="v-bwtop"></div>
-  <div class="section-title">распределение нагрузки · 7 дней</div>
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:0 0 8px 0">
+    <div class="section-title" style="margin:0;padding:0" id="hist-title">распределение нагрузки · 7 дней</div>
+    <div class="period-tabs">
+      <button class="period-btn active" onclick="loadHist(event,7)">7д</button>
+      <button class="period-btn" onclick="loadHist(event,30)">30д</button>
+      <button class="period-btn" onclick="loadHist(event,0)">всё</button>
+    </div>
+  </div>
   <div class="traffic-card" id="v-bwhist"></div>
   <div class="section-title">трафик сервера · eth0 · лимит провайдера</div>
   <div class="chart-card">
@@ -1892,7 +1923,7 @@ function buildDOM(d) {
         </svg>
         <div class="ring-center green" id="v-cpu">—</div>
       </div>
-      <div class="card-sub">LA 1 мин</div>
+      <div class="card-sub">% ЦП</div>
     </div>
     <div class="card">
       <div class="card-label">нагрузка 1/5/15 мин</div>
@@ -1900,10 +1931,25 @@ function buildDOM(d) {
       <div class="load-mini-wrap" id="v-load-mini"></div>
     </div>
   </div>
+  <div class="section-title">клиенты · скорость сейчас (awg0)</div>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-label">↓ клиенты скачивают</div>
+      <div class="card-value blue" id="v-awg-down">—</div>
+      <div class="card-sub">Mbit/s</div>
+    </div>
+    <div class="card">
+      <div class="card-label">↑ клиенты отдают</div>
+      <div class="card-value green" id="v-awg-up">—</div>
+      <div class="card-sub">Mbit/s</div>
+    </div>
+  </div>
   <div class="section-title">пики клиентов (awg0)</div>
   <div class="traffic-card">
     <div class="traffic-row"><div class="traffic-label">🏅 пик сегодня</div><div class="traffic-val"><span class="arrow-down" id="v-pk-day-down">—</span> <span class="arrow-up" id="v-pk-day-up">—</span> <span style="font-size:11px;color:var(--text-mid)">Mbit/s</span></div></div>
     <div class="traffic-row"><div class="traffic-label">🏆 пик за всё время</div><div class="traffic-val"><span class="arrow-down" id="v-pk-all-down">—</span> <span class="arrow-up" id="v-pk-all-up">—</span> <span style="font-size:11px;color:var(--text-mid)">Mbit/s</span></div></div>
+    <div class="traffic-row"><div class="traffic-label">📶 всего скачали (с рест.)</div><div class="traffic-val" style="color:var(--blue)" id="v-total-dl">—</div></div>
+    <div class="traffic-row"><div class="traffic-label">📶 всего отдали (с рест.)</div><div class="traffic-val" style="color:var(--green)" id="v-total-ul">—</div></div>
   </div>`;
   }
 
@@ -1936,9 +1982,9 @@ function updateValues(d) {
   const ethUp   = n(d.eth_current_up);
   const overhead = Math.max(0, ethDown - awgDown).toFixed(2);
 
-  // Шапка — пользователи и устройства
-  setEl('hdr-users',   (d.users_count  ?? '—') + ' польз.');
-  setEl('hdr-devices', (d.peers_total  ?? '—') + ' устр.');
+  // Шапка — пользователи и устройства (только числа)
+  setEl('hdr-users',   d.users_count  ?? '—');
+  setEl('hdr-devices', d.peers_total  ?? '—');
 
   // Онлайн (кольцо)
   const onlinePct = d.peers_total ? Math.round(d.peers_online / d.peers_total * 100) : 0;
@@ -1952,7 +1998,8 @@ function updateValues(d) {
   // Мини-график нагрузки (и у админа, и у юзера)
   const loadMiniEl = document.getElementById('v-load-mini');
   if (loadMiniEl && d.load) {
-    const maxL = Math.max(...d.load.map(parseFloat), 0.1);
+    const cpuCount = d.cpu_count || 1;
+    const maxL = Math.max(cpuCount, ...d.load.map(parseFloat), 0.1);
     loadMiniEl.innerHTML = d.load.map((v, i) => {
       const pct = Math.min(parseFloat(v) / maxL * 100, 100);
       const col = loadColor(v);
@@ -1963,16 +2010,21 @@ function updateValues(d) {
     }).join('');
   }
 
-  // ЦП кольцо (и у админа, и у юзера)
+  // ЦП кольцо (и у админа, и у юзера) — реальный % из /proc/stat
   {
-    const la = d.load ? parseFloat(d.load[0]) : 0;
-    const cpuCount = d.cpu_count || 1;
-    const cpuPct = Math.min(la / cpuCount * 100, 100);
-    const cpuColor = loadColor(d.load?.[0] ?? '0');
-    setEl('v-cpu', d.load?.[0] ?? '—');
+    const cpuPct  = d.cpu_pct ?? 0;
+    const cpuColor = cpuPct >= 90 ? 'red' : cpuPct >= 70 ? 'amber'
+                   : cpuPct >= 50 ? 'yellow' : 'green';
+    setEl('v-cpu', cpuPct + '%');
     setClass('v-cpu', 'ring-center ' + cpuColor);
     setRing('r-cpu', cpuPct, cpuColor);
   }
+
+  // Скорость клиентов (и у админа, и у юзера)
+  setEl('v-awg-down', awgDown); setEl('v-awg-up', awgUp);
+  // Суммарный трафик (у admin — системный, у юзера — личный)
+  setEl('v-total-dl', d.clients_total_download || '—');
+  setEl('v-total-ul', d.clients_total_upload   || '—');
 
   if (isAdmin) {
     // RAM кольцо
@@ -1989,15 +2041,10 @@ function updateValues(d) {
     setClass('v-disk', 'ring-center ' + dColor);
     setRing('r-disk', d.disk_pct, dColor);
 
-    // Скорость
-    setEl('v-awg-down', awgDown); setEl('v-awg-up', awgUp);
+    // Скорость (admin extra)
     setEl('v-t-awgdown', awgDown); setEl('v-t-awgup', awgUp);
     setEl('v-t-ethdown', ethDown); setEl('v-t-ethup', ethUp);
     setEl('v-t-overhead', overhead + ' Mbit/s');
-
-    // Пики (admin extra)
-    setEl('v-total-dl', d.clients_total_download || '—');
-    setEl('v-total-ul', d.clients_total_upload   || '—');
 
     // Топ-5
     const topEl = document.getElementById('v-bwtop');
@@ -2017,22 +2064,7 @@ function updateValues(d) {
     // Гистограмма скоростей
     const histEl = document.getElementById('v-bwhist');
     if (histEl && d.bw_histogram && d.bw_histogram.total > 0) {
-      histEl.innerHTML = d.bw_histogram.counts.map((cnt, i) => {
-        if (!cnt) return '';
-        const [lo, , label] = d.bw_histogram.buckets[i];
-        const pct = (cnt / d.bw_histogram.total * 100).toFixed(1);
-        const color = lo >= 500 ? 'red' : lo >= 300 ? 'amber' : lo >= 200 ? 'yellow' : lo >= 100 ? 'green' : '';
-        const barW = Math.max(4, Math.round(parseFloat(pct)));
-        return `<div class="traffic-row">
-          <div class="traffic-label" style="font-size:12px">${label} Mbit/s</div>
-          <div style="flex:1;margin:0 8px">
-            <div style="background:var(--surface2);border-radius:3px;height:4px;overflow:hidden">
-              <div style="width:${barW}%;height:100%;background:var(--${color || 'text-mid'})"></div>
-            </div>
-          </div>
-          <div class="traffic-val" style="font-size:12px;color:var(--${color || 'text-mid'})">${pct}%<span style="color:var(--text-dim);font-size:11px"> ${cnt}м</span></div>
-        </div>`;
-      }).join('');
+      renderHistogram(histEl, d.bw_histogram);
     }
 
     // Месячный трафик
@@ -2079,6 +2111,40 @@ function updateValues(d) {
       </div>`;
     }).join('');
   }
+}
+
+// ─── HISTOGRAM ────────────────────────────────────────────────────────────────
+function renderHistogram(el, hist) {
+  el.innerHTML = hist.counts.map((cnt, i) => {
+    if (!cnt) return '';
+    const [lo, , label] = hist.buckets[i];
+    const pct = (cnt / hist.total * 100).toFixed(1);
+    const color = lo >= 500 ? 'red' : lo >= 300 ? 'amber' : lo >= 200 ? 'yellow' : lo >= 100 ? 'green' : '';
+    const barW = Math.max(4, Math.round(parseFloat(pct)));
+    return `<div class="traffic-row">
+      <div class="traffic-label" style="font-size:12px">${label} Mbit/s</div>
+      <div style="flex:1;margin:0 8px">
+        <div style="background:var(--surface2);border-radius:3px;height:4px;overflow:hidden">
+          <div style="width:${barW}%;height:100%;background:var(--${color || 'text-mid'})"></div>
+        </div>
+      </div>
+      <div class="traffic-val" style="font-size:12px;color:var(--${color || 'text-mid'})">${pct}%<span style="color:var(--text-dim);font-size:11px"> ${cnt}м</span></div>
+    </div>`;
+  }).join('');
+}
+
+function loadHist(ev, days) {
+  document.querySelectorAll('.period-btn').forEach(b => b.classList.remove('active'));
+  ev.currentTarget.classList.add('active');
+  const label = days === 0 ? 'всё время' : days + ' дней';
+  setEl('hist-title', 'распределение нагрузки · ' + label);
+  API('/api/bw_histogram?days=' + days)
+    .then(r => r.json())
+    .then(hist => {
+      const el = document.getElementById('v-bwhist');
+      if (el && hist && hist.total > 0) renderHistogram(el, hist);
+    })
+    .catch(() => {});
 }
 
 // ─── RENDER (умный: первый раз строит, потом обновляет) ───────────────────────
