@@ -235,7 +235,8 @@ async def bw_monitor_job(context: ContextTypes.DEFAULT_TYPE):
                             f"AWG_DOWN={mm['awg_down']} AWG_UP={mm['awg_up']} "
                             f"ETH_DOWN={mm['eth_down']} ETH_UP={mm['eth_up']}\n"
                         )
-                    lines = open(BW_LOG_FILE).readlines()
+                    with open(BW_LOG_FILE) as f:
+                        lines = f.readlines()
                     if len(lines) > 10080:
                         with open(BW_LOG_FILE, "w") as f:
                             f.writelines(lines[-10080:])
