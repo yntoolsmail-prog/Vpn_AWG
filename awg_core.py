@@ -2,7 +2,7 @@
 # awg_core.py — общее ядро: конфиг, утилиты, работа с клиентами, статистика
 # Импортируется из bot.py и tma_server.py.
 # Не содержит ничего Telegram-специфичного и ничего HTTP-специфичного.
-# Version: 1.0
+# Version: 1.1
 
 import os, subprocess, logging, json, zlib, base64, struct, time
 import tarfile, socket, ipaddress, threading
@@ -19,6 +19,7 @@ MAINTENANCE_FILE = "/etc/amnezia/amneziawg/maintenance.json"
 BW_LOG_FILE      = "/var/log/awg-bw.log"
 BW_PEAK_FILE     = "/etc/amnezia/amneziawg/bw_peak.json"
 EXCL_EXT         = ".excl.json"
+SERVERS_FILE     = "/etc/amnezia/amneziawg/servers.json"
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +83,71 @@ try:
     time.tzset()
 except AttributeError:
     pass
+
+# ── Серверы (мультисервер) ─────────────────────────────────────────────────────
+_servers_cache: list | None = None
+_servers_cache_ts: float = 0.0
+_SERVERS_CACHE_TTL: float = 10.0
+
+def _init_primary_server() -> dict:
+    """Создаёт запись первичного сервера из server.env."""
+    endpoints: list = []
+    if SERVER_ENDPOINT and SERVER_ENDPOINT != SERVER_IP:
+        endpoints.append({"value": SERVER_ENDPOINT, "type": "domain", "verified": False})
+    if SERVER_IP:
+        endpoints.append({"value": SERVER_IP, "type": "ip"})
+    if SERVER_ENDPOINT_BACKUP:
+        endpoints.append({"value": SERVER_ENDPOINT_BACKUP, "type": "domain", "verified": False})
+    return {
+        "id": "primary",
+        "name": "Основной",
+        "emoji": "🖥",
+        "is_primary": True,
+        "ssh": {"ip": SERVER_IP, "port": 22, "login": "root", "password": ""},
+        "awg_public_key": SERVER_PUBLIC,
+        "awg_port": int(SERVER_PORT) if SERVER_PORT else 51820,
+        "endpoints": endpoints,
+    }
+
+def invalidate_servers_cache():
+    global _servers_cache, _servers_cache_ts
+    _servers_cache = None
+    _servers_cache_ts = 0.0
+
+def load_servers() -> list:
+    """Загружает список серверов; при отсутствии файла создаёт из server.env."""
+    global _servers_cache, _servers_cache_ts
+    now = time.monotonic()
+    if _servers_cache is not None and (now - _servers_cache_ts) < _SERVERS_CACHE_TTL:
+        return _servers_cache
+    if os.path.exists(SERVERS_FILE):
+        try:
+            with open(SERVERS_FILE) as f:
+                data = json.load(f)
+            _servers_cache = data.get("servers", [])
+            _servers_cache_ts = now
+            return _servers_cache
+        except Exception:
+            pass
+    # Инициализация из server.env (первый запуск)
+    primary = _init_primary_server()
+    save_servers([primary])
+    _servers_cache = [primary]
+    _servers_cache_ts = now
+    return _servers_cache
+
+def save_servers(servers: list):
+    """Сохраняет список серверов и сбрасывает кэш."""
+    global _servers_cache, _servers_cache_ts
+    os.makedirs(os.path.dirname(SERVERS_FILE), exist_ok=True)
+    with open(SERVERS_FILE, "w") as f:
+        json.dump({"servers": servers}, f, ensure_ascii=False, indent=2)
+    try:
+        os.chmod(SERVERS_FILE, 0o600)
+    except Exception:
+        pass
+    _servers_cache = servers
+    _servers_cache_ts = time.monotonic()
 
 # ── Пользователи ───────────────────────────────────────────────────────────────
 _users_cache: dict | None = None
@@ -257,8 +323,11 @@ def gen_obfs() -> dict:
     }
 
 def make_wg_conf(priv, ip, psk, obfs, endpoint: str = None,
-                 allowed_ips: str = "0.0.0.0/0") -> str:
-    ep = endpoint or SERVER_ENDPOINT
+                 allowed_ips: str = "0.0.0.0/0",
+                 server_public: str = None, server_port: str = None) -> str:
+    ep  = endpoint or SERVER_ENDPOINT
+    pub = server_public or SERVER_PUBLIC
+    prt = server_port or SERVER_PORT
     parts = [
         "[Interface]",
         f"PrivateKey = {priv}", f"Address = {ip}/32",
@@ -269,30 +338,33 @@ def make_wg_conf(priv, ip, psk, obfs, endpoint: str = None,
     ]
     if obfs.get("i1"):
         parts.append(f"i1 = {obfs['i1']}")
-    parts += ["", "[Peer]", f"PublicKey = {SERVER_PUBLIC}", f"PresharedKey = {psk}",
-              f"Endpoint = {ep}:{SERVER_PORT}", f"AllowedIPs = {allowed_ips}",
+    parts += ["", "[Peer]", f"PublicKey = {pub}", f"PresharedKey = {psk}",
+              f"Endpoint = {ep}:{prt}", f"AllowedIPs = {allowed_ips}",
               "PersistentKeepalive = 25"]
     return "\n".join(parts) + "\n"
 
-def make_vpn_link(priv, pub, ip, psk, obfs, name, endpoint: str = None) -> str:
-    ep = endpoint or SERVER_ENDPOINT
+def make_vpn_link(priv, pub, ip, psk, obfs, name, endpoint: str = None,
+                  server_public: str = None, server_port: str = None) -> str:
+    ep  = endpoint or SERVER_ENDPOINT
+    spub = server_public or SERVER_PUBLIC
+    prt  = server_port or SERVER_PORT
     i1_line = f"i1 = {obfs['i1']}\n" if obfs.get("i1") else ""
     wg = (
         f"[Interface]\nAddress = {ip}/32\nDNS = {PRIMARY_DNS}, {SECONDARY_DNS}\n"
         f"PrivateKey = {priv}\nJc = {obfs['Jc']}\nJmin = {obfs['Jmin']}\nJmax = {obfs['Jmax']}\n"
         f"S1 = {obfs['S1']}\nS2 = {obfs['S2']}\nH1 = {obfs['H1']}\nH2 = {obfs['H2']}\n"
         f"H3 = {obfs['H3']}\nH4 = {obfs['H4']}\n{i1_line}"
-        f"\n[Peer]\nPublicKey = {SERVER_PUBLIC}\nPresharedKey = {psk}\n"
-        f"AllowedIPs = 0.0.0.0/0, ::/0\nEndpoint = {ep}:{SERVER_PORT}\n"
+        f"\n[Peer]\nPublicKey = {spub}\nPresharedKey = {psk}\n"
+        f"AllowedIPs = 0.0.0.0/0, ::/0\nEndpoint = {ep}:{prt}\n"
         f"PersistentKeepalive = 25\n"
     )
     lc = {**obfs, "allowed_ips": ["0.0.0.0/0", "::/0"], "clientId": pub,
           "client_ip": ip, "client_priv_key": priv, "client_pub_key": pub,
           "config": wg, "hostName": ep, "mtu": "1420",
-          "persistent_keep_alive": "25", "port": int(SERVER_PORT),
-          "psk_key": psk, "server_pub_key": SERVER_PUBLIC}
+          "persistent_keep_alive": "25", "port": int(prt),
+          "psk_key": psk, "server_pub_key": spub}
     c = {"containers": [{"awg": {**obfs, "last_config": json.dumps(lc, indent=4),
-         "port": str(SERVER_PORT),
+         "port": str(prt),
          "subnet_address": ".".join(ip.split(".")[:3]) + ".0",
          "transport_proto": "udp"}, "container": "amnezia-awg"}],
          "defaultContainer": "amnezia-awg", "description": name,
@@ -1027,6 +1099,20 @@ def make_conf_for_client(name: str, endpoint: str,
     return make_wg_conf(
         keys["priv"], keys["ip"], keys["psk"], keys["obfs"],
         endpoint=endpoint, allowed_ips=allowed_ips,
+    )
+
+def make_conf_for_client_ep(name: str, endpoint: str,
+                             server_public: str = None, server_port: str = None,
+                             allowed_ips: str = "0.0.0.0/0") -> str | None:
+    """Генерирует .conf для клиента с конкретным сервером (ключ/порт) и эндпоинтом.
+    Используется при мультисерверной конфигурации."""
+    keys = get_client_keys(name)
+    if not keys:
+        return None
+    return make_wg_conf(
+        keys["priv"], keys["ip"], keys["psk"], keys["obfs"],
+        endpoint=endpoint, allowed_ips=allowed_ips,
+        server_public=server_public, server_port=server_port,
     )
 
 # ── Техобслуживание ───────────────────────────────────────────────────────────

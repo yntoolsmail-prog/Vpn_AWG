@@ -31,8 +31,10 @@ from awg_core import (
     get_all_clients, get_allowed_ips_for_client, get_awg_dump, get_bw_histogram,
     get_client_keys, get_client_pub,
     get_maintenance, get_sites_json, get_system_stats, get_user_clients, get_user_name,
-    is_approved, load_client_excl, load_users, make_conf_for_client, make_vpn_link, make_wg_conf,
+    is_approved, load_client_excl, load_users, make_conf_for_client, make_conf_for_client_ep,
+    make_vpn_link, make_wg_conf,
     remove_client_from_awg, save_client_excl, save_users, set_maintenance,
+    load_servers,
     _histogram_for_tma,
 )
 from sites_data import DEFAULT_SELECTED
@@ -311,13 +313,47 @@ def delete_device(user_id, name):
 @app.route("/api/endpoints")
 @require_auth
 def api_endpoints(user_id):
-    """Список доступных эндпоинтов."""
+    """Список доступных эндпоинтов (обратная совместимость — эндпоинты первичного сервера)."""
+    servers = load_servers()
+    primary = next((s for s in servers if s.get("is_primary")), servers[0] if servers else None)
+    if primary:
+        eps = []
+        for ep in primary.get("endpoints", []):
+            t = "Домен" if ep.get("type") == "domain" else "IP"
+            eps.append({"key": ep["value"], "label": f"{t} · {ep['value']}", "value": ep["value"]})
+        return jsonify(eps)
+    # Fallback to env values
     eps = [{"key": "main", "label": f"Домен · {SERVER_ENDPOINT}", "value": SERVER_ENDPOINT}]
     if SERVER_IP and SERVER_IP != SERVER_ENDPOINT:
         eps.append({"key": "ip", "label": f"IP · {SERVER_IP}", "value": SERVER_IP})
     if SERVER_ENDPOINT_BACKUP:
         eps.append({"key": "backup", "label": f"Резервный · {SERVER_ENDPOINT_BACKUP}", "value": SERVER_ENDPOINT_BACKUP})
     return jsonify(eps)
+
+
+@app.route("/api/servers")
+@require_auth
+def api_servers(user_id):
+    """Список серверов с эндпоинтами (для выбора при генерации конфига)."""
+    servers = load_servers()
+    result = []
+    for srv in servers:
+        result.append({
+            "id":        srv.get("id", ""),
+            "name":      srv.get("name", ""),
+            "emoji":     srv.get("emoji", "🖥"),
+            "is_primary": srv.get("is_primary", False),
+            "endpoints": [
+                {
+                    "value":    ep["value"],
+                    "type":     ep.get("type", "ip"),
+                    "verified": ep.get("verified", False),
+                    "label":    ep["value"],
+                }
+                for ep in srv.get("endpoints", [])
+            ],
+        })
+    return jsonify(result)
 
 
 @app.route("/api/devices/<path:name>/qr")

@@ -826,15 +826,15 @@
     <div class="modal-handle"></div>
     <div class="modal-title" id="modal-device-title"></div>
     <div id="modal-device-body"></div>
-    <!-- Endpoint selector -->
+    <!-- Server / Endpoint selector -->
     <div style="margin:10px 0 12px">
-      <div class="field-label" style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
-        Тип подключения
-        <span style="cursor:pointer;font-size:13px;color:var(--text-dim)"
-              onclick="openModal('modal-endpoint-help')">ℹ️</span>
-      </div>
-      <div id="modal-device-endpoints" style="display:flex;flex-direction:column;gap:5px">
-        <span style="color:var(--text-dim);font-size:12px"><span class="spinner"></span> Загрузка…</span>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <div id="srv-selected-label"
+             style="font-size:13px;color:var(--text-dim);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+          Сервер не выбран
+        </div>
+        <button class="btn btn-ghost" style="padding:4px 12px;font-size:12px;margin:0;flex-shrink:0"
+                onclick="openServerPicker()">Выбрать сервер</button>
       </div>
     </div>
     <!-- Actions -->
@@ -895,6 +895,20 @@
     </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="closeModal('modal-endpoint-help')">Понятно</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ МОДАЛКА: Выбор сервера ══ -->
+<div class="modal-overlay hidden" id="modal-server-picker" onclick="closeModal('modal-server-picker')">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-handle"></div>
+    <div class="modal-title">Выберите сервер</div>
+    <div id="server-picker-body" style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px">
+      <span style="color:var(--text-dim);font-size:12px"><span class="spinner"></span> Загрузка…</span>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal('modal-server-picker')">Отмена</button>
     </div>
   </div>
 </div>
@@ -1106,48 +1120,92 @@ function renderDeviceList(devices) {
   el.innerHTML = `<div class="row-card">${rows}</div>`;
 }
 
-// ── Endpoint-хелперы для карточки устройства ──
-let _endpoints = null;
+// ── Выбор сервера/эндпоинта ──
+let _servers = null;
+let _selectedEndpoint = null;   // строка — выбранный эндпоинт
+let _selectedServerName = null; // отображаемое имя сервера для метки
 
-function _loadEndpointsForCard() {
-  const el = document.getElementById('modal-device-endpoints');
+function _loadServers() {
+  if (_servers !== null) return Promise.resolve(_servers);
+  return API('/api/servers').then(r => r.json()).then(srvs => {
+    _servers = srvs;
+    // Автовыбор первого эндпоинта если у нас один сервер с одним эндпоинтом
+    if (srvs.length === 1 && srvs[0].endpoints.length === 1) {
+      const srv = srvs[0];
+      const ep  = srv.endpoints[0];
+      _selectedEndpoint    = ep.value;
+      _selectedServerName  = `${srv.emoji} ${ep.value}`;
+    }
+    return srvs;
+  }).catch(() => { _servers = []; return []; });
+}
+
+function _updateServerLabel() {
+  const el = document.getElementById('srv-selected-label');
   if (!el) return;
-  if (_endpoints !== null) { _renderEndpointsInCard(el); return; }
-  API('/api/endpoints').then(r => r.json()).then(eps => {
-    _endpoints = eps;
-    _renderEndpointsInCard(el);
-  }).catch(() => {
-    _endpoints = [];
-    _renderEndpointsInCard(el);
-  });
-}
-
-function _renderEndpointsInCard(el) {
-  if (!_endpoints || !_endpoints.length) {
-    el.innerHTML = '<span style="color:var(--text-dim);font-size:12px">Нет эндпоинтов</span>';
-    return;
+  if (_selectedEndpoint && _selectedServerName) {
+    el.textContent = _selectedServerName;
+    el.style.color = 'var(--text-main)';
+  } else {
+    el.textContent = 'Сервер не выбран';
+    el.style.color = 'var(--text-dim)';
   }
-  el.innerHTML = _endpoints.map((ep, i) => `
-    <label style="display:flex;align-items:center;gap:10px;padding:8px 12px;
-                  background:var(--surface2);border:1px solid ${i===0?'var(--green)':'var(--border)'};
-                  border-radius:8px;cursor:pointer;transition:border-color .15s"
-           onclick="selectEndpointCard(this)">
-      <input type="radio" name="dev-endpoint" value="${_esc(ep.value)}"
-             style="accent-color:var(--green)" ${i===0?'checked':''}>
-      <span style="font-size:13px">${_esc(ep.label)}</span>
-    </label>`).join('');
 }
 
-function selectEndpointCard(labelEl) {
-  document.querySelectorAll('#modal-device-endpoints label').forEach(l => {
-    l.style.borderColor = 'var(--border)';
+function openServerPicker() {
+  _loadServers().then(srvs => {
+    const body = document.getElementById('server-picker-body');
+    if (!body) return;
+    if (!srvs || !srvs.length) {
+      body.innerHTML = '<span style="color:var(--text-dim);font-size:13px">Нет доступных серверов</span>';
+    } else {
+      body.innerHTML = srvs.map(srv => {
+        const eps = srv.endpoints || [];
+        return eps.map(ep => {
+          const isSel = ep.value === _selectedEndpoint;
+          const typeIcon = ep.type === 'domain' ? '🌐' : '🔢';
+          const vfMark   = ep.verified ? ' ✅' : '';
+          return `<button class="btn ${isSel ? 'btn-green' : 'btn-ghost'}"
+                          style="text-align:left;justify-content:flex-start;gap:8px"
+                          onclick="selectServerEndpoint('${_esc(ep.value)}','${_esc(srv.emoji+' '+ep.value)}')">
+                    ${srv.emoji} ${_esc(srv.name)} &nbsp; ${typeIcon} ${_esc(ep.value)}${vfMark}
+                  </button>`;
+        }).join('');
+      }).join('');
+    }
+    openModal('modal-server-picker');
   });
-  labelEl.style.borderColor = 'var(--green)';
+}
+
+function selectServerEndpoint(epValue, displayName) {
+  _selectedEndpoint   = epValue;
+  _selectedServerName = displayName;
+  closeModal('modal-server-picker');
+  _updateServerLabel();
 }
 
 function _getSelectedEndpoint() {
-  const el = document.querySelector('#modal-device-endpoints input[name="dev-endpoint"]:checked');
-  return el ? el.value : (_endpoints?.[0]?.value || '');
+  // Если ничего не выбрано вручную — берём первый эндпоинт первого сервера
+  if (_selectedEndpoint) return _selectedEndpoint;
+  if (_servers && _servers.length) {
+    const eps = _servers[0].endpoints || [];
+    if (eps.length) return eps[0].value;
+  }
+  return '';
+}
+
+function _resetServerSelection() {
+  _selectedEndpoint   = null;
+  _selectedServerName = null;
+  _updateServerLabel();
+  // Если один сервер/эндпоинт — автовыбираем
+  if (_servers && _servers.length === 1 && _servers[0].endpoints.length === 1) {
+    const srv = _servers[0];
+    const ep  = srv.endpoints[0];
+    _selectedEndpoint   = ep.value;
+    _selectedServerName = `${srv.emoji} ${ep.value}`;
+    _updateServerLabel();
+  }
 }
 
 // ── Детали устройства ──
@@ -1193,7 +1251,7 @@ async function openDeviceDetail(d) {
         💡 Как использовать ▸
       </div>
       <div style="display:none;font-size:12px;color:var(--text-dim);line-height:1.6;margin-top:6px">
-        <p style="margin:0 0 6px"><strong>1.</strong> Выберите тип подключения (рекомендуем «Домен»).</p>
+        <p style="margin:0 0 6px"><strong>1.</strong> Нажмите <em>Выбрать сервер</em> и выберите нужный сервер/эндпоинт.</p>
         <p style="margin:0 0 6px"><strong>2.</strong> Нажмите <em>.conf в Telegram</em> — файл придёт в бот.
            Откройте AmneziaWG → Добавить → из файла.</p>
         <p style="margin:0 0 6px"><strong>3.</strong> Или нажмите <em>QR-код</em> — отсканируйте в AmneziaWG.</p>
@@ -1203,10 +1261,8 @@ async function openDeviceDetail(d) {
       </div>
     </div>`;
 
-  // Сбрасываем endpoint-selector и заполняем
-  const epEl = document.getElementById('modal-device-endpoints');
-  if (epEl) epEl.innerHTML = '<span style="color:var(--text-dim);font-size:12px"><span class="spinner"></span> Загрузка…</span>';
-  _loadEndpointsForCard();
+  // Загружаем серверы и обновляем метку выбранного сервера
+  _loadServers().then(() => _updateServerLabel());
 
   document.getElementById('btn-conf').onclick    = () => sendConf(d.name);
   document.getElementById('btn-qr').onclick      = () => showQR(d.name);
