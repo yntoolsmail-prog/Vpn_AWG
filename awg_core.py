@@ -487,18 +487,21 @@ def get_host_iface() -> str:
     except Exception:
         pass
     try:
-        for line in open("/proc/net/dev").readlines()[2:]:
-            iface = line.split(":")[0].strip()
-            if iface and iface != "lo" and not iface.startswith("awg"):
-                return iface
+        with open("/proc/net/dev") as f:
+            for line in f.readlines()[2:]:
+                iface = line.split(":")[0].strip()
+                if iface and iface != "lo" and not iface.startswith("awg"):
+                    return iface
     except Exception:
         pass
     return "eth0"
 
 def read_iface_bytes(iface: str) -> tuple[int, int]:
     try:
-        rx = int(open(f"/sys/class/net/{iface}/statistics/rx_bytes").read())
-        tx = int(open(f"/sys/class/net/{iface}/statistics/tx_bytes").read())
+        with open(f"/sys/class/net/{iface}/statistics/rx_bytes") as f:
+            rx = int(f.read())
+        with open(f"/sys/class/net/{iface}/statistics/tx_bytes") as f:
+            tx = int(f.read())
         return rx, tx
     except Exception:
         return 0, 0
@@ -716,7 +719,8 @@ def get_system_stats() -> dict:
 
     try:
         mem = subprocess.check_output(["free", "-m"], text=True).split("\n")[1].split()
-        ram_used, ram_total = int(mem[2]), int(mem[1])
+        ram_total = int(mem[1])
+        ram_used  = ram_total - int(mem[6])   # total - available: совпадает с htop
     except Exception:
         ram_used = ram_total = 0
 
@@ -728,17 +732,21 @@ def get_system_stats() -> dict:
         disk_used = disk_total = "—"
         disk_pct  = 0
 
-    try:    load = open("/proc/loadavg").read().split()[:3]
-    except: load = ["0", "0", "0"]
+    try:
+        with open("/proc/loadavg") as f:
+            load = f.read().split()[:3]
+    except Exception:
+        load = ["0", "0", "0"]
 
     cpu_count = os.cpu_count() or 1
 
     try:
         def _rs():
-            v = list(map(int, open("/proc/stat").readline().split()[1:]))
+            with open("/proc/stat") as f:
+                v = list(map(int, f.readline().split()[1:]))
             return v[3] + v[4], sum(v)   # idle, total
         idle1, tot1 = _rs()
-        time.sleep(0.15)
+        time.sleep(0.5)
         idle2, tot2 = _rs()
         cpu_pct = round(100 * (1 - (idle2 - idle1) / max(tot2 - tot1, 1)), 1)
     except Exception:
