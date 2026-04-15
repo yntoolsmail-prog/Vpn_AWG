@@ -2,11 +2,12 @@
 # =============================================================================
 # AmneziaWG + Telegram Bot — Установщик
 # Использование: bash <(curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/setup.sh)
-# Режимы: setup.sh           — полная установка
+# Режимы: setup.sh           — полная установка (PRIMARY)
+#         setup.sh --slave   — slave-сервер (AWG + модули, без бота)
 #         setup.sh --tma     — доустановить TMA
 #         setup.sh --update  — обновить все файлы проекта
 # =============================================================================
-# Version: 3.0
+# Version: 3.1
 
 set -e
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
@@ -101,6 +102,11 @@ if [[ "$REPO_BRANCH" != "main" && -z "$_REEXEC_BRANCH" ]]; then
         warn "Не удалось загрузить setup.sh из ветки. Продолжаю с текущей версией."
     fi
 fi
+
+# ── Режим ─────────────────────────────────────────────────────────────────────
+# SLAVE_MODE=1 → устанавливаем только AWG + модули, без бота/TMA/Python
+SLAVE_MODE=0
+[[ "${1}" == "--slave" ]] && SLAVE_MODE=1
 
 # Список всех файлов проекта — используется в --update
 PROJECT_FILES=(
@@ -501,7 +507,11 @@ if [[ "${1}" == "--update" ]]; then
 
     echo ""
     log "Перезапускаю сервисы..."
-    systemctl restart awg-bot 2>/dev/null && ok "awg-bot перезапущен" || warn "awg-bot не запущен"
+    if systemctl list-unit-files awg-bot.service &>/dev/null 2>&1; then
+        systemctl restart awg-bot 2>/dev/null && ok "awg-bot перезапущен" || warn "awg-bot не запустился"
+    else
+        info "awg-bot не установлен (slave-режим) — пропускаем"
+    fi
     systemctl is-active --quiet awg-tma 2>/dev/null && systemctl restart awg-tma && ok "awg-tma перезапущен" || true
 
     echo ""
@@ -540,15 +550,46 @@ if [[ "${1}" == "--modules" ]]; then
     exit 0
 fi
 
+# ── Интерактивный выбор режима (только при запуске без флага) ─────────────────
+if [[ -z "$1" && "$SLAVE_MODE" -eq 0 ]]; then
+    clear
+    echo -e "${CYAN}${BOLD}"
+    echo "  ╔══════════════════════════════════════════╗"
+    echo "  ║   AmneziaWG — Выбор режима установки    ║"
+    echo "  ╚══════════════════════════════════════════╝"
+    echo -e "${NC}"
+    echo ""
+    echo -e "  ${CYAN}1)${NC} Полная установка ${GREEN}(PRIMARY)${NC}"
+    echo -e "     Бот, TMA, AWG — всё на одном сервере."
+    echo ""
+    echo -e "  ${CYAN}2)${NC} Slave-сервер"
+    echo -e "     AWG + MTProxy/SOCKS5 при желании."
+    echo -e "     Без бота. Управляется из PRIMARY через меню Серверы."
+    echo ""
+    while true; do
+        read -p "  Режим [1]: " _MODE_CHOICE
+        _MODE_CHOICE=${_MODE_CHOICE:-1}
+        [[ "$_MODE_CHOICE" == "1" || "$_MODE_CHOICE" == "2" ]] && break
+        warn "Введите 1 или 2."
+    done
+    [[ "$_MODE_CHOICE" == "2" ]] && SLAVE_MODE=1
+fi
+
 # ── Проверка версии Ubuntu ────────────────────────────────────────────────────
 UBUNTU_VERSION=$(lsb_release -rs 2>/dev/null || echo "0")
 UBUNTU_MAJOR=$(echo "$UBUNTU_VERSION" | cut -d. -f1)
 
 clear
 echo -e "${CYAN}${BOLD}"
-echo "  ╔══════════════════════════════════════════╗"
-echo "  ║   AmneziaWG + Telegram Bot — Установка  ║"
-echo "  ╚══════════════════════════════════════════╝"
+if [[ "$SLAVE_MODE" -eq 1 ]]; then
+    echo "  ╔══════════════════════════════════════════╗"
+    echo "  ║     AmneziaWG — Slave-сервер             ║"
+    echo "  ╚══════════════════════════════════════════╝"
+else
+    echo "  ╔══════════════════════════════════════════╗"
+    echo "  ║   AmneziaWG + Telegram Bot — Установка  ║"
+    echo "  ╚══════════════════════════════════════════╝"
+fi
 echo -e "${NC}"
 
 info "Ubuntu ${UBUNTU_VERSION}"
@@ -1021,6 +1062,14 @@ info "AWG интерфейс: ${VPN_IFACE}  |  Подсеть: ${VPN_SUBNET}.x"
 echo ""
 
 # ── Домены / эндпоинты ────────────────────────────────────────────────────────
+# Slave: домен не нужен — endpoint = IP; управляется из бота PRIMARY.
+if [[ "$SLAVE_MODE" -eq 1 ]]; then
+    SERVER_ENDPOINT="$SERVER_IP"
+    SERVER_ENDPOINT_BACKUP=""
+    info "Slave: endpoint = ${SERVER_IP} (управляется через бот PRIMARY)"
+    echo ""
+fi
+
 validate_endpoint() {
     local domain="$1"
     # Если это IP — принимаем без проверки DNS
@@ -1044,39 +1093,41 @@ validate_endpoint() {
     return 0
 }
 
-echo "  Укажите домен или оставьте пустым чтобы использовать IP ($SERVER_IP)."
-echo "  Домен должен быть настроен заранее (A-запись → $SERVER_IP)."
-echo ""
-SERVER_ENDPOINT=""
-while true; do
-    read -p "  Основной endpoint (домен или Enter для IP): " input_ep
-    input_ep="${input_ep// /}"
-    if [[ -z "$input_ep" ]]; then
-        SERVER_ENDPOINT="$SERVER_IP"
-        info "Основной endpoint: $SERVER_ENDPOINT (IP)"
-        break
-    fi
-    if validate_endpoint "$input_ep"; then
-        SERVER_ENDPOINT="$input_ep"
-        info "Основной endpoint: $SERVER_ENDPOINT"
-        break
-    fi
-done
+if [[ "$SLAVE_MODE" -eq 0 ]]; then
+    echo "  Укажите домен или оставьте пустым чтобы использовать IP ($SERVER_IP)."
+    echo "  Домен должен быть настроен заранее (A-запись → $SERVER_IP)."
+    echo ""
+    SERVER_ENDPOINT=""
+    while true; do
+        read -p "  Основной endpoint (домен или Enter для IP): " input_ep
+        input_ep="${input_ep// /}"
+        if [[ -z "$input_ep" ]]; then
+            SERVER_ENDPOINT="$SERVER_IP"
+            info "Основной endpoint: $SERVER_ENDPOINT (IP)"
+            break
+        fi
+        if validate_endpoint "$input_ep"; then
+            SERVER_ENDPOINT="$input_ep"
+            info "Основной endpoint: $SERVER_ENDPOINT"
+            break
+        fi
+    done
 
-SERVER_ENDPOINT_BACKUP=""
-echo ""
-echo "  Резервный endpoint — опционально. Пользователи получат второй конфиг."
-read -p "  Резервный endpoint (домен или Enter чтобы пропустить): " input_backup
-input_backup="${input_backup// /}"
-if [[ -n "$input_backup" ]]; then
-    if validate_endpoint "$input_backup"; then
-        SERVER_ENDPOINT_BACKUP="$input_backup"
-        info "Резервный endpoint: $SERVER_ENDPOINT_BACKUP"
-    else
-        warn "Резервный endpoint пропущен."
+    SERVER_ENDPOINT_BACKUP=""
+    echo ""
+    echo "  Резервный endpoint — опционально. Пользователи получат второй конфиг."
+    read -p "  Резервный endpoint (домен или Enter чтобы пропустить): " input_backup
+    input_backup="${input_backup// /}"
+    if [[ -n "$input_backup" ]]; then
+        if validate_endpoint "$input_backup"; then
+            SERVER_ENDPOINT_BACKUP="$input_backup"
+            info "Резервный endpoint: $SERVER_ENDPOINT_BACKUP"
+        else
+            warn "Резервный endpoint пропущен."
+        fi
     fi
+    echo ""
 fi
-echo ""
 
 # Показываем занятые порты при вводе, если есть
 if [[ ${#EXISTING_PORTS[@]} -gt 0 ]]; then
@@ -1272,23 +1323,27 @@ _dl_init "modules/tma/__init__.py"
 curl -fsSL "${REPO_RAW}/setup.sh" -o /root/setup.sh || err "Не удалось сохранить setup.sh"
 chmod +x /root/vpn.sh /root/setup.sh
 
-# ── Шаг 11: Python зависимости ───────────────────────────────────────────────
-log "Установка python-telegram-bot..."
-if [[ "$INSTALL_MODE" == "1" ]]; then
-    pip3 install "python-telegram-bot[job-queue]>=22.0,<23" --break-system-packages > /dev/null || \
-    pip3 install "python-telegram-bot[job-queue]>=22.0,<23" > /dev/null || \
-    err "Не удалось установить python-telegram-bot."
-else
-    pip3 install "python-telegram-bot[job-queue]>=22.0,<23" --break-system-packages || \
-    pip3 install "python-telegram-bot[job-queue]>=22.0,<23" || \
-    err "Не удалось установить python-telegram-bot."
-fi
+# ── Шаг 11: Python зависимости (только PRIMARY) ──────────────────────────────
+if [[ "$SLAVE_MODE" -eq 0 ]]; then
+    log "Установка python-telegram-bot..."
+    if [[ "$INSTALL_MODE" == "1" ]]; then
+        pip3 install "python-telegram-bot[job-queue]>=22.0,<23" --break-system-packages > /dev/null || \
+        pip3 install "python-telegram-bot[job-queue]>=22.0,<23" > /dev/null || \
+        err "Не удалось установить python-telegram-bot."
+    else
+        pip3 install "python-telegram-bot[job-queue]>=22.0,<23" --break-system-packages || \
+        pip3 install "python-telegram-bot[job-queue]>=22.0,<23" || \
+        err "Не удалось установить python-telegram-bot."
+    fi
 
-log "Установка flask (веб-интерфейс TMA)..."
-pip3 install "flask>=3.0" --break-system-packages --ignore-installed blinker > /dev/null 2>&1 || \
-pip3 install "flask>=3.0" --ignore-installed blinker > /dev/null 2>&1 || \
-pip3 install "flask>=3.0" > /dev/null 2>&1 || \
-err "Не удалось установить flask."
+    log "Установка flask (веб-интерфейс TMA)..."
+    pip3 install "flask>=3.0" --break-system-packages --ignore-installed blinker > /dev/null 2>&1 || \
+    pip3 install "flask>=3.0" --ignore-installed blinker > /dev/null 2>&1 || \
+    pip3 install "flask>=3.0" > /dev/null 2>&1 || \
+    err "Не удалось установить flask."
+else
+    info "Slave-режим: Python/Flask пропускаем (бот не нужен)"
+fi
 
 # ── Шаг 11.5: Мониторинг трафика и сетевые инструменты ───────────────────────
 log "Установка vnstat (статистика трафика)..."
@@ -1306,6 +1361,9 @@ chmod 644 /var/log/awg-bw.log
 # Создаём папку для диагностических отчётов
 mkdir -p /etc/amnezia/amneziawg/diagnostics
 info "Мониторинг трафика настроен (интерфейс: ${HOST_IFACE})"
+
+# ── Шаги 12-13: Бот (только PRIMARY) ─────────────────────────────────────────
+if [[ "$SLAVE_MODE" -eq 0 ]]; then
 
 # ── Шаг 12: Настройка бота ───────────────────────────────────────────────────
 echo ""
@@ -1357,6 +1415,8 @@ systemctl daemon-reload
 systemctl enable awg-bot
 systemctl start awg-bot
 
+fi # end SLAVE_MODE=0 (шаги 12-13)
+
 # ── Шаг 14: SSH автозапуск vpn.sh ────────────────────────────────────────────
 log "Настройка автозапуска панели при SSH-подключении..."
 BASHRC_MARKER="# awg-vpn-autorun"
@@ -1378,12 +1438,24 @@ fi
 
 # ── Выбор дополнительных модулей ─────────────────────────────────────────────
 echo ""
-echo -e "  ${BOLD}Дополнительные модули${NC}"
-echo -e "  Хотите настроить дополнительные модули (TMA, MTProxy, SOCKS5)?"
-echo ""
-read -p "  Открыть меню модулей? [y/N]: " _ASK_MODS
-if [[ "${_ASK_MODS,,}" == "y" ]]; then
-    _modules_menu
+if [[ "$SLAVE_MODE" -eq 1 ]]; then
+    # На slave помечаем tma=off чтобы --update не пытался его перезапустить
+    _modules_conf_set "tma" "off"
+    echo -e "  ${BOLD}Дополнительные модули${NC}"
+    echo -e "  Slave: доступны MTProxy, SOCKS5. Бот и TMA не устанавливаются."
+    echo ""
+    read -p "  Открыть меню модулей? [y/N]: " _ASK_MODS
+    if [[ "${_ASK_MODS,,}" == "y" ]]; then
+        _modules_menu
+    fi
+else
+    echo -e "  ${BOLD}Дополнительные модули${NC}"
+    echo -e "  Хотите настроить дополнительные модули (TMA, MTProxy, SOCKS5)?"
+    echo ""
+    read -p "  Открыть меню модулей? [y/N]: " _ASK_MODS
+    if [[ "${_ASK_MODS,,}" == "y" ]]; then
+        _modules_menu
+    fi
 fi
 
 # ── Готово ────────────────────────────────────────────────────────────────────
@@ -1394,16 +1466,43 @@ echo -e "${GREEN}${BOLD}══════════════════�
 echo ""
 info "AWG интерфейс: ${VPN_IFACE}  |  Подсеть: ${VPN_SUBNET}.x  |  Порт: ${AWG_PORT}/UDP"
 info "AWG запущен с параметрами: Jc=$JC Jmin=$JMIN Jmax=$JMAX"
-info "DNS: 1.1.1.1, 1.0.0.1 (можно изменить в /etc/amnezia/amneziawg/server.env)"
-info "Бот: systemctl status awg-bot"
 echo ""
-echo -e "  Терминал: ${CYAN}bash /root/vpn.sh${NC}"
-echo -e "  Telegram: ${CYAN}напишите /start вашему боту${NC}"
-echo -e "  Логи:     ${YELLOW}journalctl -u awg-bot -f${NC}"
-echo ""
-echo -e "${CYAN}${BOLD}  Обновление всех файлов проекта:${NC}"
-echo -e "  bash /root/setup.sh --update"
-echo ""
-echo -e "${CYAN}${BOLD}  Управление модулями (TMA, MTProxy, SOCKS5, ...):${NC}"
-echo -e "  bash /root/setup.sh --modules"
+
+if [[ "$SLAVE_MODE" -eq 1 ]]; then
+    # Итог для slave — выводим публичный ключ для добавления в бот PRIMARY
+    _SLAVE_PUBKEY=$(cat /etc/amnezia/amneziawg/server_public.key 2>/dev/null || echo "—")
+    echo -e "${CYAN}${BOLD}  ┌─────────────────────────────────────────────────────┐${NC}"
+    echo -e "${CYAN}${BOLD}  │            Slave-сервер готов к работе              │${NC}"
+    echo -e "${CYAN}${BOLD}  └─────────────────────────────────────────────────────┘${NC}"
+    echo ""
+    echo -e "  ${BOLD}Данные для добавления в бот PRIMARY:${NC}"
+    echo ""
+    echo -e "  🌐 IP:   ${GREEN}${SERVER_IP}${NC}"
+    echo -e "  🔌 Порт: ${GREEN}${AWG_PORT}${NC}"
+    echo ""
+    echo -e "  📋 Публичный ключ AWG:"
+    echo -e "  ${YELLOW}${_SLAVE_PUBKEY}${NC}"
+    echo ""
+    echo -e "  ${CYAN}Действие:${NC} Откройте бот PRIMARY → Серверы → Добавить сервер"
+    echo -e "            Введите IP, порт, SSH-данные и публичный ключ выше."
+    echo ""
+    echo -e "  ${CYAN}${BOLD}  Обновление (запускать на этом сервере):${NC}"
+    echo -e "  bash /root/setup.sh --update"
+    echo ""
+    echo -e "  ${CYAN}${BOLD}  Модули:${NC}"
+    echo -e "  bash /root/setup.sh --modules"
+else
+    info "DNS: 1.1.1.1, 1.0.0.1 (можно изменить в /etc/amnezia/amneziawg/server.env)"
+    info "Бот: systemctl status awg-bot"
+    echo ""
+    echo -e "  Терминал: ${CYAN}bash /root/vpn.sh${NC}"
+    echo -e "  Telegram: ${CYAN}напишите /start вашему боту${NC}"
+    echo -e "  Логи:     ${YELLOW}journalctl -u awg-bot -f${NC}"
+    echo ""
+    echo -e "${CYAN}${BOLD}  Обновление всех файлов проекта:${NC}"
+    echo -e "  bash /root/setup.sh --update"
+    echo ""
+    echo -e "${CYAN}${BOLD}  Управление модулями (TMA, MTProxy, SOCKS5, ...):${NC}"
+    echo -e "  bash /root/setup.sh --modules"
+fi
 echo ""
