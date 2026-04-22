@@ -14,7 +14,7 @@ from telegram.ext import (
     MessageHandler, filters, ContextTypes, ConversationHandler
 )
 from awg_core import (
-    ADMIN_ID, AWG_IFACE, BOT_SERVICE, BOT_TOKEN, BW_LOG_FILE,
+    ADMIN_ID, AWG_CONF, AWG_IFACE, BOT_SERVICE, BOT_TOKEN, BW_LOG_FILE,
     CLIENTS_DIR, CONFIG_FILE, ENV_FILE, EXCL_EXT, QRENCODE_BIN,
     RESTART_FLAG_FILE, SERVER_ENDPOINT, SERVER_ENDPOINT_BACKUP,
     SERVER_IP, SERVER_PORT, SERVER_PUBLIC, TMA_URL, TZ,
@@ -80,6 +80,9 @@ WAITING_SRV_NAME       = 24
 WAITING_SRV_EMOJI      = 25
 # Добавление домена к серверу
 WAITING_SRV_DOMAIN     = 26
+# Переименование сервера (primary или slave)
+WAITING_SRV_EDIT_NAME  = 27
+WAITING_SRV_EDIT_EMOJI = 28
 
 IMG_BASE = "https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/.images"
 
@@ -761,6 +764,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await srv_del_ok(query, int(data[11:]))
     elif data.startswith("srv_del_") and not data.startswith("srv_del_ok_") and is_admin:
         await srv_del_confirm(query, int(data[8:]))
+    # srv_rename_ handled by ConversationHandler below
     elif data == "status":
         await show_status(query)
     elif data == "restart_bot":
@@ -890,15 +894,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_my_devices(query, user_id)
     elif data.startswith("device_"):
         await show_device(query, data[7:], user_id)
+    elif data.startswith("srv_header_"):
+        await query.answer()  # заголовок сервера — нажатие игнорируем
     # ── .conf: выбор сервера/эндпоинта ──
     elif data.startswith("conf_"):
         rest = data[5:]
-        if rest.startswith("srv_"):
-            # conf_srv_{idx}_{name} → список эндпоинтов сервера
-            parts = rest[4:].split("_", 1)
-            if len(parts) == 2 and parts[0].isdigit():
-                await show_server_eps(query, parts[1], user_id, "conf", int(parts[0]))
-        elif rest.startswith("s") and "_e" in rest:
+        if rest.startswith("s") and "_e" in rest:
             # conf_s{si}_e{ei}_{name} → отправить с конкретным эндпоинтом
             m = re.match(r's(\d+)_e(\d+)_(.*)', rest)
             if m:
@@ -920,11 +921,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ── QR: выбор сервера/эндпоинта ──
     elif data.startswith("qr_"):
         rest = data[3:]
-        if rest.startswith("srv_"):
-            parts = rest[4:].split("_", 1)
-            if len(parts) == 2 and parts[0].isdigit():
-                await show_server_eps(query, parts[1], user_id, "qr", int(parts[0]))
-        elif rest.startswith("s") and "_e" in rest:
+        if rest.startswith("s") and "_e" in rest:
             m = re.match(r's(\d+)_e(\d+)_(.*)', rest)
             if m:
                 si, ei, n = int(m.group(1)), int(m.group(2)), m.group(3)
@@ -942,11 +939,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ── Поделиться: выбор сервера/эндпоинта ──
     elif data.startswith("share_"):
         rest = data[6:]
-        if rest.startswith("srv_"):
-            parts = rest[4:].split("_", 1)
-            if len(parts) == 2 and parts[0].isdigit():
-                await show_server_eps(query, parts[1], user_id, "share", int(parts[0]))
-        elif rest.startswith("s") and "_e" in rest:
+        if rest.startswith("s") and "_e" in rest:
             m = re.match(r's(\d+)_e(\d+)_(.*)', rest)
             if m:
                 si, ei, n = int(m.group(1)), int(m.group(2)), m.group(3)
@@ -1187,7 +1180,7 @@ def _action_label(action: str) -> str:
     return {"conf": "Скачать .conf", "qr": "QR-код", "share": "Поделиться"}.get(action, action)
 
 async def _show_ep_select(query, name: str, user_id: int, action: str):
-    """Общий экран выбора сервера/эндпоинта для заданного действия."""
+    """Единый экран выбора сервера и эндпоинта — все в одной панели."""
     if not can_access_device(user_id, name):
         await query.answer("⛔ Это не ваше устройство.", show_alert=True)
         return
@@ -1195,28 +1188,45 @@ async def _show_ep_select(query, name: str, user_id: int, action: str):
     short = device_short_name(name)
     icon  = _action_icon(action)
 
-    # Если один сервер — переходим к выбору эндпоинта сразу
-    if len(servers) == 1:
-        eps = servers[0].get("endpoints", [])
-        if len(eps) <= 1:
-            ep = eps[0]["value"] if eps else SERVER_ENDPOINT
-            await _do_send_action(query, name, action, ep, servers[0])
-            return
-        # Один сервер, несколько эндпоинтов
-        srv = servers[0]
-        emoji = srv.get("emoji", "🖥")
-        sname = srv.get("name", "Сервер")
-        await query.edit_message_text(
-            f"{icon} *{_action_label(action)}* — {short}\n{emoji} {_md(sname)} — выберите эндпоинт:",
-            reply_markup=_server_eps_kb(name, action, 0),
-            parse_mode="Markdown"
-        )
+    # Собираем все эндпоинты всех серверов
+    all_eps = []
+    for si, srv in enumerate(servers):
+        for ei, ep in enumerate(srv.get("endpoints", [])):
+            all_eps.append((si, ei, srv, ep))
+
+    if not all_eps:
+        await query.answer("Нет доступных эндпоинтов.", show_alert=True)
         return
 
-    # Несколько серверов — показываем выбор VPS
+    # Один эндпоинт — сразу отправляем
+    if len(all_eps) == 1:
+        si, ei, srv, ep = all_eps[0]
+        await _do_send_action(query, name, action, ep["value"], srv)
+        return
+
+    # Строим клавиатуру: заголовок сервера + кнопки эндпоинтов
+    rows = []
+    prev_si = -1
+    for si, ei, srv, ep in all_eps:
+        if si != prev_si:
+            emoji = srv.get("emoji", "🖥")
+            sname = srv.get("name", f"Сервер {si + 1}")
+            rows.append([InlineKeyboardButton(
+                f"— {emoji} {sname} —",
+                callback_data=f"srv_header_{si}"
+            )])
+            prev_si = si
+        ep_val = ep["value"]
+        rows.append([InlineKeyboardButton(
+            f"  {ep_val}",
+            callback_data=f"{action}_s{si}_e{ei}_{name}"
+        )])
+    rows.append([InlineKeyboardButton("◀️ Назад", callback_data=f"device_{name}")])
+
     await query.edit_message_text(
-        f"{icon} *{_action_label(action)}* — {short}\n\nВыберите сервер:",
-        reply_markup=_server_kb(name, action),
+        f"{icon} *{_action_label(action)}* — {short}\n\n"
+        f"Выберите сервер и эндпоинт подключения:",
+        reply_markup=InlineKeyboardMarkup(rows),
         parse_mode="Markdown"
     )
 
@@ -1257,16 +1267,28 @@ async def show_server_eps(query, name: str, user_id: int, action: str, srv_idx: 
         parse_mode="Markdown"
     )
 
+def _make_conf_filename(name: str, srv_name: str = None) -> str:
+    """Формирует имя файла: User.SERVER.Device.conf"""
+    if not srv_name:
+        return f"{name}.conf"
+    srv_clean = re.sub(r'[^\w]', '', srv_name.replace(' ', '_'))
+    parts = name.split(".", 1)
+    if len(parts) == 2:
+        return f"{parts[0]}.{srv_clean}.{parts[1]}.conf"
+    return f"{name}.{srv_clean}.conf"
+
+
 async def _do_send_action(query, name: str, action: str, ep: str, server: dict):
     """Выполняет нужное действие (conf/qr/share) с конкретным эндпоинтом и сервером."""
-    spub = server.get("awg_public_key") or SERVER_PUBLIC
-    sprt = str(server.get("awg_port") or SERVER_PORT)
+    spub     = server.get("awg_public_key") or SERVER_PUBLIC
+    sprt     = str(server.get("awg_port") or SERVER_PORT)
+    srv_name = server.get("name", "")
     if action == "conf":
-        await do_send_conf_direct(query, name, ep, spub, sprt)
+        await do_send_conf_direct(query, name, ep, spub, sprt, srv_name)
     elif action == "qr":
-        await do_send_qr_direct(query, name, ep, spub, sprt)
+        await do_send_qr_direct(query, name, ep, spub, sprt, srv_name)
     else:
-        await do_send_share_direct(query, name, ep, spub, sprt)
+        await do_send_share_direct(query, name, ep, spub, sprt, srv_name)
 
 # ── Финальная отправка .conf ──────────────────────────────────────────────────
 
@@ -1377,7 +1399,8 @@ async def do_send_share(query, name: str, ep_key: str):
 # ── Прямая отправка с конкретным эндпоинтом (мультисервер) ───────────────────
 
 async def do_send_conf_direct(query, name: str, ep: str,
-                               spub: str = None, sprt: str = None):
+                               spub: str = None, sprt: str = None,
+                               srv_name: str = None):
     """Отправляет .conf с указанным эндпоинтом и параметрами сервера."""
     allowed_ips = get_allowed_ips_for_client(name)
     short   = device_short_name(name)
@@ -1386,7 +1409,7 @@ async def do_send_conf_direct(query, name: str, ep: str,
     excl_note = "" if allowed_ips == "0.0.0.0/0" else "\n🌐 С исключениями сайтов"
     await query.message.reply_document(
         document=content,
-        filename=f"{name}.conf",
+        filename=_make_conf_filename(name, srv_name),
         caption=(
             f"📄 Конфиг *{short}*\n"
             f"🌐 Endpoint: `{ep}:{prt}`{excl_note}\n\n"
@@ -1397,7 +1420,8 @@ async def do_send_conf_direct(query, name: str, ep: str,
     await show_device(query, name, query.from_user.id)
 
 async def do_send_qr_direct(query, name: str, ep: str,
-                             spub: str = None, sprt: str = None):
+                             spub: str = None, sprt: str = None,
+                             srv_name: str = None):
     """Отправляет QR с указанным эндпоинтом."""
     allowed_ips = get_allowed_ips_for_client(name)
     short   = device_short_name(name)
@@ -1409,10 +1433,9 @@ async def do_send_qr_direct(query, name: str, ep: str,
     try:
         with open(tmp_conf, "wb") as f:
             f.write(content)
-        safe_name = name.replace(".", "_")
         await query.message.reply_document(
             document=open(tmp_conf, "rb"),
-            filename=f"{safe_name}.conf",
+            filename=_make_conf_filename(name, srv_name),
             caption=f"📄 .conf для AmneziaWG — *{short}*{excl_note}",
             parse_mode="Markdown"
         )
@@ -1441,7 +1464,8 @@ async def do_send_qr_direct(query, name: str, ep: str,
     await show_device(query, name, query.from_user.id)
 
 async def do_send_share_direct(query, name: str, ep: str,
-                                spub: str = None, sprt: str = None):
+                                spub: str = None, sprt: str = None,
+                                srv_name: str = None):
     """Отправляет vpn:// ссылку с указанным эндпоинтом."""
     keys = get_client_keys(name)
     if not keys:
@@ -1566,6 +1590,7 @@ async def show_server_card(query, srv_idx: int):
     )
     rows = [
         [InlineKeyboardButton("➕ Добавить домен", callback_data=f"srv_adddomain_{srv_idx}")],
+        [InlineKeyboardButton("✏️ Переименовать", callback_data=f"srv_rename_{srv_idx}")],
     ]
     if not is_pri:
         rows.append([InlineKeyboardButton("🗑 Удалить сервер", callback_data=f"srv_del_{srv_idx}")])
@@ -1602,6 +1627,87 @@ def _ssh_read_slave_env(ip: str, port: int, login: str, password: str) -> dict:
     if not result.get("awg_public_key"):
         raise ValueError("SERVER_PUBLIC не найден в server.env — возможно, AmneziaWG не установлен на этом сервере")
     return result
+
+
+def _ssh_sync_peer_to_slave(server: dict, name: str, pub: str, psk: str, ip: str):
+    """Регистрирует peer клиента на slave-сервере через SSH (идемпотентно).
+    ip — без /32, функция сама добавляет суффикс."""
+    ssh = server.get("ssh", {})
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.connect(
+        ssh.get("ip", ""), port=ssh.get("port", 22),
+        username=ssh.get("login", "root"), password=ssh.get("password", ""),
+        timeout=10, banner_timeout=15
+    )
+    try:
+        conf_line = (
+            f"\\n# Client: {name}\\n[Peer]\\n"
+            f"PublicKey = {pub}\\nPresharedKey = {psk}\\nAllowedIPs = {ip}/32\\n"
+        )
+        _, stdout, stderr = client.exec_command(
+            f"grep -qF '{pub}' /etc/amnezia/amneziawg/awg0.conf || "
+            f"printf '{conf_line}' >> /etc/amnezia/amneziawg/awg0.conf",
+            timeout=10
+        )
+        stdout.read(); stderr.read()
+        # Добавляем в работающий интерфейс
+        transport = client.get_transport()
+        chan = transport.open_session()
+        chan.exec_command(
+            f"awg set awg0 peer {pub} preshared-key /dev/stdin allowed-ips {ip}/32"
+        )
+        chan.sendall(psk.encode())
+        chan.shutdown_write()
+        chan.recv_exit_status()
+        chan.close()
+    finally:
+        client.close()
+
+
+def _ssh_sync_all_clients_to_slave(server: dict):
+    """Синхронизирует всех существующих клиентов primary → slave через SSH."""
+    import re as _re
+    try:
+        with open(AWG_CONF) as f:
+            conf_text = f.read()
+    except Exception:
+        return
+    for block in _re.split(r'\n(?=# Client:)', conf_text):
+        name_m = _re.search(r'# Client: (.+)', block)
+        pub_m  = _re.search(r'PublicKey = (.+)', block)
+        psk_m  = _re.search(r'PresharedKey = (.+)', block)
+        ip_m   = _re.search(r'AllowedIPs = (\S+?)(?:/32)?$', block, _re.MULTILINE)
+        if not (name_m and pub_m and psk_m and ip_m):
+            continue
+        try:
+            _ssh_sync_peer_to_slave(
+                server,
+                name_m.group(1).strip(),
+                pub_m.group(1).strip(),
+                psk_m.group(1).strip(),
+                ip_m.group(1).strip(),
+            )
+        except Exception:
+            pass
+
+
+async def _sync_peer_to_all_slaves(name: str, pub: str, psk: str, ip: str) -> list:
+    """Синхронизирует нового клиента со всеми slave-серверами. Возвращает список ошибок."""
+    if not _PARAMIKO_AVAILABLE:
+        return []
+    slaves = [s for s in load_servers() if not s.get("is_primary")]
+    if not slaves:
+        return []
+    errors = []
+    loop = asyncio.get_event_loop()
+    for srv in slaves:
+        sname = f"{srv.get('emoji', '')} {srv.get('name', 'Сервер')}".strip()
+        try:
+            await loop.run_in_executor(None, _ssh_sync_peer_to_slave, srv, name, pub, psk, ip)
+        except Exception as e:
+            errors.append(f"{sname}: {e}")
+    return errors
 
 
 async def srv_add_start(update, context: ContextTypes.DEFAULT_TYPE):
@@ -1672,13 +1778,18 @@ async def srv_add_password(update, context: ContextTypes.DEFAULT_TYPE):
         )
         return WAITING_SRV_PASSWORD
 
-    await update.message.reply_text("Введите название сервера (например: Германия):")
+    await update.message.reply_text(
+        "Введите название сервера:\n"
+        "_Рекомендуем 3 заглавные буквы: NLD, FIN, RUS, GER, USA…_\n"
+        "Используйте только латиницу — оно войдёт в имя файлов конфигов.",
+        parse_mode="Markdown"
+    )
     return WAITING_SRV_NAME
 
 async def srv_add_name(update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["srv_add"]["name"] = update.message.text.strip()
     await update.message.reply_text(
-        "Введите эмодзи/флаг (например: 🇩🇪), или Enter для 🖥:"
+        "Введите эмодзи/флаг (например: 🇩🇪 🇫🇮 🇷🇺), или Enter для 🖥:"
     )
     return WAITING_SRV_EMOJI
 
@@ -1707,8 +1818,9 @@ async def srv_add_emoji(update, context: ContextTypes.DEFAULT_TYPE):
     servers.append(new_srv)
     save_servers(servers)
 
+    srv_label = f"*{d.get('emoji', '🖥')} {d.get('name', 'Сервер')}*"
     await update.message.reply_text(
-        f"✅ Сервер *{d.get('emoji', '🖥')} {d.get('name', 'Сервер')}* добавлен!\n\n"
+        f"✅ Сервер {srv_label} добавлен!\n\n"
         f"IP `{d.get('ip', '')}` добавлен как первый эндпоинт.\n"
         f"Откройте карточку сервера чтобы добавить домены.",
         parse_mode="Markdown",
@@ -1716,6 +1828,24 @@ async def srv_add_emoji(update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("🖥 Серверы", callback_data="servers")
         ]])
     )
+
+    # Синхронизируем всех существующих клиентов на новый slave
+    if _PARAMIKO_AVAILABLE:
+        try:
+            await asyncio.get_event_loop().run_in_executor(
+                None, _ssh_sync_all_clients_to_slave, new_srv
+            )
+            await update.message.reply_text(
+                f"✅ Существующие клиенты синхронизированы с {srv_label}.",
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            await update.message.reply_text(
+                f"⚠️ Не удалось синхронизировать клиентов: `{e}`\n"
+                f"Попробуйте повторить через карточку сервера.",
+                parse_mode="Markdown"
+            )
+
     return ConversationHandler.END
 
 async def srv_add_cancel(update, context: ContextTypes.DEFAULT_TYPE):
@@ -1762,6 +1892,63 @@ async def srv_del_ok(query, srv_idx: int):
         parse_mode="Markdown"
     )
 
+# ── Переименование сервера ────────────────────────────────────────────────────
+
+async def srv_rename_start(update, context: ContextTypes.DEFAULT_TYPE):
+    """Начало диалога переименования сервера (entry point ConversationHandler)."""
+    query = update.callback_query
+    await query.answer()
+    srv_idx = int(query.data.split("_")[-1])
+    context.user_data["srv_rename"] = {"srv_idx": srv_idx}
+    servers = load_servers()
+    if srv_idx >= len(servers):
+        await query.edit_message_text("❌ Сервер не найден.")
+        return ConversationHandler.END
+    srv = servers[srv_idx]
+    await query.edit_message_text(
+        f"✏️ *Переименование сервера*\n\n"
+        f"Текущее название: *{srv.get('emoji', '')} {srv.get('name', '')}*\n\n"
+        f"Введите новое название (например: NLD, FIN, RUS)\nили /cancel для отмены:",
+        parse_mode="Markdown"
+    )
+    return WAITING_SRV_EDIT_NAME
+
+
+async def srv_rename_name(update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["srv_rename"]["name"] = update.message.text.strip()
+    await update.message.reply_text(
+        "Введите эмодзи/флаг (например: 🇳🇱), или отправьте пробел чтобы оставить текущий:"
+    )
+    return WAITING_SRV_EDIT_EMOJI
+
+
+async def srv_rename_emoji(update, context: ContextTypes.DEFAULT_TYPE):
+    d = context.user_data.pop("srv_rename", {})
+    srv_idx = d.get("srv_idx", 0)
+    new_name  = d.get("name", "").strip()
+    new_emoji = update.message.text.strip()
+
+    servers = load_servers()
+    if srv_idx >= len(servers):
+        await update.message.reply_text("❌ Сервер не найден.")
+        return ConversationHandler.END
+    srv = servers[srv_idx]
+    if new_name:
+        srv["name"] = new_name
+    if new_emoji:
+        srv["emoji"] = new_emoji
+    servers[srv_idx] = srv
+    save_servers(servers)
+    await update.message.reply_text(
+        f"✅ Сервер переименован: *{srv['emoji']} {srv['name']}*",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("◀️ Карточка", callback_data=f"srv_card_{srv_idx}")
+        ]])
+    )
+    return ConversationHandler.END
+
+
 # ── Добавление домена к серверу ───────────────────────────────────────────────
 
 async def srv_adddomain_start(update, context: ContextTypes.DEFAULT_TYPE):
@@ -1789,17 +1976,13 @@ async def srv_adddomain_receive(update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     srv = servers[srv_idx]
 
-    # Попытка DNS-резолва
+    # Попытка DNS-резолва — проверяем только против IP текущего сервера
     verified = False
     dns_ip   = None
+    srv_ip   = srv.get("ssh", {}).get("ip", "")
     try:
         dns_ip = _sock.gethostbyname(domain)
-        # Проверяем совпадение с IP этого или любого сервера
-        for s in servers:
-            ssh_ip = s.get("ssh", {}).get("ip", "")
-            if dns_ip == ssh_ip:
-                verified = True
-                break
+        verified = (dns_ip == srv_ip) if srv_ip else False
     except Exception:
         pass
 
@@ -1820,9 +2003,14 @@ async def srv_adddomain_receive(update, context: ContextTypes.DEFAULT_TYPE):
     servers[srv_idx] = srv
     save_servers(servers)
 
-    dns_note = f"✅ DNS → `{dns_ip}` (совпадает)" if verified else (
-        f"⚠️ DNS → `{dns_ip}` (не совпадает с IP сервера)" if dns_ip else "⚠️ DNS не разрешился"
-    )
+    if verified:
+        dns_note = f"✅ DNS → `{dns_ip}` (совпадает с IP сервера)"
+    elif dns_ip and srv_ip and dns_ip != srv_ip:
+        dns_note = f"⚠️ DNS → `{dns_ip}`, но IP сервера `{srv_ip}` — домен принадлежит другому серверу"
+    elif dns_ip:
+        dns_note = f"⚠️ DNS → `{dns_ip}` (IP сервера не задан, не могу проверить)"
+    else:
+        dns_note = "⚠️ DNS не разрешился — проверьте правильность домена"
     await update.message.reply_text(
         f"✅ Домен `{domain}` добавлен к серверу *{srv.get('name', '')}*\n{dns_note}",
         parse_mode="Markdown",
@@ -2685,7 +2873,7 @@ async def receive_device_name(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     await update.message.reply_text(f"⏳ Создаю профиль *{device_raw}*...", parse_mode="Markdown")
     try:
-        await create_client(full_name)
+        keys = await create_client(full_name)
     except Exception as e:
         logger.error(f"receive_device_name: create_client failed: {e}")
         await update.message.reply_text(
@@ -2695,6 +2883,13 @@ async def receive_device_name(update: Update, context: ContextTypes.DEFAULT_TYPE
             parse_mode="Markdown"
         )
         return ConversationHandler.END
+
+    # Синхронизируем нового клиента со всеми slave-серверами
+    sync_errors = await _sync_peer_to_all_slaves(
+        full_name, keys["pub"], keys["psk"], keys["ip"]
+    )
+    if sync_errors:
+        logger.warning(f"receive_device_name: slave sync errors: {sync_errors}")
 
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("📋 Перейти к устройству", callback_data=f"device_{full_name}")],
@@ -3089,6 +3284,18 @@ def main():
         allow_reentry=True,
     )
 
+    srv_rename_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(srv_rename_start, pattern="^srv_rename_\\d+$")],
+        states={
+            WAITING_SRV_EDIT_NAME:  [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_rename_name)],
+            WAITING_SRV_EDIT_EMOJI: [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_rename_emoji)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+        per_chat=True,
+        per_message=False,
+        allow_reentry=True,
+    )
+
     app.add_handler(reg_conv)
     app.add_handler(add_conv)
     app.add_handler(restore_conv)
@@ -3096,6 +3303,7 @@ def main():
     app.add_handler(sites_custom_conv)  # до общего button_handler
     app.add_handler(srv_add_conv)
     app.add_handler(srv_domain_conv)
+    app.add_handler(srv_rename_conv)
     app.add_handler(CommandHandler("panel",  cmd_panel))
     app.add_handler(CommandHandler("bot",    cmd_bot))
     app.add_handler(CallbackQueryHandler(button_handler))
