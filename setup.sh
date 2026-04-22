@@ -1341,6 +1341,11 @@ if [[ "$SLAVE_MODE" -eq 0 ]]; then
     pip3 install "flask>=3.0" --ignore-installed blinker > /dev/null 2>&1 || \
     pip3 install "flask>=3.0" > /dev/null 2>&1 || \
     err "Не удалось установить flask."
+
+    log "Установка paramiko (SSH для slave-серверов)..."
+    pip3 install "paramiko>=3.0" --break-system-packages > /dev/null 2>&1 || \
+    pip3 install "paramiko>=3.0" > /dev/null 2>&1 || \
+    warn "Не удалось установить paramiko — добавление slave-серверов потребует ручного ввода ключа."
 else
     info "Slave-режим: Python/Flask пропускаем (бот не нужен)"
 fi

@@ -3,6 +3,11 @@
 # Version: 3.0
 # Вся бизнес-логика — в awg_core.py и sites_data.py
 import os, subprocess, logging, json, time, tempfile, shutil, re, asyncio
+try:
+    import paramiko
+    _PARAMIKO_AVAILABLE = True
+except ImportError:
+    _PARAMIKO_AVAILABLE = False
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo, BotCommand
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
@@ -1571,6 +1576,34 @@ async def show_server_card(query, srv_idx: int):
         parse_mode="Markdown"
     )
 
+def _ssh_read_slave_env(ip: str, port: int, login: str, password: str) -> dict:
+    """Подключается к slave по SSH и читает /etc/amnezia/amneziawg/server.env.
+    Возвращает dict с ключами awg_public_key и awg_port, либо бросает исключение."""
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.connect(ip, port=port, username=login, password=password, timeout=10, banner_timeout=15)
+    try:
+        _, stdout, _ = client.exec_command(
+            "cat /etc/amnezia/amneziawg/server.env", timeout=10
+        )
+        raw = stdout.read().decode()
+    finally:
+        client.close()
+
+    result = {}
+    for line in raw.splitlines():
+        if line.startswith("SERVER_PUBLIC="):
+            result["awg_public_key"] = line.split("=", 1)[1].strip()
+        elif line.startswith("SERVER_PORT="):
+            try:
+                result["awg_port"] = int(line.split("=", 1)[1].strip())
+            except ValueError:
+                pass
+    if not result.get("awg_public_key"):
+        raise ValueError("SERVER_PUBLIC не найден в server.env — возможно, AmneziaWG не установлен на этом сервере")
+    return result
+
+
 async def srv_add_start(update, context: ContextTypes.DEFAULT_TYPE):
     """Начало диалога добавления сервера."""
     query = update.callback_query
@@ -1604,7 +1637,41 @@ async def srv_add_login(update, context: ContextTypes.DEFAULT_TYPE):
     return WAITING_SRV_PASSWORD
 
 async def srv_add_password(update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["srv_add"]["password"] = update.message.text.strip()
+    d = context.user_data["srv_add"]
+    d["password"] = update.message.text.strip()
+
+    if not _PARAMIKO_AVAILABLE:
+        await update.message.reply_text("Введите название сервера (например: Германия):")
+        return WAITING_SRV_NAME
+
+    ip    = d.get("ip", "")
+    port  = d.get("port", 22)
+    login = d.get("login", "root")
+    pwd   = d["password"]
+
+    status_msg = await update.message.reply_text(
+        f"🔌 Подключаюсь к `{ip}:{port}`…", parse_mode="Markdown"
+    )
+    try:
+        env_data = await asyncio.get_event_loop().run_in_executor(
+            None, _ssh_read_slave_env, ip, port, login, pwd
+        )
+        d["awg_public_key"] = env_data["awg_public_key"]
+        d["awg_port"]       = env_data.get("awg_port", 51820)
+        await status_msg.edit_text(
+            f"✅ Подключение успешно!\n"
+            f"🔑 AWG Public Key: `{d['awg_public_key']}`\n"
+            f"🔌 AWG Port: `{d['awg_port']}`",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        await status_msg.edit_text(
+            f"❌ Не удалось подключиться к `{ip}:{port}`:\n`{e}`\n\n"
+            f"Проверьте данные SSH и попробуйте ещё раз, или /cancel для отмены.",
+            parse_mode="Markdown"
+        )
+        return WAITING_SRV_PASSWORD
+
     await update.message.reply_text("Введите название сервера (например: Германия):")
     return WAITING_SRV_NAME
 
@@ -1633,8 +1700,8 @@ async def srv_add_emoji(update, context: ContextTypes.DEFAULT_TYPE):
             "login": d.get("login", "root"),
             "password": d.get("password", ""),
         },
-        "awg_public_key": SERVER_PUBLIC,
-        "awg_port": int(SERVER_PORT) if SERVER_PORT else 51820,
+        "awg_public_key": d.get("awg_public_key") or SERVER_PUBLIC,
+        "awg_port": d.get("awg_port") or (int(SERVER_PORT) if SERVER_PORT else 51820),
         "endpoints": [{"value": d.get("ip", ""), "type": "ip"}],
     }
     servers.append(new_srv)
