@@ -17,6 +17,22 @@ warn() { echo -e "${YELLOW}[!]${NC} $1"; }
 err()  { echo -e "${RED}[✗]${NC} $1"; exit 1; }
 info() { echo -e "${CYAN}[i]${NC} $1"; }
 
+# Ждёт освобождения dpkg-блокировки (до 120 сек) перед apt-get
+_wait_apt_lock() {
+    local i=0
+    while flock -n /var/lib/dpkg/lock-frontend true 2>/dev/null; do break; done 2>/dev/null || true
+    while [[ -f /var/lib/dpkg/lock-frontend ]] && fuser /var/lib/dpkg/lock-frontend &>/dev/null; do
+        if [[ $i -eq 0 ]]; then
+            warn "Ожидание dpkg-блокировки (unattended-upgrades)..."
+        fi
+        sleep 5; (( i += 5 ))
+        if [[ $i -ge 120 ]]; then
+            warn "dpkg-блокировка не снята за 120 сек, продолжаем..."
+            break
+        fi
+    done
+}
+
 [[ $EUID -ne 0 ]] && err "Запускать от root: sudo bash setup.sh"
 
 REPO_ORG="yntoolsmail-prog"
@@ -1352,9 +1368,10 @@ fi
 
 # ── Шаг 11.5: Мониторинг трафика и сетевые инструменты ───────────────────────
 log "Установка vnstat (статистика трафика)..."
-apt-get install -y -qq vnstat
+_wait_apt_lock
+apt-get install -y -qq vnstat || warn "vnstat не установлен — статистика трафика будет недоступна"
 log "Установка mtr (диагностика сети)..."
-apt-get install -y -qq mtr
+apt-get install -y -qq mtr || warn "mtr не установлен — трассировка маршрутов будет недоступна"
 systemctl enable vnstat --now 2>/dev/null || true
 # Регистрируем основной интерфейс в vnstat если ещё не добавлен
 HOST_IFACE=$(ip route get 8.8.8.8 2>/dev/null | awk '/dev/{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -1)
