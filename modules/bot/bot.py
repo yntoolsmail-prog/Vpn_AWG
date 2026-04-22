@@ -1603,30 +1603,82 @@ async def show_server_card(query, srv_idx: int):
 
 def _ssh_read_slave_env(ip: str, port: int, login: str, password: str) -> dict:
     """Подключается к slave по SSH и читает /etc/amnezia/amneziawg/server.env.
-    Возвращает dict с ключами awg_public_key и awg_port, либо бросает исключение."""
+    Проверяет SSH-соединение и наличие AWG на сервере. Бросает исключение при ошибке."""
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     client.connect(ip, port=port, username=login, password=password, timeout=10, banner_timeout=15)
     try:
         _, stdout, _ = client.exec_command(
-            "cat /etc/amnezia/amneziawg/server.env", timeout=10
+            "test -f /etc/amnezia/amneziawg/awg0.conf && echo OK || echo MISSING",
+            timeout=10
         )
-        raw = stdout.read().decode()
+        result = stdout.read().decode().strip()
     finally:
         client.close()
+    if result != "OK":
+        raise ValueError("AmneziaWG не установлен — /etc/amnezia/amneziawg/awg0.conf не найден")
 
-    result = {}
-    for line in raw.splitlines():
-        if line.startswith("SERVER_PUBLIC="):
-            result["awg_public_key"] = line.split("=", 1)[1].strip()
-        elif line.startswith("SERVER_PORT="):
-            try:
-                result["awg_port"] = int(line.split("=", 1)[1].strip())
-            except ValueError:
-                pass
-    if not result.get("awg_public_key"):
-        raise ValueError("SERVER_PUBLIC не найден в server.env — возможно, AmneziaWG не установлен на этом сервере")
-    return result
+
+def _ssh_clone_awg_to_slave(server: dict):
+    """Клонирует AWG-конфиг с primary на slave: одинаковые ключи, обфускация, все клиенты.
+    Slave становится точной копией primary — клиентские конфиги совместимы с обоими серверами."""
+    try:
+        with open(AWG_CONF) as f:
+            primary_conf = f.read()
+    except Exception as e:
+        raise ValueError(f"Не удалось прочитать конфиг primary: {e}")
+
+    ssh = server.get("ssh", {})
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.connect(
+        ssh.get("ip", ""), port=ssh.get("port", 22),
+        username=ssh.get("login", "root"), password=ssh.get("password", ""),
+        timeout=10, banner_timeout=15
+    )
+    try:
+        # Читаем PostUp/PostDown со slave (у него свой сетевой интерфейс)
+        _, stdout, _ = client.exec_command(
+            "grep -E '^Post(Up|Down)' /etc/amnezia/amneziawg/awg0.conf 2>/dev/null",
+            timeout=5
+        )
+        slave_post_lines = stdout.read().decode().strip().splitlines()
+
+        # Заменяем PostUp/PostDown в конфиге primary на slave-версию
+        new_conf_lines = []
+        for line in primary_conf.splitlines():
+            if line.strip().startswith("PostUp") or line.strip().startswith("PostDown"):
+                continue
+            new_conf_lines.append(line)
+            if line.strip().startswith("ListenPort") and slave_post_lines:
+                new_conf_lines.extend(slave_post_lines)
+
+        new_conf = "\n".join(new_conf_lines) + "\n"
+
+        # Пишем новый конфиг на slave
+        transport = client.get_transport()
+        chan = transport.open_session()
+        chan.exec_command("cat > /etc/amnezia/amneziawg/awg0.conf")
+        chan.sendall(new_conf.encode())
+        chan.shutdown_write()
+        chan.recv_exit_status()
+        chan.close()
+
+        # Обновляем SERVER_PUBLIC в server.env slave
+        _, stdout, stderr = client.exec_command(
+            f"sed -i 's|^SERVER_PUBLIC=.*|SERVER_PUBLIC={SERVER_PUBLIC}|' "
+            f"/etc/amnezia/amneziawg/server.env",
+            timeout=5
+        )
+        stdout.read(); stderr.read()
+
+        # Перезапускаем интерфейс
+        _, stdout, stderr = client.exec_command(
+            "systemctl restart awg-quick@awg0", timeout=20
+        )
+        stdout.read(); stderr.read()
+    finally:
+        client.close()
 
 
 def _ssh_sync_peer_to_slave(server: dict, name: str, pub: str, psk: str, ip: str):
@@ -1759,15 +1811,12 @@ async def srv_add_password(update, context: ContextTypes.DEFAULT_TYPE):
         f"🔌 Подключаюсь к `{ip}:{port}`…", parse_mode="Markdown"
     )
     try:
-        env_data = await asyncio.get_event_loop().run_in_executor(
+        await asyncio.get_event_loop().run_in_executor(
             None, _ssh_read_slave_env, ip, port, login, pwd
         )
-        d["awg_public_key"] = env_data["awg_public_key"]
-        d["awg_port"]       = env_data.get("awg_port", 51820)
         await status_msg.edit_text(
-            f"✅ Подключение успешно!\n"
-            f"🔑 AWG Public Key: `{d['awg_public_key']}`\n"
-            f"🔌 AWG Port: `{d['awg_port']}`",
+            f"✅ SSH подключение успешно — AmneziaWG установлен.\n"
+            f"Конфиг будет клонирован с primary после сохранения.",
             parse_mode="Markdown"
         )
     except Exception as e:
@@ -1811,8 +1860,8 @@ async def srv_add_emoji(update, context: ContextTypes.DEFAULT_TYPE):
             "login": d.get("login", "root"),
             "password": d.get("password", ""),
         },
-        "awg_public_key": d.get("awg_public_key") or SERVER_PUBLIC,
-        "awg_port": d.get("awg_port") or (int(SERVER_PORT) if SERVER_PORT else 51820),
+        "awg_public_key": SERVER_PUBLIC,
+        "awg_port": int(SERVER_PORT) if SERVER_PORT else 51820,
         "endpoints": [{"value": d.get("ip", ""), "type": "ip"}],
     }
     servers.append(new_srv)
@@ -1829,20 +1878,23 @@ async def srv_add_emoji(update, context: ContextTypes.DEFAULT_TYPE):
         ]])
     )
 
-    # Синхронизируем всех существующих клиентов на новый slave
+    # Клонируем AWG-конфиг primary → slave (одинаковые ключи + все клиенты)
     if _PARAMIKO_AVAILABLE:
+        clone_msg = await update.message.reply_text(
+            "🔄 Клонирую конфиг AWG на slave (ключи + клиенты)…"
+        )
         try:
             await asyncio.get_event_loop().run_in_executor(
-                None, _ssh_sync_all_clients_to_slave, new_srv
+                None, _ssh_clone_awg_to_slave, new_srv
             )
-            await update.message.reply_text(
-                f"✅ Существующие клиенты синхронизированы с {srv_label}.",
+            await clone_msg.edit_text(
+                f"✅ Slave {srv_label} готов — конфиг скопирован, интерфейс перезапущен.",
                 parse_mode="Markdown"
             )
         except Exception as e:
-            await update.message.reply_text(
-                f"⚠️ Не удалось синхронизировать клиентов: `{e}`\n"
-                f"Попробуйте повторить через карточку сервера.",
+            await clone_msg.edit_text(
+                f"⚠️ Не удалось склонировать конфиг: `{e}`\n"
+                f"Запустите `bash /root/setup.sh --update` на slave вручную.",
                 parse_mode="Markdown"
             )
 
