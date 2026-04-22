@@ -764,6 +764,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await srv_del_ok(query, int(data[11:]))
     elif data.startswith("srv_del_") and not data.startswith("srv_del_ok_") and is_admin:
         await srv_del_confirm(query, int(data[8:]))
+    elif data.startswith("srv_sync_") and is_admin:
+        await srv_sync_now(query, int(data[9:]))
     # srv_rename_ handled by ConversationHandler below
     elif data == "status":
         await show_status(query)
@@ -1561,6 +1563,36 @@ async def show_servers_list(query):
         parse_mode="Markdown"
     )
 
+def _count_peers_in_conf(conf_text: str) -> int:
+    """Считает количество [Peer] блоков в awg0.conf."""
+    return conf_text.count("\n[Peer]") + (1 if conf_text.startswith("[Peer]") else 0)
+
+
+def _ssh_get_slave_peer_count(server: dict) -> int | None:
+    """SSH на slave, считает кол-во [Peer] в его awg0.conf. None при ошибке."""
+    if not _PARAMIKO_AVAILABLE:
+        return None
+    ssh = server.get("ssh", {})
+    try:
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client.connect(
+            ssh.get("ip", ""), port=ssh.get("port", 22),
+            username=ssh.get("login", "root"), password=ssh.get("password", ""),
+            timeout=8, banner_timeout=10
+        )
+        try:
+            _, stdout, _ = client.exec_command(
+                "grep -c '^\\[Peer\\]' /etc/amnezia/amneziawg/awg0.conf 2>/dev/null || echo 0",
+                timeout=5
+            )
+            return int(stdout.read().decode().strip())
+        finally:
+            client.close()
+    except Exception:
+        return None
+
+
 async def show_server_card(query, srv_idx: int):
     """Карточка конкретного VPS."""
     servers = load_servers()
@@ -1588,12 +1620,36 @@ async def show_server_card(query, srv_idx: int):
         f"AWG-порт: `{port}`\n\n"
         f"*Эндпоинты:*\n{ep_text}"
     )
+
     rows = [
         [InlineKeyboardButton("➕ Добавить домен", callback_data=f"srv_adddomain_{srv_idx}")],
         [InlineKeyboardButton("✏️ Переименовать", callback_data=f"srv_rename_{srv_idx}")],
     ]
+
     if not is_pri:
+        # Добавляем блок синхронизации для slave
+        loop = asyncio.get_event_loop()
+        slave_peers = await loop.run_in_executor(None, _ssh_get_slave_peer_count, srv)
+        try:
+            with open(AWG_CONF) as f:
+                primary_peers = _count_peers_in_conf(f.read())
+        except Exception:
+            primary_peers = 0
+
+        if slave_peers is None:
+            sync_line = "⚠️ Нет связи со slave"
+            sync_icon = "🔄"
+        elif slave_peers == primary_peers:
+            sync_line = f"✅ Синхронизирован ({slave_peers} клиентов)"
+            sync_icon = "🔄"
+        else:
+            sync_line = f"❗ Рассинхрон: primary {primary_peers}, slave {slave_peers}"
+            sync_icon = "🔄 Синхронизировать"
+
+        text += f"\n\n*Синхронизация:* {sync_line}"
+        rows.append([InlineKeyboardButton(sync_icon, callback_data=f"srv_sync_{srv_idx}")])
         rows.append([InlineKeyboardButton("🗑 Удалить сервер", callback_data=f"srv_del_{srv_idx}")])
+
     rows.append([InlineKeyboardButton("◀️ Назад", callback_data="servers")])
     await query.edit_message_text(
         text,
@@ -1935,14 +1991,88 @@ async def srv_del_ok(query, srv_idx: int):
     if srv_idx >= len(servers):
         await query.answer("Сервер не найден.", show_alert=True)
         return
-    srv = servers.pop(srv_idx)
+    srv = servers[srv_idx]
+    if srv.get("is_primary"):
+        await query.answer("Нельзя удалить PRIMARY сервер.", show_alert=True)
+        return
+    name  = srv.get("name", "Сервер")
+    emoji = srv.get("emoji", "🖥")
+
+    # Останавливаем AWG на slave по SSH
+    stop_note = ""
+    if _PARAMIKO_AVAILABLE:
+        ssh = srv.get("ssh", {})
+        try:
+            await asyncio.get_event_loop().run_in_executor(
+                None, _ssh_stop_slave_awg, ssh
+            )
+            stop_note = "\n✅ AWG на slave остановлен."
+        except Exception as e:
+            stop_note = f"\n⚠️ Не удалось остановить AWG на slave: {e}"
+
+    servers.pop(srv_idx)
     save_servers(servers)
-    name = srv.get("name", "Сервер")
     await query.edit_message_text(
-        f"✅ Сервер *{name}* удалён.",
+        f"✅ Сервер *{emoji} {name}* удалён.{stop_note}",
         reply_markup=back_kb("servers"),
         parse_mode="Markdown"
     )
+
+
+def _ssh_stop_slave_awg(ssh: dict):
+    """SSH к slave и останавливает awg-quick@awg0."""
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.connect(
+        ssh.get("ip", ""), port=ssh.get("port", 22),
+        username=ssh.get("login", "root"), password=ssh.get("password", ""),
+        timeout=8, banner_timeout=10
+    )
+    try:
+        _, stdout, stderr = client.exec_command(
+            "systemctl stop awg-quick@awg0", timeout=15
+        )
+        stdout.read(); stderr.read()
+    finally:
+        client.close()
+
+
+async def srv_sync_now(query, srv_idx: int):
+    """Принудительная синхронизация primary → slave."""
+    servers = load_servers()
+    if srv_idx >= len(servers):
+        await query.answer("Сервер не найден.", show_alert=True)
+        return
+    srv = servers[srv_idx]
+    if srv.get("is_primary"):
+        await query.answer("Это PRIMARY сервер.", show_alert=True)
+        return
+    name  = srv.get("name", "Сервер")
+    emoji = srv.get("emoji", "🖥")
+
+    await query.edit_message_text(
+        f"🔄 Синхронизирую *{emoji} {name}*...",
+        parse_mode="Markdown"
+    )
+    loop = asyncio.get_event_loop()
+    try:
+        await loop.run_in_executor(None, _ssh_clone_awg_to_slave, srv)
+        await query.edit_message_text(
+            f"✅ *{emoji} {name}* синхронизирован с primary.\n\nВсе клиенты скопированы, AWG перезапущен.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("◀️ Карточка", callback_data=f"srv_card_{srv_idx}")
+            ]])
+        )
+    except Exception as e:
+        await query.edit_message_text(
+            f"❌ Ошибка синхронизации *{emoji} {name}*:\n`{e}`",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("◀️ Карточка", callback_data=f"srv_card_{srv_idx}")
+            ]])
+        )
+
 
 # ── Переименование сервера ────────────────────────────────────────────────────
 
@@ -2039,7 +2169,7 @@ async def srv_adddomain_receive(update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
     eps = srv.get("endpoints", [])
-    # Не добавлять дубль
+    # Не добавлять дубль на этом сервере
     if any(e["value"] == domain for e in eps):
         await update.message.reply_text(
             f"⚠️ Домен `{domain}` уже есть у этого сервера.",
@@ -2049,6 +2179,22 @@ async def srv_adddomain_receive(update, context: ContextTypes.DEFAULT_TYPE):
             ]])
         )
         return ConversationHandler.END
+
+    # Проверяем — домен не принадлежит другому серверу
+    for other_idx, other_srv in enumerate(servers):
+        if other_idx == srv_idx:
+            continue
+        if any(e["value"] == domain for e in other_srv.get("endpoints", [])):
+            other_name = f"{other_srv.get('emoji', '')} {other_srv.get('name', f'Сервер {other_idx+1}')}".strip()
+            await update.message.reply_text(
+                f"❌ Домен `{domain}` уже закреплён за сервером *{other_name}*.\n"
+                f"Один домен может принадлежать только одному серверу.",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("◀️ Карточка", callback_data=f"srv_card_{srv_idx}")
+                ]])
+            )
+            return ConversationHandler.END
 
     eps.append({"value": domain, "type": "domain", "verified": verified})
     srv["endpoints"] = eps
