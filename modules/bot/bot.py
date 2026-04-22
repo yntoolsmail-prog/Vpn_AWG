@@ -17,7 +17,7 @@ from awg_core import (
     ADMIN_ID, AWG_IFACE, BOT_SERVICE, BOT_TOKEN, BW_LOG_FILE,
     CLIENTS_DIR, CONFIG_FILE, ENV_FILE, EXCL_EXT, QRENCODE_BIN,
     RESTART_FLAG_FILE, SERVER_ENDPOINT, SERVER_ENDPOINT_BACKUP,
-    SERVER_IP, SERVER_PORT, TMA_URL, TZ,
+    SERVER_IP, SERVER_PORT, SERVER_PUBLIC, TMA_URL, TZ,
     can_access_device, create_backup, create_client, device_short_name,
     fmt_bytes, fmt_handshake, fmt_histogram,
     gen_obfs, get_all_clients, get_allowed_ips_for_client,
