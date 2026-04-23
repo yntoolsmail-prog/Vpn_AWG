@@ -1182,7 +1182,7 @@ def _action_label(action: str) -> str:
     return {"conf": "Скачать .conf", "qr": "QR-код", "share": "Поделиться"}.get(action, action)
 
 async def _show_ep_select(query, name: str, user_id: int, action: str):
-    """Единый экран выбора сервера и эндпоинта — все в одной панели."""
+    """Единый экран выбора эндпоинта — плоский список с меткой сервера."""
     if not can_access_device(user_id, name):
         await query.answer("⛔ Это не ваше устройство.", show_alert=True)
         return
@@ -1206,28 +1206,26 @@ async def _show_ep_select(query, name: str, user_id: int, action: str):
         await _do_send_action(query, name, action, ep["value"], srv)
         return
 
-    # Строим клавиатуру: заголовок сервера + кнопки эндпоинтов
+    # Плоский список: каждая кнопка = флаг + эндпоинт + (сервер)
     rows = []
-    prev_si = -1
     for si, ei, srv, ep in all_eps:
-        if si != prev_si:
-            emoji = srv.get("emoji", "🖥")
-            sname = srv.get("name", f"Сервер {si + 1}")
-            rows.append([InlineKeyboardButton(
-                f"— {emoji} {sname} —",
-                callback_data=f"srv_header_{si}"
-            )])
-            prev_si = si
+        emoji  = srv.get("emoji", "🖥")
+        sname  = srv.get("name", f"Сервер {si + 1}")
         ep_val = ep["value"]
+        is_domain = ep.get("type") == "domain"
+        type_icon = "🌐" if is_domain else "🔢"
         rows.append([InlineKeyboardButton(
-            f"  {ep_val}",
+            f"{type_icon} {emoji} {ep_val}  ({sname})",
             callback_data=f"{action}_s{si}_e{ei}_{name}"
         )])
     rows.append([InlineKeyboardButton("◀️ Назад", callback_data=f"device_{name}")])
 
     await query.edit_message_text(
         f"{icon} *{_action_label(action)}* — {short}\n\n"
-        f"Выберите сервер и эндпоинт подключения:",
+        f"Выберите эндпоинт подключения:\n\n"
+        f"🌐 *Домен* — рекомендуется: скрывает реальный IP, позволяет переключать сервер без смены конфига\n"
+        f"🔢 *IP* — прямое подключение, может не работать при блокировках\n\n"
+        f"Флаг и название в скобках — сервер, к которому относится эндпоинт",
         reply_markup=InlineKeyboardMarkup(rows),
         parse_mode="Markdown"
     )
@@ -1278,6 +1276,11 @@ def _make_conf_filename(name: str, srv_name: str = None) -> str:
     if len(parts) == 2:
         return f"{parts[0]}.{srv_clean}.{parts[1]}.conf"
     return f"{name}.{srv_clean}.conf"
+
+
+def _make_vpn_filename(name: str, srv_name: str = None) -> str:
+    """Формирует имя .vpn файла: User.SERVER.Device.vpn"""
+    return _make_conf_filename(name, srv_name).replace(".conf", ".vpn")
 
 
 async def _do_send_action(query, name: str, action: str, ep: str, server: dict):
@@ -1389,7 +1392,7 @@ async def do_send_share(query, name: str, ep_key: str):
     )
     await query.message.reply_document(
         document=vpn_bytes,
-        filename=f"{name}.vpn",
+        filename=_make_vpn_filename(name),
         caption=(
             f"📤 Файл для AmneziaVPN — *{short}* ({ep_label})\n"
             f"Вставьте в приложении: + → Открыть файл"
@@ -1489,7 +1492,7 @@ async def do_send_share_direct(query, name: str, ep: str,
     )
     await query.message.reply_document(
         document=vpn_bytes,
-        filename=f"{name}.vpn",
+        filename=_make_vpn_filename(name, srv_name),
         caption=(
             f"📤 Файл для AmneziaVPN — *{short}*\n"
             f"Вставьте в приложении: + → Открыть файл"
@@ -2148,11 +2151,100 @@ async def srv_adddomain_start(update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     srv_idx = int(query.data.split("_")[-1])
     context.user_data["srv_domain"] = {"srv_idx": srv_idx}
-    await query.edit_message_text(
-        "🌐 *Добавить домен*\n\nВведите домен (например: vpn.example.com):",
-        parse_mode="Markdown"
-    )
+
+    # Собираем все эндпоинты из других серверов для быстрого выбора
+    servers = load_servers()
+    all_eps = []
+    for si, srv in enumerate(servers):
+        for ep in srv.get("endpoints", []):
+            val = ep["value"]
+            # Не предлагаем то, что уже есть на этом сервере
+            if srv_idx < len(servers) and any(
+                e["value"] == val for e in servers[srv_idx].get("endpoints", [])
+            ):
+                continue
+            emoji = srv.get("emoji", "🖥")
+            sname = srv.get("name", f"Сервер {si+1}")
+            all_eps.append((si, val, emoji, sname))
+
+    context.user_data["srv_domain"]["all_eps"] = [(v, e, s) for _, v, e, s in all_eps]
+
+    rows = []
+    for i, (val, emoji, sname) in enumerate(context.user_data["srv_domain"]["all_eps"]):
+        rows.append([InlineKeyboardButton(
+            f"{emoji} {val}  ({sname})",
+            callback_data=f"srv_ep_pick_{i}"
+        )])
+
+    prompt = "🌐 *Добавить эндпоинт*\n\nВведите домен или IP-адрес:"
+    if rows:
+        prompt = "🌐 *Добавить эндпоинт*\n\nВыберите из существующих или введите новый домен/IP:"
+
+    await query.edit_message_text(prompt, reply_markup=InlineKeyboardMarkup(rows) if rows else None, parse_mode="Markdown")
     return WAITING_SRV_DOMAIN
+
+
+async def srv_adddomain_pick(update, context: ContextTypes.DEFAULT_TYPE):
+    """Быстрый выбор существующего эндпоинта для назначения серверу."""
+    import socket as _sock
+    query = update.callback_query
+    await query.answer()
+    idx = int(query.data.split("_")[-1])
+    d = context.user_data.get("srv_domain", {})
+    srv_idx = d.get("srv_idx", 0)
+    all_eps = d.get("all_eps", [])
+
+    if idx >= len(all_eps):
+        await query.edit_message_text("❌ Эндпоинт не найден.")
+        return ConversationHandler.END
+
+    domain, _, _ = all_eps[idx]
+    context.user_data.pop("srv_domain", None)
+
+    servers = load_servers()
+    if srv_idx >= len(servers):
+        await query.edit_message_text("❌ Сервер не найден.")
+        return ConversationHandler.END
+    srv = servers[srv_idx]
+    srv_ip = srv.get("ssh", {}).get("ip", "")
+
+    verified = False
+    dns_ip = None
+    try:
+        dns_ip = _sock.gethostbyname(domain)
+        verified = (dns_ip == srv_ip) if srv_ip else False
+    except Exception:
+        pass
+
+    # Снимаем с других серверов если там уже есть
+    transferred_from = None
+    for other_idx, other_srv in enumerate(servers):
+        if other_idx == srv_idx:
+            continue
+        old_eps = other_srv.get("endpoints", [])
+        new_eps = [e for e in old_eps if e["value"] != domain]
+        if len(new_eps) < len(old_eps):
+            transferred_from = f"{other_srv.get('emoji', '')} {other_srv.get('name', '')}".strip()
+            other_srv["endpoints"] = new_eps
+            servers[other_idx] = other_srv
+
+    eps = srv.get("endpoints", [])
+    if not any(e["value"] == domain for e in eps):
+        eps.append({"value": domain, "type": "domain" if "." in domain and not domain.replace(".", "").isdigit() else "ip", "verified": verified})
+        srv["endpoints"] = eps
+        servers[srv_idx] = srv
+        save_servers(servers)
+
+    transfer_note = f"\n↩️ Снят с сервера *{transferred_from}*" if transferred_from else ""
+    dns_note = f"✅ DNS → `{dns_ip}`" if verified else (f"⚠️ DNS → `{dns_ip}`" if dns_ip else "⚠️ DNS не разрешился")
+    await query.edit_message_text(
+        f"✅ `{domain}` привязан к *{srv.get('name', '')}*\n{dns_note}{transfer_note}",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("◀️ Карточка", callback_data=f"srv_card_{srv_idx}")
+        ]])
+    )
+    return ConversationHandler.END
 
 async def srv_adddomain_receive(update, context: ContextTypes.DEFAULT_TYPE):
     """Получает домен, проверяет DNS, добавляет к серверу."""
@@ -3481,7 +3573,10 @@ def main():
     srv_domain_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(srv_adddomain_start, pattern="^srv_adddomain_\\d+$")],
         states={
-            WAITING_SRV_DOMAIN: [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_adddomain_receive)],
+            WAITING_SRV_DOMAIN: [
+                CallbackQueryHandler(srv_adddomain_pick, pattern="^srv_ep_pick_\\d+$"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, srv_adddomain_receive),
+            ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         per_chat=True,
