@@ -2169,7 +2169,7 @@ async def srv_adddomain_receive(update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
     eps = srv.get("endpoints", [])
-    # Не добавлять дубль на этом сервере
+    # Уже есть у этого сервера — ничего не делаем
     if any(e["value"] == domain for e in eps):
         await update.message.reply_text(
             f"⚠️ Домен `{domain}` уже есть у этого сервера.",
@@ -2180,21 +2180,17 @@ async def srv_adddomain_receive(update, context: ContextTypes.DEFAULT_TYPE):
         )
         return ConversationHandler.END
 
-    # Проверяем — домен не принадлежит другому серверу
+    # Если домен числится за другим сервером — снимаем его оттуда (перепривязка)
+    transferred_from = None
     for other_idx, other_srv in enumerate(servers):
         if other_idx == srv_idx:
             continue
-        if any(e["value"] == domain for e in other_srv.get("endpoints", [])):
-            other_name = f"{other_srv.get('emoji', '')} {other_srv.get('name', f'Сервер {other_idx+1}')}".strip()
-            await update.message.reply_text(
-                f"❌ Домен `{domain}` уже закреплён за сервером *{other_name}*.\n"
-                f"Один домен может принадлежать только одному серверу.",
-                parse_mode="Markdown",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("◀️ Карточка", callback_data=f"srv_card_{srv_idx}")
-                ]])
-            )
-            return ConversationHandler.END
+        old_eps = other_srv.get("endpoints", [])
+        new_eps = [e for e in old_eps if e["value"] != domain]
+        if len(new_eps) < len(old_eps):
+            transferred_from = f"{other_srv.get('emoji', '')} {other_srv.get('name', f'Сервер {other_idx+1}')}".strip()
+            other_srv["endpoints"] = new_eps
+            servers[other_idx] = other_srv
 
     eps.append({"value": domain, "type": "domain", "verified": verified})
     srv["endpoints"] = eps
@@ -2204,13 +2200,15 @@ async def srv_adddomain_receive(update, context: ContextTypes.DEFAULT_TYPE):
     if verified:
         dns_note = f"✅ DNS → `{dns_ip}` (совпадает с IP сервера)"
     elif dns_ip and srv_ip and dns_ip != srv_ip:
-        dns_note = f"⚠️ DNS → `{dns_ip}`, но IP сервера `{srv_ip}` — домен принадлежит другому серверу"
+        dns_note = f"⚠️ DNS → `{dns_ip}`, ожидается `{srv_ip}` — обновите A-запись"
     elif dns_ip:
-        dns_note = f"⚠️ DNS → `{dns_ip}` (IP сервера не задан, не могу проверить)"
+        dns_note = f"⚠️ DNS → `{dns_ip}` (IP сервера не задан)"
     else:
         dns_note = "⚠️ DNS не разрешился — проверьте правильность домена"
+
+    transfer_note = f"\n↩️ Снят с сервера *{transferred_from}*" if transferred_from else ""
     await update.message.reply_text(
-        f"✅ Домен `{domain}` добавлен к серверу *{srv.get('name', '')}*\n{dns_note}",
+        f"✅ Домен `{domain}` привязан к *{srv.get('name', '')}*\n{dns_note}{transfer_note}",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("◀️ Карточка", callback_data=f"srv_card_{srv_idx}")
