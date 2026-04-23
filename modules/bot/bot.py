@@ -1660,6 +1660,8 @@ async def show_server_card(query, srv_idx: int):
 def _ssh_read_slave_env(ip: str, port: int, login: str, password: str) -> dict:
     """Подключается к slave по SSH и читает /etc/amnezia/amneziawg/server.env.
     Проверяет SSH-соединение и наличие AWG на сервере. Бросает исключение при ошибке."""
+    if not _PARAMIKO_AVAILABLE:
+        raise RuntimeError("paramiko не установлен: pip3 install paramiko")
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     client.connect(ip, port=port, username=login, password=password, timeout=10, banner_timeout=15)
@@ -1678,6 +1680,8 @@ def _ssh_read_slave_env(ip: str, port: int, login: str, password: str) -> dict:
 def _ssh_clone_awg_to_slave(server: dict):
     """Клонирует AWG-конфиг с primary на slave: одинаковые ключи, обфускация, все клиенты.
     Slave становится точной копией primary — клиентские конфиги совместимы с обоими серверами."""
+    if not _PARAMIKO_AVAILABLE:
+        raise RuntimeError("paramiko не установлен: pip3 install paramiko")
     try:
         with open(AWG_CONF) as f:
             primary_conf = f.read()
@@ -1740,6 +1744,8 @@ def _ssh_clone_awg_to_slave(server: dict):
 def _ssh_sync_peer_to_slave(server: dict, name: str, pub: str, psk: str, ip: str):
     """Регистрирует peer клиента на slave-сервере через SSH (идемпотентно).
     ip — без /32, функция сама добавляет суффикс."""
+    if not _PARAMIKO_AVAILABLE:
+        raise RuntimeError("paramiko не установлен: pip3 install paramiko")
     ssh = server.get("ssh", {})
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -2021,6 +2027,8 @@ async def srv_del_ok(query, srv_idx: int):
 
 def _ssh_stop_slave_awg(ssh: dict):
     """SSH к slave и останавливает awg-quick@awg0."""
+    if not _PARAMIKO_AVAILABLE:
+        raise RuntimeError("paramiko не установлен: pip3 install paramiko")
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     client.connect(
