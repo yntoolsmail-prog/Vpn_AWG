@@ -1732,9 +1732,10 @@ def _ssh_clone_awg_to_slave(server: dict):
         )
         stdout.read(); stderr.read()
 
-        # Перезапускаем интерфейс
+        # Перезапускаем интерфейс — down может упасть если интерфейс уже висит
         _, stdout, stderr = client.exec_command(
-            "systemctl restart awg-quick@awg0", timeout=20
+            "awg-quick down awg0 2>/dev/null; awg-quick up /etc/amnezia/amneziawg/awg0.conf",
+            timeout=20
         )
         stdout.read(); stderr.read()
     finally:
