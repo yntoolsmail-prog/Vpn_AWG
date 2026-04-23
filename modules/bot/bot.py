@@ -1285,15 +1285,16 @@ def _make_vpn_filename(name: str, srv_name: str = None) -> str:
 
 async def _do_send_action(query, name: str, action: str, ep: str, server: dict):
     """Выполняет нужное действие (conf/qr/share) с конкретным эндпоинтом и сервером."""
-    spub     = server.get("awg_public_key") or SERVER_PUBLIC
-    sprt     = str(server.get("awg_port") or SERVER_PORT)
-    srv_name = server.get("name", "")
+    spub      = server.get("awg_public_key") or SERVER_PUBLIC
+    sprt      = str(server.get("awg_port") or SERVER_PORT)
+    srv_name  = server.get("name", "")
+    srv_emoji = server.get("emoji", "")
     if action == "conf":
         await do_send_conf_direct(query, name, ep, spub, sprt, srv_name)
     elif action == "qr":
         await do_send_qr_direct(query, name, ep, spub, sprt, srv_name)
     else:
-        await do_send_share_direct(query, name, ep, spub, sprt, srv_name)
+        await do_send_share_direct(query, name, ep, spub, sprt, srv_name, srv_emoji)
 
 # ── Финальная отправка .conf ──────────────────────────────────────────────────
 
@@ -1470,7 +1471,7 @@ async def do_send_qr_direct(query, name: str, ep: str,
 
 async def do_send_share_direct(query, name: str, ep: str,
                                 spub: str = None, sprt: str = None,
-                                srv_name: str = None):
+                                srv_name: str = None, srv_emoji: str = ""):
     """Отправляет vpn:// ссылку с указанным эндпоинтом."""
     keys = get_client_keys(name)
     if not keys:
@@ -1478,9 +1479,11 @@ async def do_send_share_direct(query, name: str, ep: str,
         return
     short    = device_short_name(name)
     prt      = sprt or SERVER_PORT
+    # Название в приложении AmneziaVPN: "🇳🇱 Admin.Nout"
+    vpn_display_name = f"{srv_emoji} {name}".strip() if srv_emoji else name
     vpn_link = make_vpn_link(
         keys["priv"], keys["pub"], keys["ip"], keys["psk"],
-        keys.get("obfs", gen_obfs()), name,
+        keys.get("obfs", gen_obfs()), vpn_display_name,
         endpoint=ep, server_public=spub, server_port=sprt
     )
     vpn_bytes = vpn_link.encode()
