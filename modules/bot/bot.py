@@ -766,6 +766,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await srv_del_confirm(query, int(data[8:]))
     elif data.startswith("srv_sync_") and is_admin:
         await srv_sync_now(query, int(data[9:]))
+    elif data == "srv_deldomain_list" and is_admin:
+        await srv_deldomain_list(query)
+    elif data.startswith("srv_deldomain_confirm_") and is_admin:
+        await srv_deldomain_confirm(query, data[len("srv_deldomain_confirm_"):])
+    elif data.startswith("srv_deldomain_ok_") and is_admin:
+        await srv_deldomain_ok(query, data[len("srv_deldomain_ok_"):])
     # srv_rename_ handled by ConversationHandler below
     elif data == "status":
         await show_status(query)
@@ -1222,12 +1228,11 @@ async def _show_ep_select(query, name: str, user_id: int, action: str):
 
     await query.edit_message_text(
         f"{icon} *{_action_label(action)}* — {short}\n\n"
-        f"Выберите эндпоинт подключения:\n\n"
-        f"🌐 *Домен* — рекомендуется: скрывает реальный IP, позволяет переключать сервер без смены конфига\n"
-        f"🔢 *IP* — прямое подключение, может не работать при блокировках\n\n"
-        f"Флаг и название в скобках — сервер, к которому относится эндпоинт",
+        f"Выберите сервер \\(страну\\) и способ подключения:\n\n"
+        f"🌐 *Домен* — рекомендуется: универсальный способ подключения, обеспечит работу даже в случае смены реального IP сервера или переезда на другой сервер\\.\n\n"
+        f"🔢 *IP* — только если домен не работает: прямое подключение к серверу, при смене IP потребуется заново скачать файл конфигурации\\.",
         reply_markup=InlineKeyboardMarkup(rows),
-        parse_mode="Markdown"
+        parse_mode="MarkdownV2"
     )
 
 async def show_conf_ep_select(query, name: str, user_id: int):
@@ -1562,6 +1567,7 @@ async def show_servers_list(query):
             f"{emoji} {sname}", callback_data=f"srv_card_{i}"
         )])
     rows.append([InlineKeyboardButton("➕ Добавить сервер", callback_data="srv_add")])
+    rows.append([InlineKeyboardButton("🗑 Удалить домен", callback_data="srv_deldomain_list")])
     rows.append([InlineKeyboardButton("◀️ Назад", callback_data="back")])
     await query.edit_message_text(
         "\n".join(lines),
@@ -1572,6 +1578,71 @@ async def show_servers_list(query):
 def _count_peers_in_conf(conf_text: str) -> int:
     """Считает количество [Peer] блоков в awg0.conf."""
     return conf_text.count("\n[Peer]") + (1 if conf_text.startswith("[Peer]") else 0)
+
+
+async def srv_deldomain_list(query):
+    """Показывает все домены во всех серверах для удаления."""
+    servers = load_servers()
+    rows = []
+    for si, srv in enumerate(servers):
+        for ep in srv.get("endpoints", []):
+            emoji = srv.get("emoji", "🖥")
+            sname = srv.get("name", f"Сервер {si+1}")
+            val   = ep["value"]
+            rows.append([InlineKeyboardButton(
+                f"🗑 {emoji} {val}  ({sname})",
+                callback_data=f"srv_deldomain_confirm_{val}"
+            )])
+    if not rows:
+        await query.answer("Нет доменов для удаления.", show_alert=True)
+        return
+    rows.append([InlineKeyboardButton("◀️ Назад", callback_data="servers")])
+    await query.edit_message_text(
+        "🗑 *Удалить домен из системы*\n\nВыберите домен:",
+        reply_markup=InlineKeyboardMarkup(rows),
+        parse_mode="Markdown"
+    )
+
+
+async def srv_deldomain_confirm(query, domain: str):
+    """Запрашивает подтверждение удаления домена."""
+    servers = load_servers()
+    # Находим сервер-владелец
+    owner = None
+    for srv in servers:
+        if any(e["value"] == domain for e in srv.get("endpoints", [])):
+            owner = f"{srv.get('emoji', '')} {srv.get('name', '')}".strip()
+            break
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🗑 Да, удалить", callback_data=f"srv_deldomain_ok_{domain}")],
+        [InlineKeyboardButton("◀️ Назад",        callback_data="srv_deldomain_list")],
+    ])
+    owner_note = f"\nСейчас привязан к: *{owner}*" if owner else ""
+    await query.edit_message_text(
+        f"Удалить домен `{domain}`?{owner_note}",
+        reply_markup=kb,
+        parse_mode="Markdown"
+    )
+
+
+async def srv_deldomain_ok(query, domain: str):
+    """Удаляет домен из всех серверов."""
+    servers = load_servers()
+    removed_from = []
+    for si, srv in enumerate(servers):
+        old_eps = srv.get("endpoints", [])
+        new_eps = [e for e in old_eps if e["value"] != domain]
+        if len(new_eps) < len(old_eps):
+            removed_from.append(f"{srv.get('emoji', '')} {srv.get('name', '')}".strip())
+            srv["endpoints"] = new_eps
+            servers[si] = srv
+    save_servers(servers)
+    note = f" (был на: {', '.join(removed_from)})" if removed_from else ""
+    await query.edit_message_text(
+        f"✅ Домен `{domain}` удалён{note}.",
+        reply_markup=back_kb("servers"),
+        parse_mode="Markdown"
+    )
 
 
 def _ssh_get_slave_peer_count(server: dict) -> int | None:
