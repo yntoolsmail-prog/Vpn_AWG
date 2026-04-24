@@ -78,7 +78,7 @@ SITES = {
     },
     "okko": {
         "name": "Okko", "emoji": "🎥",
-        "domains": ["okko.tv", "static.okko.tv"],
+        "domains": ["okko.tv", "static.okko.tv", "okko.sport"],
     },
     "trikolor": {
         "name": "Триколор", "emoji": "📡",
@@ -116,7 +116,7 @@ SITES = {
     },
     "mos": {
         "name": "Mos.ru", "emoji": "🏙",
-        "domains": ["mos.ru", "www.mos.ru", "lk.mos.ru"],
+        "domains": ["mos.ru", "www.mos.ru"],
     },
     "nalog": {
         "name": "ФНС / Налоги", "emoji": "📋",
