@@ -604,28 +604,53 @@ def run_subnet_daemon():
             logger.info(f"subnet_daemon: {domain} — готово")
         except Exception as e:
             logger.warning(f"subnet_daemon: {domain} — ошибка: {e}")
+    # Агрегация по сайтам — после того как все домены обработаны
+    with _CACHE_LOCK:
+        cache = load_subnet_cache()
+        _compute_site_results(cache)
+        with open(SUBNET_CACHE_FILE, "w") as f:
+            json.dump(cache, f, ensure_ascii=False, indent=2)
     logger.info("subnet_daemon: завершён")
+
+def _compute_site_results(cache: dict):
+    """Объединяет все IP всех доменов одного сайта → агрегированный result.
+    Записывает в cache['_sites']. Вызывается внутри _CACHE_LOCK."""
+    site_results = {}
+    for key, site in SITES.items():
+        all_ips: list = []
+        for domain in site.get("domains", []):
+            for rec in cache.get(domain, {}).get("records", []):
+                all_ips.extend(rec.get("ips", []))
+        if all_ips:
+            site_results[key] = _ips_to_result(list(set(all_ips)))
+    cache["_sites"] = site_results
 
 # ── Split tunneling ─────────────────────────────────────────────────────────────
 def build_allowed_ips(selected_keys, extra_domains=None) -> str:
     excluded: set = set()
     cache = load_subnet_cache()
+    site_agg = cache.get("_sites", {})
 
     for key in selected_keys:
         site = SITES.get(key, {})
         for subnet in site.get("subnets", []):
             excluded.add(subnet)
-        for domain in site.get("domains", []):
-            cached = cache.get(domain, {}).get("result")
-            if cached:
-                excluded.update(cached)
-            else:
-                try:
-                    results = socket.getaddrinfo(domain, None, socket.AF_INET)
-                    for r in results:
-                        excluded.add(f"{r[4][0]}/32")
-                except Exception:
-                    pass
+        # Сначала пробуем агрегированный результат по всему сайту
+        if site_agg.get(key):
+            excluded.update(site_agg[key])
+        else:
+            # Fallback: per-domain или socket
+            for domain in site.get("domains", []):
+                cached = cache.get(domain, {}).get("result")
+                if cached:
+                    excluded.update(cached)
+                else:
+                    try:
+                        results = socket.getaddrinfo(domain, None, socket.AF_INET)
+                        for r in results:
+                            excluded.add(f"{r[4][0]}/32")
+                    except Exception:
+                        pass
 
     # Кастомные домены / IP-адреса
     for entry in (extra_domains or []):

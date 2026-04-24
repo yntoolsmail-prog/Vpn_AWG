@@ -30,7 +30,7 @@ SITES = {
     },
     "raiffeisen": {
         "name": "Райффайзен", "emoji": "🟠",
-        "domains": ["raiffeisen.ru", "ecom.raiffeisen.ru"],
+        "domains": ["raiffeisen.ru"],
     },
     "sbp": {
         "name": "СБП / НСПК", "emoji": "⚡",
@@ -39,11 +39,11 @@ SITES = {
     # Маркетплейсы
     "ozon": {
         "name": "Ozon", "emoji": "🔵",
-        "domains": ["ozon.ru", "static.ozon.ru", "cdn1.ozone.ru"],
+        "domains": ["ozon.ru", "cdn1.ozone.ru"],
     },
     "wildberries": {
         "name": "Wildberries", "emoji": "🟣",
-        "domains": ["wildberries.ru", "wbstatic.net", "wbbasket.ru", "wbx-static.com"],
+        "domains": ["wildberries.ru", "wbstatic.net"],
     },
     "avito": {
         "name": "Авито", "emoji": "🟢",
@@ -66,7 +66,7 @@ SITES = {
     },
     "rutube": {
         "name": "Rutube", "emoji": "📺",
-        "domains": ["rutube.ru", "pics.rutube.ru", "strm.rutube.ru"],
+        "domains": ["rutube.ru"],
     },
     "vkvideo": {
         "name": "VK Видео", "emoji": "📱",
@@ -95,12 +95,12 @@ SITES = {
     },
     "delivery": {
         "name": "Яндекс Еда / Самокат", "emoji": "🍔",
-        "domains": ["eda.yandex.ru", "eats.yandex.ru", "samokat.ru", "delivery-club.ru"],
+        "domains": ["eda.yandex.ru", "samokat.ru", "delivery-club.ru"],
     },
     # ЖКХ
     "zhkh_msk": {
-        "name": "ЖКХ Москва (Мосэнергосбыт, ЕИРЦ)", "emoji": "🏘",
-        "domains": ["mosenergosbyt.ru", "lkk.mosenergosbyt.ru", "eirc-mo.ru"],
+        "name": "ЖКХ Москва (Мосэнергосбыт)", "emoji": "🏘",
+        "domains": ["mosenergosbyt.ru"],
     },
     "zhkh_fed": {
         "name": "ГИС ЖКХ (федеральный)", "emoji": "🏠",
@@ -111,7 +111,7 @@ SITES = {
         "name": "Госуслуги", "emoji": "🏛",
         "domains": [
             "gosuslugi.ru", "esia.gosuslugi.ru", "lk.gosuslugi.ru",
-            "beta.gosuslugi.ru", "oplata.gosuslugi.ru",
+            "oplata.gosuslugi.ru",
         ],
     },
     "mos": {
@@ -124,7 +124,7 @@ SITES = {
     },
     "emias": {
         "name": "ЕМИАС / Здоровье", "emoji": "🏥",
-        "domains": ["emias.info", "moscow.emias.info"],
+        "domains": ["emias.info"],
     },
     "gibdd": {
         "name": "ГИБДД / Штрафы", "emoji": "🚗",
@@ -141,11 +141,11 @@ SITES = {
     # Соцсети
     "vk": {
         "name": "ВКонтакте", "emoji": "💙",
-        "domains": ["vk.com", "vk.me", "userapi.com", "vkuseraudio.net", "vk-cdn.net"],
+        "domains": ["vk.com", "vk.me", "userapi.com", "vkuseraudio.net"],
     },
     "ok": {
         "name": "Одноклассники", "emoji": "🟠",
-        "domains": ["ok.ru", "www.ok.ru", "udn.odnoklassniki.ru"],
+        "domains": ["ok.ru", "www.ok.ru"],
     },
     # Прочее
     "hh": {
