@@ -2687,7 +2687,7 @@ async def show_maintenance(query):
         [InlineKeyboardButton("📦 Проверить версию библиотеки", callback_data="maint_ptb")],
         [InlineKeyboardButton("🕐 Сменить часовой пояс",        callback_data="maint_tz")],
         [InlineKeyboardButton("🔄 Обновить IP сервера",         callback_data="maint_update_ip")],
-        [InlineKeyboardButton("🌐 Обновить кэш подсетей",       callback_data="refresh_subnets")],
+        [InlineKeyboardButton("♻️ Обновить IP исключений",        callback_data="refresh_subnets")],
         [InlineKeyboardButton("✅ Отмечено — всё ок",            callback_data="maint_done")],
         [InlineKeyboardButton("◀️ В меню",                       callback_data="back")],
     ])

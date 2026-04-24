@@ -486,25 +486,58 @@ def load_subnet_cache() -> dict:
     except Exception:
         return {}
 
+def _dns_query(domain: str, ns: str, timeout: float = 4.0) -> list:
+    """A-запрос к конкретному DNS-серверу через raw UDP. Без внешних зависимостей."""
+    import struct as _struct
+    # Минимальный DNS query пакет
+    tx_id  = os.urandom(2)
+    header = tx_id + b'\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00'
+    qname  = b''.join(bytes([len(p)]) + p.encode() for p in domain.split('.'))
+    packet = header + qname + b'\x00\x00\x01\x00\x01'  # null + type A + class IN
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(timeout)
+        sock.sendto(packet, (ns, 53))
+        data, _ = sock.recvfrom(4096)
+        sock.close()
+    except Exception:
+        return []
+    ips = []
+    try:
+        ancount = _struct.unpack('>H', data[6:8])[0]
+        pos = 12
+        # Пропустить секцию вопроса
+        while data[pos]:
+            pos += data[pos] + 1
+        pos += 5  # null + type(2) + class(2)
+        for _ in range(ancount):
+            # Имя: сжатый указатель или обычная метка
+            if data[pos] & 0xC0 == 0xC0:
+                pos += 2
+            else:
+                while data[pos]:
+                    pos += data[pos] + 1
+                pos += 1
+            rtype, _, _, rdlen = _struct.unpack('>HHIH', data[pos:pos + 10])
+            pos += 10
+            if rtype == 1 and rdlen == 4:  # A-запись
+                ips.append('.'.join(str(b) for b in data[pos:pos + 4]))
+            pos += rdlen
+    except Exception:
+        pass
+    return ips
+
 def _collect_ips(domain: str) -> list:
     """3 раунда × 6 DNS-серверов → уникальные IPv4 для домена."""
     ips: set = set()
     for _ in range(_DNS_ROUNDS):
         for ns in _DNS_SERVERS:
-            try:
-                out = subprocess.check_output(
-                    ["dig", "+short", "A", domain, f"@{ns}"],
-                    text=True, timeout=5
-                )
-                for line in out.splitlines():
-                    line = line.strip()
-                    try:
-                        ipaddress.IPv4Address(line)
-                        ips.add(line)
-                    except ValueError:
-                        pass
-            except Exception:
-                pass
+            for ip in _dns_query(domain, ns):
+                try:
+                    ipaddress.IPv4Address(ip)
+                    ips.add(ip)
+                except ValueError:
+                    pass
     return list(ips)
 
 def _ips_to_result(all_ips: list) -> list:
