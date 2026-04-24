@@ -2,7 +2,7 @@
 # bot.py — Telegram-бот AmneziaWG
 # Version: 3.0
 # Вся бизнес-логика — в awg_core.py и sites_data.py
-import os, subprocess, logging, json, time, tempfile, shutil, re, asyncio
+import os, subprocess, logging, json, time, tempfile, shutil, re, asyncio, threading, ipaddress
 try:
     import paramiko
     _PARAMIKO_AVAILABLE = True
@@ -32,6 +32,7 @@ from awg_core import (
     make_vpn_link, read_iface_bytes, remove_client_from_awg, resolve_endpoint,
     save_bw_peak, save_client_excl, save_users,
     load_servers, save_servers, invalidate_servers_cache,
+    process_domain, run_subnet_daemon,
 )
 from sites_data import (
     SITES, CATEGORIES, DEFAULT_SELECTED, ALL_SELECTABLE,
@@ -845,6 +846,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await do_set_tz(query, data[7:])
     elif data == "maint_done" and is_admin:
         await do_maint_done(query)
+    elif data == "refresh_subnets" and is_admin:
+        await do_refresh_subnets(query)
     elif data == "maint_update_ip" and is_admin:
         await query.edit_message_text("⏳ Определяю текущий IP сервера...")
         real_ip = get_real_server_ip()
@@ -2684,6 +2687,7 @@ async def show_maintenance(query):
         [InlineKeyboardButton("📦 Проверить версию библиотеки", callback_data="maint_ptb")],
         [InlineKeyboardButton("🕐 Сменить часовой пояс",        callback_data="maint_tz")],
         [InlineKeyboardButton("🔄 Обновить IP сервера",         callback_data="maint_update_ip")],
+        [InlineKeyboardButton("🌐 Обновить кэш подсетей",       callback_data="refresh_subnets")],
         [InlineKeyboardButton("✅ Отмечено — всё ок",            callback_data="maint_done")],
         [InlineKeyboardButton("◀️ В меню",                       callback_data="back")],
     ])
@@ -2841,6 +2845,19 @@ async def do_maint_done(query):
         f"✅ Техобслуживание отмечено\n\nДата: {now}\nСледующее напоминание через 6 месяцев.",
         reply_markup=back_kb()
     )
+
+async def do_refresh_subnets(query):
+    """Запускает полное обновление кэша подсетей в фоне."""
+    await query.edit_message_text(
+        "🌐 Обновление кэша подсетей запущено в фоне.\n\n"
+        "Опрашиваются все домены из базы и исключений пользователей.\n"
+        "Обычно занимает 15–60 секунд.",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("◀️ Техобслуживание", callback_data="maintenance")
+        ]])
+    )
+    threading.Thread(target=run_subnet_daemon, daemon=True).start()
+
 
 async def maintenance_reminder(context: ContextTypes.DEFAULT_TYPE):
     """Напоминание раз в 6 месяцев — запускается через job_queue"""
@@ -3146,6 +3163,11 @@ async def sites_add_custom_receive(update: Update, context: ContextTypes.DEFAULT
         custom.append(entry)
         context.user_data["sites_custom"] = custom
         note = f"✅ `{entry}` добавлен в исключения."
+        # Если это домен (не IP/CIDR) — запускаем DNS-зондирование в фоне
+        try:
+            ipaddress.ip_network(entry, strict=False)
+        except ValueError:
+            threading.Thread(target=process_domain, args=(entry,), daemon=True).start()
     else:
         note = f"ℹ️ `{entry}` уже есть в списке."
 

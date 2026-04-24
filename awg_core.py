@@ -20,12 +20,16 @@ BW_LOG_FILE      = "/var/log/awg-bw.log"
 BW_PEAK_FILE     = "/etc/amnezia/amneziawg/bw_peak.json"
 EXCL_EXT         = ".excl.json"
 SERVERS_FILE     = "/etc/amnezia/amneziawg/servers.json"
+SUBNET_CACHE_FILE = "/etc/amnezia/amneziawg/subnet_cache.json"
 
 logger = logging.getLogger(__name__)
 
 # Глобальный lock для create_client — защита от гонки при одновременном создании.
 # threading.Lock работает и в sync (Flask/threaded) и в async (bot.py) контексте.
 _AWG_LOCK = threading.Lock()
+
+# Lock для атомарного чтения/записи subnet_cache.json
+_CACHE_LOCK = threading.Lock()
 
 # ── Загрузка конфигов ──────────────────────────────────────────────────────────
 def load_env(path: str) -> dict:
@@ -470,20 +474,126 @@ async def create_client(name: str) -> dict:
 
         return {"priv": priv, "pub": pub, "ip": ip, "psk": psk, "obfs": obfs}
 
+# ── Subnet cache (демон) ────────────────────────────────────────────────────────
+
+_DNS_SERVERS = ["127.0.0.53", "1.1.1.1", "8.8.8.8", "77.88.8.8", "9.9.9.9", "208.67.222.222"]
+_DNS_ROUNDS  = 3
+
+def load_subnet_cache() -> dict:
+    try:
+        with open(SUBNET_CACHE_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _collect_ips(domain: str) -> list:
+    """3 раунда × 6 DNS-серверов → уникальные IPv4 для домена."""
+    ips: set = set()
+    for _ in range(_DNS_ROUNDS):
+        for ns in _DNS_SERVERS:
+            try:
+                out = subprocess.check_output(
+                    ["dig", "+short", "A", domain, f"@{ns}"],
+                    text=True, timeout=5
+                )
+                for line in out.splitlines():
+                    line = line.strip()
+                    try:
+                        ipaddress.IPv4Address(line)
+                        ips.add(line)
+                    except ValueError:
+                        pass
+            except Exception:
+                pass
+    return list(ips)
+
+def _ips_to_result(all_ips: list) -> list:
+    """Группирует IP по /24. ≥2 в одном /24 → исключаем /24, иначе → /32."""
+    groups: dict = {}
+    for ip in all_ips:
+        prefix = ".".join(ip.split(".")[:3])
+        groups.setdefault(prefix, set()).add(ip)
+    result = []
+    for prefix, ips in groups.items():
+        if len(ips) >= 2:
+            result.append(f"{prefix}.0/24")
+        else:
+            result.append(f"{next(iter(ips))}/32")
+    return sorted(result)
+
+def process_domain(domain: str):
+    """DNS-зондирование одного домена, обновляет subnet_cache.json."""
+    new_ips = _collect_ips(domain)
+    with _CACHE_LOCK:
+        cache = load_subnet_cache()
+        entry   = cache.get(domain, {"records": []})
+        records = entry.get("records", [])
+        records.append({"ts": int(time.time()), "ips": new_ips})
+        if len(records) > 7:
+            records = records[-7:]
+        all_ips: list = []
+        for rec in records:
+            all_ips.extend(rec.get("ips", []))
+        cache[domain] = {
+            "records":    records,
+            "result":     _ips_to_result(list(set(all_ips))),
+            "updated_at": int(time.time()),
+        }
+        with open(SUBNET_CACHE_FILE, "w") as f:
+            json.dump(cache, f, ensure_ascii=False, indent=2)
+
+def get_all_tracked_domains() -> set:
+    """Все домены: статика из SITES + кастомные из всех .excl.json клиентов."""
+    domains: set = set()
+    for site in SITES.values():
+        for d in site.get("domains", []):
+            domains.add(d)
+    if os.path.isdir(CLIENTS_DIR):
+        for fname in os.listdir(CLIENTS_DIR):
+            if fname.endswith(EXCL_EXT):
+                name = fname[:-len(EXCL_EXT)]
+                excl = load_client_excl(name)
+                if excl:
+                    for entry in excl.get("custom_domains", []):
+                        try:
+                            ipaddress.ip_network(entry, strict=False)
+                        except ValueError:
+                            domains.add(entry)
+    return domains
+
+def run_subnet_daemon():
+    """Полный проход: обрабатывает все домены и обновляет кэш."""
+    domains = get_all_tracked_domains()
+    logger.info(f"subnet_daemon: обработка {len(domains)} доменов")
+    for domain in sorted(domains):
+        try:
+            process_domain(domain)
+            logger.info(f"subnet_daemon: {domain} — готово")
+        except Exception as e:
+            logger.warning(f"subnet_daemon: {domain} — ошибка: {e}")
+    logger.info("subnet_daemon: завершён")
+
 # ── Split tunneling ─────────────────────────────────────────────────────────────
 def build_allowed_ips(selected_keys, extra_domains=None) -> str:
-    excluded: set[str] = set()
+    excluded: set = set()
+    cache = load_subnet_cache()
+
     for key in selected_keys:
         site = SITES.get(key, {})
         for subnet in site.get("subnets", []):
             excluded.add(subnet)
         for domain in site.get("domains", []):
-            try:
-                results = socket.getaddrinfo(domain, None, socket.AF_INET)
-                for r in results:
-                    excluded.add(f"{r[4][0]}/32")
-            except Exception:
-                pass
+            cached = cache.get(domain, {}).get("result")
+            if cached:
+                excluded.update(cached)
+            else:
+                try:
+                    results = socket.getaddrinfo(domain, None, socket.AF_INET)
+                    for r in results:
+                        excluded.add(f"{r[4][0]}/32")
+                except Exception:
+                    pass
+
     # Кастомные домены / IP-адреса
     for entry in (extra_domains or []):
         entry = entry.strip()
@@ -495,12 +605,16 @@ def build_allowed_ips(selected_keys, extra_domains=None) -> str:
             continue
         except ValueError:
             pass
-        try:
-            results = socket.getaddrinfo(entry, None, socket.AF_INET)
-            for r in results:
-                excluded.add(f"{r[4][0]}/32")
-        except Exception:
-            pass
+        cached = cache.get(entry, {}).get("result")
+        if cached:
+            excluded.update(cached)
+        else:
+            try:
+                results = socket.getaddrinfo(entry, None, socket.AF_INET)
+                for r in results:
+                    excluded.add(f"{r[4][0]}/32")
+            except Exception:
+                pass
     if not excluded:
         return "0.0.0.0/0"
     allowed = [ipaddress.ip_network("0.0.0.0/0")]
@@ -1019,6 +1133,8 @@ def create_backup(prefix: str = "awg_backup") -> str:
         tar.add(CLIENTS_DIR, arcname="clients")
         if os.path.exists(USERS_FILE):
             tar.add(USERS_FILE, arcname="users.json")
+        if os.path.exists(SUBNET_CACHE_FILE):
+            tar.add(SUBNET_CACHE_FILE, arcname="subnet_cache.json")
     return backup_path
 
 # ── Техобслуживание ─────────────────────────────────────────────────────────────
