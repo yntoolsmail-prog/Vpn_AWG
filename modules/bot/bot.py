@@ -2851,12 +2851,7 @@ async def do_maint_done(query):
 async def do_refresh_subnets(query, context):
     """Запускает полное обновление кэша подсетей в фоне."""
     if _SUBNET_REFRESH_RUNNING.is_set():
-        await query.edit_message_text(
-            "⏳ Обновление уже выполняется.\n\nПодождите завершения.",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("◀️ Техобслуживание", callback_data="maintenance")
-            ]])
-        )
+        await query.answer()
         return
 
     _SUBNET_REFRESH_RUNNING.set()
