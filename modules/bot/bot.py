@@ -1311,7 +1311,7 @@ async def _do_send_action(query, name: str, action: str, ep: str, server: dict):
 
 async def do_send_conf(query, name: str, ep_key: str):
     """Генерирует .conf в памяти (с сохранёнными исключениями) и отправляет в чат."""
-    allowed_ips = get_allowed_ips_for_client(name)
+    allowed_ips = await asyncio.get_running_loop().run_in_executor(None, get_allowed_ips_for_client, name)
     short    = device_short_name(name)
     ep       = resolve_endpoint(ep_key)
     content  = (make_conf_for_client(name, ep, allowed_ips) or "").encode()
@@ -1334,7 +1334,7 @@ async def do_send_conf(query, name: str, ep_key: str):
 
 async def do_send_qr(query, name: str, ep_key: str):
     """Генерирует .conf в памяти (с сохранёнными исключениями) → QR → отправляет."""
-    allowed_ips = get_allowed_ips_for_client(name)
+    allowed_ips = await asyncio.get_running_loop().run_in_executor(None, get_allowed_ips_for_client, name)
     short   = device_short_name(name)
     ep      = resolve_endpoint(ep_key)
     content = (make_conf_for_client(name, ep, allowed_ips) or "").encode()
@@ -1419,7 +1419,7 @@ async def do_send_conf_direct(query, name: str, ep: str,
                                spub: str = None, sprt: str = None,
                                srv_name: str = None):
     """Отправляет .conf с указанным эндпоинтом и параметрами сервера."""
-    allowed_ips = get_allowed_ips_for_client(name)
+    allowed_ips = await asyncio.get_running_loop().run_in_executor(None, get_allowed_ips_for_client, name)
     short   = device_short_name(name)
     prt     = sprt or SERVER_PORT
     content = (make_conf_for_client_ep(name, ep, spub, sprt, allowed_ips) or "").encode()
@@ -1440,7 +1440,7 @@ async def do_send_qr_direct(query, name: str, ep: str,
                              spub: str = None, sprt: str = None,
                              srv_name: str = None):
     """Отправляет QR с указанным эндпоинтом."""
-    allowed_ips = get_allowed_ips_for_client(name)
+    allowed_ips = await asyncio.get_running_loop().run_in_executor(None, get_allowed_ips_for_client, name)
     short   = device_short_name(name)
     prt     = sprt or SERVER_PORT
     content = (make_conf_for_client_ep(name, ep, spub, sprt, allowed_ips) or "").encode()

@@ -684,19 +684,29 @@ def build_allowed_ips(selected_keys, extra_domains=None) -> str:
                 pass
     if not excluded:
         return "0.0.0.0/0"
-    allowed = [ipaddress.ip_network("0.0.0.0/0")]
-    for net_str in excluded:
-        target = ipaddress.ip_network(net_str, strict=False)
-        new_allowed = []
-        for net in allowed:
-            if target.overlaps(net):
-                new_allowed.extend(net.address_exclude(target))
-            else:
-                new_allowed.append(net)
-        allowed = new_allowed
-    return ", ".join(
-        str(n) for n in sorted(allowed, key=lambda n: (n.network_address, n.prefixlen))
-    )
+    excl_nets = []
+    for s in excluded:
+        try:
+            excl_nets.append(ipaddress.ip_network(s, strict=False))
+        except ValueError:
+            pass
+    if not excl_nets:
+        return "0.0.0.0/0"
+    # Схлопываем пересекающиеся/смежные исключения, затем берём дополнение за один проход
+    collapsed = list(ipaddress.collapse_addresses(excl_nets))
+    allowed = []
+    start = ipaddress.ip_address("0.0.0.0")
+    end   = ipaddress.ip_address("255.255.255.255")
+    for net in collapsed:
+        if net.network_address > start:
+            allowed.extend(ipaddress.summarize_address_range(start, net.network_address - 1))
+        if net.broadcast_address >= end:
+            start = None
+            break
+        start = net.broadcast_address + 1
+    if start is not None and start <= end:
+        allowed.extend(ipaddress.summarize_address_range(start, end))
+    return ", ".join(str(n) for n in allowed) if allowed else "0.0.0.0/0"
 
 # ── Форматирование ──────────────────────────────────────────────────────────────
 def fmt_bytes(b: int) -> str:
