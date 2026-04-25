@@ -489,6 +489,10 @@ def load_subnet_cache() -> dict:
 def _dns_query(domain: str, ns: str, timeout: float = 4.0) -> list:
     """A-запрос к конкретному DNS-серверу через raw UDP. Без внешних зависимостей."""
     import struct as _struct
+    try:
+        domain = '.'.join(lbl.encode('idna').decode('ascii') for lbl in domain.split('.'))
+    except (UnicodeError, UnicodeDecodeError):
+        pass
     # Минимальный DNS query пакет
     tx_id  = os.urandom(2)
     header = tx_id + b'\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00'

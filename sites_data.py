@@ -31,31 +31,25 @@ SITES = {
         "name": "ВТБ", "emoji": "🔵",
         "domains": [
             "vtb.ru", "www.vtb.ru", "online.vtb.ru", "lk.vtb.ru",
-            "auth.lk.vtb.ru", "vtb24.ru", "втб.рф",
+            "auth.lk.vtb.ru", "vtb24.ru",
         ],
     },
     "raiffeisen": {
         "name": "Райффайзен", "emoji": "🟠",
-        "domains": [
-            "raiffeisen.ru", "www.raiffeisen.ru", "online.raiffeisen.ru",
-            "raiffeisenbank.ru", "raif.ru", "pay.raif.ru", "rzb.ru",
-        ],
+        "domains": ["online.raiffeisen.ru", "pay.raif.ru"],
     },
     "sbp": {
         "name": "СБП / НСПК", "emoji": "⚡",
-        "domains": [
-            "sbp.nspk.ru", "nspk.ru", "qr.nspk.ru",
-            "mironline.ru", "pay.mironline.ru", "vamprivet.ru",
-        ],
+        "domains": ["sbp.nspk.ru", "nspk.ru", "qr.nspk.ru", "pay.mironline.ru", "vamprivet.ru"],
     },
     # Маркетплейсы
     "ozon": {
         "name": "Ozon", "emoji": "🔵",
-        "domains": ["ozon.ru", "ozone.ru", "cdn1.ozone.ru", "o3.ru", "ozon-dostavka.ru", "finance.ozon.ru"],
+        "domains": ["ozon.ru", "ozone.ru", "cdn1.ozone.ru", "finance.ozon.ru"],
     },
     "wildberries": {
         "name": "Wildberries", "emoji": "🟣",
-        "domains": ["wildberries.ru", "wb.ru", "wbstatic.net", "wbbasket.ru", "paywb.ru", "wb-bank.ru"],
+        "domains": ["wildberries.ru", "wb.ru", "wbstatic.net", "paywb.ru", "wb-bank.ru"],
     },
     "avito": {
         "name": "Авито", "emoji": "🟢",
@@ -77,16 +71,16 @@ SITES = {
         "name": "Кинопоиск", "emoji": "🎬",
         "domains": [
             "kinopoisk.ru", "www.kinopoisk.ru", "hd.kinopoisk.ru", "graphql.kinopoisk.ru",
-            "ott.yandex.net", "widevine-proxy.ott.yandex.ru", "fairplay-proxy.ott.yandex.ru",
+            "widevine-proxy.ott.yandex.ru", "fairplay-proxy.ott.yandex.ru",
         ],
     },
     "rutube": {
         "name": "Rutube", "emoji": "📺",
-        "domains": ["rutube.ru", "rutube.sport", "strm.rutube.ru", "pic.rutube.ru"],
+        "domains": ["rutube.ru", "rutube.sport", "pic.rutube.ru"],
     },
     "vkvideo": {
         "name": "VK Видео", "emoji": "📱",
-        "domains": ["vkvideo.ru", "live.vkvideo.ru", "vkuservideo.net", "vkuservideo.ru"],
+        "domains": ["vkvideo.ru", "vkuservideo.net", "vkuservideo.ru"],
     },
     "ivi": {
         "name": "Иви", "emoji": "🍿",
@@ -98,7 +92,7 @@ SITES = {
     },
     "trikolor": {
         "name": "Триколор", "emoji": "📡",
-        "domains": ["tricolor.ru", "tricolor.tv", "trikolor.tv", "kino.tricolor.ru", "sso.tricolor.ru"],
+        "domains": ["tricolor.ru", "sso.tricolor.ru"],
     },
     "altplayers": {
         "name": "Прочие плееры", "emoji": "▶️",
@@ -107,17 +101,11 @@ SITES = {
     # Транспорт и доставка
     "rzd": {
         "name": "РЖД", "emoji": "🚂",
-        "domains": [
-            "rzd.ru", "www.rzd.ru", "pass.rzd.ru", "ticket.rzd.ru",
-            "travel.rzd.ru", "rzd-bonus.ru",
-        ],
+        "domains": ["rzd.ru", "rzd-bonus.ru", "travel.rzd.ru"],
     },
     "pochta": {
         "name": "Почта России", "emoji": "📬",
-        "domains": [
-            "pochta.ru", "www.pochta.ru", "tracking.pochta.ru",
-            "otpravka.pochta.ru", "lk.pochta.ru",
-        ],
+        "domains": ["pochta.ru", "www.pochta.ru", "tracking.pochta.ru", "otpravka.pochta.ru"],
     },
     "delivery": {
         "name": "Яндекс Еда / Самокат", "emoji": "🍔",
@@ -157,7 +145,7 @@ SITES = {
     },
     "gibdd": {
         "name": "ГИБДД / Штрафы", "emoji": "🚗",
-        "domains": ["gibdd.ru", "www.gibdd.ru", "service.gibdd.ru", "xn--b1aew.xn--p1ai"],
+        "domains": ["gibdd.ru", "www.gibdd.ru", "xn--b1aew.xn--p1ai"],
     },
     "rosreestr": {
         "name": "Росреестр", "emoji": "🏦",
@@ -170,10 +158,7 @@ SITES = {
     # Соцсети
     "vk": {
         "name": "ВКонтакте", "emoji": "💙",
-        "domains": [
-            "vk.com", "vk.ru", "vk.me", "vkontakte.ru",
-            "userapi.com", "vkuseraudio.net", "vkuserphoto.ru",
-        ],
+        "domains": ["vk.com", "userapi.com", "live.vkvideo.ru"],
     },
     "ok": {
         "name": "Одноклассники", "emoji": "🟠",
@@ -183,7 +168,7 @@ SITES = {
     "rostelecom": {
         "name": "Ростелеком", "emoji": "📡",
         "domains": [
-            "rt.ru", "www.rt.ru", "rostelecom.ru", "www.rostelecom.ru",
+            "rt.ru", "www.rt.ru", "rostelecom.ru",
             "msk.rt.ru", "company.rt.ru", "lk.rt.ru", "id.rt.ru",
             "wink.ru", "wink.rt.ru", "rtcloud.ru",
         ],
@@ -195,7 +180,7 @@ SITES = {
     },
     "2gis": {
         "name": "2ГИС", "emoji": "🗺",
-        "domains": ["2gis.ru", "2gis.com", "maps.2gis.com", "account.2gis.com"],
+        "domains": ["2gis.ru", "2gis.com", "account.2gis.com"],
     },
 }
 
