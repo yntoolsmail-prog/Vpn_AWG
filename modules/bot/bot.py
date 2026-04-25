@@ -847,7 +847,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "maint_done" and is_admin:
         await do_maint_done(query)
     elif data == "refresh_subnets" and is_admin:
-        await do_refresh_subnets(query)
+        await do_refresh_subnets(query, context)
     elif data == "maint_update_ip" and is_admin:
         await query.edit_message_text("⏳ Определяю текущий IP сервера...")
         real_ip = get_real_server_ip()
@@ -2846,7 +2846,7 @@ async def do_maint_done(query):
         reply_markup=back_kb()
     )
 
-async def do_refresh_subnets(query):
+async def do_refresh_subnets(query, context):
     """Запускает полное обновление кэша подсетей в фоне."""
     await query.edit_message_text(
         "🌐 Обновление кэша подсетей запущено в фоне.\n\n"
@@ -2856,7 +2856,28 @@ async def do_refresh_subnets(query):
             InlineKeyboardButton("◀️ Техобслуживание", callback_data="maintenance")
         ]])
     )
-    threading.Thread(target=run_subnet_daemon, daemon=True).start()
+    chat_id = query.message.chat_id
+    msg_id  = query.message.message_id
+    loop    = asyncio.get_running_loop()
+    bot     = context.bot
+
+    def _run():
+        try:
+            run_subnet_daemon()
+            text = "✅ Кэш подсетей обновлён."
+        except Exception as e:
+            text = f"❌ Ошибка обновления: {e}"
+        asyncio.run_coroutine_threadsafe(
+            bot.edit_message_text(
+                chat_id=chat_id, message_id=msg_id, text=text,
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("◀️ Техобслуживание", callback_data="maintenance")
+                ]])
+            ),
+            loop
+        )
+
+    threading.Thread(target=_run, daemon=True).start()
 
 
 async def maintenance_reminder(context: ContextTypes.DEFAULT_TYPE):
