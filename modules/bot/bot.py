@@ -66,6 +66,8 @@ if not os.path.exists(CONFIG_FILE):
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+_SUBNET_REFRESH_RUNNING = threading.Event()
+
 # Состояния ConversationHandler
 WAITING_REGISTER_NAME  = 10
 WAITING_DEVICE_NAME    = 11
@@ -2848,6 +2850,11 @@ async def do_maint_done(query):
 
 async def do_refresh_subnets(query, context):
     """Запускает полное обновление кэша подсетей в фоне."""
+    if _SUBNET_REFRESH_RUNNING.is_set():
+        await query.answer("⏳ Обновление уже выполняется, подождите...", show_alert=True)
+        return
+
+    _SUBNET_REFRESH_RUNNING.set()
     await query.edit_message_text(
         "🌐 Обновление кэша подсетей запущено в фоне.\n\n"
         "Опрашиваются все домены из базы и исключений пользователей.\n"
@@ -2867,6 +2874,8 @@ async def do_refresh_subnets(query, context):
             text = "✅ Кэш подсетей обновлён."
         except Exception as e:
             text = f"❌ Ошибка обновления: {e}"
+        finally:
+            _SUBNET_REFRESH_RUNNING.clear()
         asyncio.run_coroutine_threadsafe(
             bot.edit_message_text(
                 chat_id=chat_id, message_id=msg_id, text=text,
