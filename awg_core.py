@@ -604,10 +604,15 @@ def run_subnet_daemon():
             logger.info(f"subnet_daemon: {domain} — готово")
         except Exception as e:
             logger.warning(f"subnet_daemon: {domain} — ошибка: {e}")
-    # Агрегация по сайтам — после того как все домены обработаны
+    # Агрегация по сайтам и очистка устаревших записей
     with _CACHE_LOCK:
         cache = load_subnet_cache()
         _compute_site_results(cache)
+        orphan_keys = [k for k in cache if k != "_sites" and k not in domains]
+        for k in orphan_keys:
+            del cache[k]
+        if orphan_keys:
+            logger.info(f"subnet_daemon: удалено {len(orphan_keys)} устаревших записей: {orphan_keys}")
         with open(SUBNET_CACHE_FILE, "w") as f:
             json.dump(cache, f, ensure_ascii=False, indent=2)
     logger.info("subnet_daemon: завершён")
