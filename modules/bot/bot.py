@@ -771,6 +771,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await srv_del_confirm(query, int(data[8:]))
     elif data.startswith("srv_sync_") and is_admin:
         await srv_sync_now(query, int(data[9:]))
+    elif data == "srv_checkdns" and is_admin:
+        await srv_checkdns(query)
     elif data == "srv_deldomain_list" and is_admin:
         await srv_deldomain_list(query)
     elif data.startswith("srv_deldomain_confirm_") and is_admin:
@@ -1575,7 +1577,8 @@ async def show_servers_list(query):
             f"{emoji} {sname}", callback_data=f"srv_card_{i}"
         )])
     rows.append([InlineKeyboardButton("➕ Добавить сервер", callback_data="srv_add")])
-    rows.append([InlineKeyboardButton("🗑 Удалить домен", callback_data="srv_deldomain_list")])
+    rows.append([InlineKeyboardButton("🔍 Проверить DNS", callback_data="srv_checkdns"),
+                 InlineKeyboardButton("🗑 Удалить домен", callback_data="srv_deldomain_list")])
     rows.append([InlineKeyboardButton("◀️ Назад", callback_data="back")])
     await query.edit_message_text(
         "\n".join(lines),
@@ -1733,6 +1736,94 @@ async def _sync_peer_to_all_slaves(name: str, pub: str, psk: str, ip: str) -> li
         except Exception as e:
             errors.append(f"{sname}: {e}")
     return errors
+
+
+async def _dns_check_all_servers() -> tuple[list, bool]:
+    """Проверяет DNS всех domain-эндпоинтов, обновляет флаг verified. Возвращает (results, changed)."""
+    import socket as _s
+    loop = asyncio.get_event_loop()
+
+    def _resolve(domain):
+        try:
+            return _s.gethostbyname(domain)
+        except Exception:
+            return None
+
+    servers = load_servers()
+    results = []
+    changed = False
+    for srv in servers:
+        srv_ip = srv.get("ssh", {}).get("ip", "")
+        for ep in srv.get("endpoints", []):
+            if ep.get("type") != "domain":
+                continue
+            resolved = await loop.run_in_executor(None, _resolve, ep["value"])
+            now_ok   = bool(resolved and srv_ip and resolved == srv_ip)
+            was_ok   = ep.get("verified", False)
+            if was_ok != now_ok:
+                ep["verified"] = now_ok
+                changed = True
+            results.append({
+                "srv_label": f"{srv.get('emoji','🖥')} {srv.get('name','Сервер')}".strip(),
+                "domain":    ep["value"],
+                "resolved":  resolved,
+                "expected":  srv_ip,
+                "now_ok":    now_ok,
+                "was_ok":    was_ok,
+            })
+    if changed:
+        save_servers(servers)
+    return results, changed
+
+
+async def _check_endpoint_dns(context):
+    """Фоновая проверка DNS — уведомляет админа если домен перестал указывать на нужный IP."""
+    results, _ = await _dns_check_all_servers()
+    for r in results:
+        if r["was_ok"] and not r["now_ok"]:
+            await context.bot.send_message(
+                ADMIN_ID,
+                f"⚠️ *Домен отвязался от сервера*\n"
+                f"Сервер: *{r['srv_label']}*\n"
+                f"Домен: `{r['domain']}`\n"
+                f"DNS → `{r['resolved']}`, ожидался `{r['expected']}`",
+                parse_mode="Markdown"
+            )
+
+
+async def srv_checkdns(query):
+    """Ручная проверка DNS всех domain-эндпоинтов с отчётом по каждому."""
+    await query.edit_message_text("🔍 Проверяю DNS…")
+    results, _ = await _dns_check_all_servers()
+
+    if not results:
+        await query.edit_message_text(
+            "Нет domain-эндпоинтов для проверки.",
+            reply_markup=back_kb("servers")
+        )
+        return
+
+    by_srv = {}
+    for r in results:
+        by_srv.setdefault(r["srv_label"], []).append(r)
+
+    lines = ["🔍 *DNS эндпоинты*\n"]
+    for srv_label, items in by_srv.items():
+        lines.append(f"*{srv_label}*")
+        for r in items:
+            if r["now_ok"]:
+                lines.append(f"  ✅ `{r['domain']}` → `{r['resolved']}`")
+            elif r["resolved"]:
+                lines.append(f"  ❌ `{r['domain']}` → `{r['resolved']}` (ожидался `{r['expected']}`)")
+            else:
+                lines.append(f"  ❌ `{r['domain']}` — не разрешился")
+        lines.append("")
+
+    await query.edit_message_text(
+        "\n".join(lines).rstrip(),
+        reply_markup=back_kb("servers"),
+        parse_mode="Markdown"
+    )
 
 
 async def srv_add_start(update, context: ContextTypes.DEFAULT_TYPE):
@@ -3568,6 +3659,8 @@ def main():
     app.job_queue.run_once(send_start_hello, when=5)
     # Мониторинг обновлений репозитория — раз в сутки, первая проверка через 20 секунд после старта
     app.job_queue.run_repeating(check_repo_updates, interval=86400, first=20)
+    # Проверка DNS эндпоинтов — каждые 12 часов, первая через 5 минут после старта
+    app.job_queue.run_repeating(_check_endpoint_dns, interval=43200, first=300)
 
     logger.info(f"Бот запущен. Admin ID: {ADMIN_ID}")
     print(f"\n\033[0;32m✓ Бот запущен! Admin ID: {ADMIN_ID}\033[0m\n")
