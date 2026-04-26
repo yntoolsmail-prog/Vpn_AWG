@@ -3437,25 +3437,6 @@ def main():
         allow_reentry=True,
     )
 
-    srv_add_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(srv_add_start, pattern="^srv_add$")],
-        states={
-            WAITING_SRV_IP:       [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_add_ip)],
-            WAITING_SRV_PORT:     [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_add_port)],
-            WAITING_SRV_LOGIN:    [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_add_login)],
-            WAITING_SRV_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_add_password)],
-            WAITING_SRV_NAME:     [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_add_name)],
-            WAITING_SRV_EMOJI:    [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_add_emoji)],
-        },
-        fallbacks=[
-            CommandHandler("cancel", srv_add_cancel),
-            CallbackQueryHandler(srv_add_cancel, pattern="^srv_add_cancel$"),
-        ],
-        per_chat=True,
-        per_message=False,
-        allow_reentry=True,
-    )
-
     srv_domain_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(srv_adddomain_start, pattern="^srv_adddomain_\\d+$")],
         states={
