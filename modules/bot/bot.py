@@ -3,11 +3,6 @@
 # Version: 3.0
 # Вся бизнес-логика — в awg_core.py и sites_data.py
 import os, subprocess, logging, json, time, tempfile, shutil, re, asyncio, threading, ipaddress
-try:
-    import paramiko
-    _PARAMIKO_AVAILABLE = True
-except ImportError:
-    _PARAMIKO_AVAILABLE = False
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo, BotCommand
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
@@ -33,6 +28,13 @@ from awg_core import (
     save_bw_peak, save_client_excl, save_users,
     load_servers, save_servers, invalidate_servers_cache,
     process_domain, run_subnet_daemon,
+    PARAMIKO_AVAILABLE as _PARAMIKO_AVAILABLE,
+    ssh_read_slave_env      as _ssh_read_slave_env,
+    ssh_clone_awg_to_slave  as _ssh_clone_awg_to_slave,
+    ssh_sync_peer_to_slave  as _ssh_sync_peer_to_slave,
+    ssh_sync_all_clients_to_slave as _ssh_sync_all_clients_to_slave,
+    ssh_stop_slave_awg      as _ssh_stop_slave_awg,
+    ssh_get_slave_peer_count as _ssh_get_slave_peer_count,
 )
 from sites_data import (
     SITES, CATEGORIES, DEFAULT_SELECTED, ALL_SELECTABLE,
@@ -74,13 +76,6 @@ WAITING_DEVICE_NAME    = 11
 WAITING_RESTORE_FILE   = 12
 WAITING_TZ_INPUT       = 15   # ждём ручной ввод часового пояса
 WAITING_SITES_DOMAIN   = 16   # ждём домен/IP для добавления в исключения
-# Добавление вторичного сервера
-WAITING_SRV_IP         = 20
-WAITING_SRV_PORT       = 21
-WAITING_SRV_LOGIN      = 22
-WAITING_SRV_PASSWORD   = 23
-WAITING_SRV_NAME       = 24
-WAITING_SRV_EMOJI      = 25
 # Добавление домена к серверу
 WAITING_SRV_DOMAIN     = 26
 # Переименование сервера (primary или slave)
@@ -769,6 +764,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await srv_del_confirm(query, int(data[8:]))
     elif data.startswith("srv_sync_") and is_admin:
         await srv_sync_now(query, int(data[9:]))
+    elif data == "srv_checkdns" and is_admin:
+        await srv_checkdns(query)
     elif data == "srv_deldomain_list" and is_admin:
         await srv_deldomain_list(query)
     elif data.startswith("srv_deldomain_confirm_") and is_admin:
@@ -1572,8 +1569,10 @@ async def show_servers_list(query):
         rows.append([InlineKeyboardButton(
             f"{emoji} {sname}", callback_data=f"srv_card_{i}"
         )])
-    rows.append([InlineKeyboardButton("➕ Добавить сервер", callback_data="srv_add")])
-    rows.append([InlineKeyboardButton("🗑 Удалить домен", callback_data="srv_deldomain_list")])
+    if any(getattr(m, "__name__", "") == "modules.slave_servers" for m in _modules.modules):
+        rows.append([InlineKeyboardButton("➕ Добавить сервер", callback_data="srv_add")])
+    rows.append([InlineKeyboardButton("🔍 Проверить DNS", callback_data="srv_checkdns"),
+                 InlineKeyboardButton("🗑 Удалить домен", callback_data="srv_deldomain_list")])
     rows.append([InlineKeyboardButton("◀️ Назад", callback_data="back")])
     await query.edit_message_text(
         "\n".join(lines),
@@ -1651,31 +1650,6 @@ async def srv_deldomain_ok(query, domain: str):
     )
 
 
-def _ssh_get_slave_peer_count(server: dict) -> int | None:
-    """SSH на slave, считает кол-во [Peer] в его awg0.conf. None при ошибке."""
-    if not _PARAMIKO_AVAILABLE:
-        return None
-    ssh = server.get("ssh", {})
-    try:
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        client.connect(
-            ssh.get("ip", ""), port=ssh.get("port", 22),
-            username=ssh.get("login", "root"), password=ssh.get("password", ""),
-            timeout=8, banner_timeout=10
-        )
-        try:
-            _, stdout, _ = client.exec_command(
-                "grep -c '^\\[Peer\\]' /etc/amnezia/amneziawg/awg0.conf 2>/dev/null || echo 0",
-                timeout=5
-            )
-            return int(stdout.read().decode().strip())
-        finally:
-            client.close()
-    except Exception:
-        return None
-
-
 async def show_server_card(query, srv_idx: int):
     """Карточка конкретного VPS."""
     servers = load_servers()
@@ -1740,156 +1714,6 @@ async def show_server_card(query, srv_idx: int):
         parse_mode="Markdown"
     )
 
-def _ssh_read_slave_env(ip: str, port: int, login: str, password: str) -> dict:
-    """Подключается к slave по SSH и читает /etc/amnezia/amneziawg/server.env.
-    Проверяет SSH-соединение и наличие AWG на сервере. Бросает исключение при ошибке."""
-    if not _PARAMIKO_AVAILABLE:
-        raise RuntimeError("paramiko не установлен: pip3 install paramiko")
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(ip, port=port, username=login, password=password, timeout=10, banner_timeout=15)
-    try:
-        _, stdout, _ = client.exec_command(
-            "test -f /etc/amnezia/amneziawg/awg0.conf && echo OK || echo MISSING",
-            timeout=10
-        )
-        result = stdout.read().decode().strip()
-    finally:
-        client.close()
-    if result != "OK":
-        raise ValueError("AmneziaWG не установлен — /etc/amnezia/amneziawg/awg0.conf не найден")
-
-
-def _ssh_clone_awg_to_slave(server: dict):
-    """Клонирует AWG-конфиг с primary на slave: одинаковые ключи, обфускация, все клиенты.
-    Slave становится точной копией primary — клиентские конфиги совместимы с обоими серверами."""
-    if not _PARAMIKO_AVAILABLE:
-        raise RuntimeError("paramiko не установлен: pip3 install paramiko")
-    try:
-        with open(AWG_CONF) as f:
-            primary_conf = f.read()
-    except Exception as e:
-        raise ValueError(f"Не удалось прочитать конфиг primary: {e}")
-
-    ssh = server.get("ssh", {})
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(
-        ssh.get("ip", ""), port=ssh.get("port", 22),
-        username=ssh.get("login", "root"), password=ssh.get("password", ""),
-        timeout=10, banner_timeout=15
-    )
-    try:
-        # Читаем PostUp/PostDown со slave (у него свой сетевой интерфейс)
-        _, stdout, _ = client.exec_command(
-            "grep -E '^Post(Up|Down)' /etc/amnezia/amneziawg/awg0.conf 2>/dev/null",
-            timeout=5
-        )
-        slave_post_lines = stdout.read().decode().strip().splitlines()
-
-        # Заменяем PostUp/PostDown в конфиге primary на slave-версию
-        new_conf_lines = []
-        for line in primary_conf.splitlines():
-            if line.strip().startswith("PostUp") or line.strip().startswith("PostDown"):
-                continue
-            new_conf_lines.append(line)
-            if line.strip().startswith("ListenPort") and slave_post_lines:
-                new_conf_lines.extend(slave_post_lines)
-
-        new_conf = "\n".join(new_conf_lines) + "\n"
-
-        # Пишем новый конфиг на slave
-        transport = client.get_transport()
-        chan = transport.open_session()
-        chan.exec_command("cat > /etc/amnezia/amneziawg/awg0.conf")
-        chan.sendall(new_conf.encode())
-        chan.shutdown_write()
-        chan.recv_exit_status()
-        chan.close()
-
-        # Обновляем SERVER_PUBLIC в server.env slave
-        _, stdout, stderr = client.exec_command(
-            f"sed -i 's|^SERVER_PUBLIC=.*|SERVER_PUBLIC={SERVER_PUBLIC}|' "
-            f"/etc/amnezia/amneziawg/server.env",
-            timeout=5
-        )
-        stdout.read(); stderr.read()
-
-        # Перезапускаем интерфейс — down может упасть если интерфейс уже висит
-        _, stdout, stderr = client.exec_command(
-            "awg-quick down awg0 2>/dev/null; awg-quick up /etc/amnezia/amneziawg/awg0.conf",
-            timeout=20
-        )
-        stdout.read(); stderr.read()
-    finally:
-        client.close()
-
-
-def _ssh_sync_peer_to_slave(server: dict, name: str, pub: str, psk: str, ip: str):
-    """Регистрирует peer клиента на slave-сервере через SSH (идемпотентно).
-    ip — без /32, функция сама добавляет суффикс."""
-    if not _PARAMIKO_AVAILABLE:
-        raise RuntimeError("paramiko не установлен: pip3 install paramiko")
-    ssh = server.get("ssh", {})
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(
-        ssh.get("ip", ""), port=ssh.get("port", 22),
-        username=ssh.get("login", "root"), password=ssh.get("password", ""),
-        timeout=10, banner_timeout=15
-    )
-    try:
-        conf_line = (
-            f"\\n# Client: {name}\\n[Peer]\\n"
-            f"PublicKey = {pub}\\nPresharedKey = {psk}\\nAllowedIPs = {ip}/32\\n"
-        )
-        _, stdout, stderr = client.exec_command(
-            f"grep -qF '{pub}' /etc/amnezia/amneziawg/awg0.conf || "
-            f"printf '{conf_line}' >> /etc/amnezia/amneziawg/awg0.conf",
-            timeout=10
-        )
-        stdout.read(); stderr.read()
-        # Добавляем в работающий интерфейс
-        transport = client.get_transport()
-        chan = transport.open_session()
-        chan.exec_command(
-            f"awg set awg0 peer {pub} preshared-key /dev/stdin allowed-ips {ip}/32"
-        )
-        chan.sendall(psk.encode())
-        chan.shutdown_write()
-        chan.recv_exit_status()
-        chan.close()
-    finally:
-        client.close()
-
-
-def _ssh_sync_all_clients_to_slave(server: dict):
-    """Синхронизирует всех существующих клиентов primary → slave через SSH."""
-    import re as _re
-    try:
-        with open(AWG_CONF) as f:
-            conf_text = f.read()
-    except Exception:
-        return
-    for block in _re.split(r'\n(?=# Client:)', conf_text):
-        name_m = _re.search(r'# Client: (.+)', block)
-        pub_m  = _re.search(r'PublicKey = (.+)', block)
-        psk_m  = _re.search(r'PresharedKey = (.+)', block)
-        ip_m   = _re.search(r'AllowedIPs = (\S+?)(?:/32)?$', block, _re.MULTILINE)
-        if not (name_m and pub_m and psk_m and ip_m):
-            continue
-        try:
-            _ssh_sync_peer_to_slave(
-                server,
-                name_m.group(1).strip(),
-                pub_m.group(1).strip(),
-                psk_m.group(1).strip(),
-                ip_m.group(1).strip(),
-            )
-        except Exception:
-            pass
-
-
 async def _sync_peer_to_all_slaves(name: str, pub: str, psk: str, ip: str) -> list:
     """Синхронизирует нового клиента со всеми slave-серверами. Возвращает список ошибок."""
     if not _PARAMIKO_AVAILABLE:
@@ -1908,153 +1732,93 @@ async def _sync_peer_to_all_slaves(name: str, pub: str, psk: str, ip: str) -> li
     return errors
 
 
-async def srv_add_start(update, context: ContextTypes.DEFAULT_TYPE):
-    """Начало диалога добавления сервера."""
-    query = update.callback_query
-    await query.answer()
-    context.user_data["srv_add"] = {}
-    await query.edit_message_text(
-        "🖥 *Добавление сервера*\n\nВведите IP-адрес нового сервера:",
-        parse_mode="Markdown"
-    )
-    return WAITING_SRV_IP
+async def _dns_check_all_servers() -> tuple[list, bool]:
+    """Проверяет DNS всех domain-эндпоинтов, обновляет флаг verified. Возвращает (results, changed)."""
+    import socket as _s
+    loop = asyncio.get_event_loop()
 
-async def srv_add_ip(update, context: ContextTypes.DEFAULT_TYPE):
-    ip = update.message.text.strip()
-    context.user_data["srv_add"]["ip"] = ip
-    await update.message.reply_text(
-        f"IP: `{ip}`\n\nВведите SSH-порт (Enter = 22):",
-        parse_mode="Markdown"
-    )
-    return WAITING_SRV_PORT
-
-async def srv_add_port(update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
-    port = int(text) if text.isdigit() else 22
-    context.user_data["srv_add"]["port"] = port
-    await update.message.reply_text("Введите логин SSH:")
-    return WAITING_SRV_LOGIN
-
-async def srv_add_login(update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["srv_add"]["login"] = update.message.text.strip()
-    await update.message.reply_text("Введите пароль SSH:")
-    return WAITING_SRV_PASSWORD
-
-async def srv_add_password(update, context: ContextTypes.DEFAULT_TYPE):
-    d = context.user_data["srv_add"]
-    d["password"] = update.message.text.strip()
-
-    if not _PARAMIKO_AVAILABLE:
-        await update.message.reply_text("Введите название сервера (например: Германия):")
-        return WAITING_SRV_NAME
-
-    ip    = d.get("ip", "")
-    port  = d.get("port", 22)
-    login = d.get("login", "root")
-    pwd   = d["password"]
-
-    status_msg = await update.message.reply_text(
-        f"🔌 Подключаюсь к `{ip}:{port}`…", parse_mode="Markdown"
-    )
-    try:
-        await asyncio.get_event_loop().run_in_executor(
-            None, _ssh_read_slave_env, ip, port, login, pwd
-        )
-        await status_msg.edit_text(
-            f"✅ SSH подключение успешно — AmneziaWG установлен.\n"
-            f"Конфиг будет клонирован с primary после сохранения.",
-            parse_mode="Markdown"
-        )
-    except Exception as e:
-        await status_msg.edit_text(
-            f"❌ Не удалось подключиться к `{ip}:{port}`:\n`{e}`\n\n"
-            f"Проверьте данные SSH и попробуйте ещё раз, или /cancel для отмены.",
-            parse_mode="Markdown"
-        )
-        return WAITING_SRV_PASSWORD
-
-    await update.message.reply_text(
-        "Введите название сервера:\n"
-        "_Рекомендуем 3 заглавные буквы: NLD, FIN, RUS, GER, USA…_\n"
-        "Используйте только латиницу — оно войдёт в имя файлов конфигов.",
-        parse_mode="Markdown"
-    )
-    return WAITING_SRV_NAME
-
-async def srv_add_name(update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["srv_add"]["name"] = update.message.text.strip()
-    await update.message.reply_text(
-        "Введите эмодзи/флаг (например: 🇩🇪 🇫🇮 🇷🇺), или Enter для 🖥:"
-    )
-    return WAITING_SRV_EMOJI
-
-async def srv_add_emoji(update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
-    emoji = text if text else "🖥"
-    d = context.user_data.pop("srv_add", {})
-    d["emoji"] = emoji
+    def _resolve(domain):
+        try:
+            return _s.gethostbyname(domain)
+        except Exception:
+            return None
 
     servers = load_servers()
-    new_srv = {
-        "id": f"server_{len(servers)}",
-        "name": d.get("name", "Сервер"),
-        "emoji": d.get("emoji", "🖥"),
-        "is_primary": False,
-        "ssh": {
-            "ip": d.get("ip", ""),
-            "port": d.get("port", 22),
-            "login": d.get("login", "root"),
-            "password": d.get("password", ""),
-        },
-        "awg_public_key": SERVER_PUBLIC,
-        "awg_port": int(SERVER_PORT) if SERVER_PORT else 51820,
-        "endpoints": [{"value": d.get("ip", ""), "type": "ip"}],
-    }
-    servers.append(new_srv)
-    save_servers(servers)
+    results = []
+    changed = False
+    for srv in servers:
+        srv_ip = srv.get("ssh", {}).get("ip", "")
+        for ep in srv.get("endpoints", []):
+            if ep.get("type") != "domain":
+                continue
+            resolved = await loop.run_in_executor(None, _resolve, ep["value"])
+            now_ok   = bool(resolved and srv_ip and resolved == srv_ip)
+            was_ok   = ep.get("verified", False)
+            if was_ok != now_ok:
+                ep["verified"] = now_ok
+                changed = True
+            results.append({
+                "srv_label": f"{srv.get('emoji','🖥')} {srv.get('name','Сервер')}".strip(),
+                "domain":    ep["value"],
+                "resolved":  resolved,
+                "expected":  srv_ip,
+                "now_ok":    now_ok,
+                "was_ok":    was_ok,
+            })
+    if changed:
+        save_servers(servers)
+    return results, changed
 
-    srv_label = f"*{d.get('emoji', '🖥')} {d.get('name', 'Сервер')}*"
-    await update.message.reply_text(
-        f"✅ Сервер {srv_label} добавлен!\n\n"
-        f"IP `{d.get('ip', '')}` добавлен как первый эндпоинт.\n"
-        f"Откройте карточку сервера чтобы добавить домены.",
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("🖥 Серверы", callback_data="servers")
-        ]])
+
+async def _check_endpoint_dns(context):
+    """Фоновая проверка DNS — уведомляет админа если домен перестал указывать на нужный IP."""
+    results, _ = await _dns_check_all_servers()
+    for r in results:
+        if r["was_ok"] and not r["now_ok"]:
+            await context.bot.send_message(
+                ADMIN_ID,
+                f"⚠️ *Домен отвязался от сервера*\n"
+                f"Сервер: *{r['srv_label']}*\n"
+                f"Домен: `{r['domain']}`\n"
+                f"DNS → `{r['resolved']}`, ожидался `{r['expected']}`",
+                parse_mode="Markdown"
+            )
+
+
+async def srv_checkdns(query):
+    """Ручная проверка DNS всех domain-эндпоинтов с отчётом по каждому."""
+    await query.edit_message_text("🔍 Проверяю DNS…")
+    results, _ = await _dns_check_all_servers()
+
+    if not results:
+        await query.edit_message_text(
+            "Нет domain-эндпоинтов для проверки.",
+            reply_markup=back_kb("servers")
+        )
+        return
+
+    by_srv = {}
+    for r in results:
+        by_srv.setdefault(r["srv_label"], []).append(r)
+
+    lines = ["🔍 *DNS эндпоинты*\n"]
+    for srv_label, items in by_srv.items():
+        lines.append(f"*{srv_label}*")
+        for r in items:
+            if r["now_ok"]:
+                lines.append(f"  ✅ `{r['domain']}` → `{r['resolved']}`")
+            elif r["resolved"]:
+                lines.append(f"  ❌ `{r['domain']}` → `{r['resolved']}` (ожидался `{r['expected']}`)")
+            else:
+                lines.append(f"  ❌ `{r['domain']}` — не разрешился")
+        lines.append("")
+
+    await query.edit_message_text(
+        "\n".join(lines).rstrip(),
+        reply_markup=back_kb("servers"),
+        parse_mode="Markdown"
     )
 
-    # Клонируем AWG-конфиг primary → slave (одинаковые ключи + все клиенты)
-    if _PARAMIKO_AVAILABLE:
-        clone_msg = await update.message.reply_text(
-            "🔄 Клонирую конфиг AWG на slave (ключи + клиенты)…"
-        )
-        try:
-            await asyncio.get_event_loop().run_in_executor(
-                None, _ssh_clone_awg_to_slave, new_srv
-            )
-            await clone_msg.edit_text(
-                f"✅ Slave {srv_label} готов — конфиг скопирован, интерфейс перезапущен.",
-                parse_mode="Markdown"
-            )
-        except Exception as e:
-            await clone_msg.edit_text(
-                f"⚠️ Не удалось склонировать конфиг: `{e}`\n"
-                f"Запустите `bash /root/setup.sh --update` на slave вручную.",
-                parse_mode="Markdown"
-            )
-
-    return ConversationHandler.END
-
-async def srv_add_cancel(update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.pop("srv_add", None)
-    query = update.callback_query
-    if query:
-        await query.answer()
-        await query.edit_message_text("Отмена.", reply_markup=back_kb("servers"))
-    else:
-        await update.message.reply_text("Отмена.")
-    return ConversationHandler.END
 
 async def srv_del_confirm(query, srv_idx: int):
     servers = load_servers()
@@ -2100,33 +1864,28 @@ async def srv_del_ok(query, srv_idx: int):
         except Exception as e:
             stop_note = f"\n⚠️ Не удалось остановить AWG на slave: {e}"
 
+    # Переносим domain-эндпоинты удалённого slave на PRIMARY (не IP — они slave-специфичны)
+    moved_note = ""
+    domain_eps = [ep for ep in srv.get("endpoints", []) if ep.get("type") == "domain"]
+    if domain_eps:
+        primary = next((s for s in servers if s.get("is_primary")), None)
+        if primary:
+            existing = {e["value"] for e in primary.get("endpoints", [])}
+            moved = []
+            for ep in domain_eps:
+                if ep["value"] not in existing:
+                    primary.setdefault("endpoints", []).append(ep)
+                    moved.append(ep["value"])
+            if moved:
+                moved_note = "\n📌 Домены перенесены на PRIMARY: " + ", ".join(f"`{d}`" for d in moved)
+
     servers.pop(srv_idx)
     save_servers(servers)
     await query.edit_message_text(
-        f"✅ Сервер *{emoji} {name}* удалён.{stop_note}",
+        f"✅ Сервер *{emoji} {name}* удалён.{stop_note}{moved_note}",
         reply_markup=back_kb("servers"),
         parse_mode="Markdown"
     )
-
-
-def _ssh_stop_slave_awg(ssh: dict):
-    """SSH к slave и останавливает awg-quick@awg0."""
-    if not _PARAMIKO_AVAILABLE:
-        raise RuntimeError("paramiko не установлен: pip3 install paramiko")
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(
-        ssh.get("ip", ""), port=ssh.get("port", 22),
-        username=ssh.get("login", "root"), password=ssh.get("password", ""),
-        timeout=8, banner_timeout=10
-    )
-    try:
-        _, stdout, stderr = client.exec_command(
-            "systemctl stop awg-quick@awg0", timeout=15
-        )
-        stdout.read(); stderr.read()
-    finally:
-        client.close()
 
 
 async def srv_sync_now(query, srv_idx: int):
@@ -3678,25 +3437,6 @@ def main():
         allow_reentry=True,
     )
 
-    srv_add_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(srv_add_start, pattern="^srv_add$")],
-        states={
-            WAITING_SRV_IP:       [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_add_ip)],
-            WAITING_SRV_PORT:     [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_add_port)],
-            WAITING_SRV_LOGIN:    [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_add_login)],
-            WAITING_SRV_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_add_password)],
-            WAITING_SRV_NAME:     [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_add_name)],
-            WAITING_SRV_EMOJI:    [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_add_emoji)],
-        },
-        fallbacks=[
-            CommandHandler("cancel", srv_add_cancel),
-            CallbackQueryHandler(srv_add_cancel, pattern="^srv_add_cancel$"),
-        ],
-        per_chat=True,
-        per_message=False,
-        allow_reentry=True,
-    )
-
     srv_domain_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(srv_adddomain_start, pattern="^srv_adddomain_\\d+$")],
         states={
@@ -3728,13 +3468,12 @@ def main():
     app.add_handler(restore_conv)
     app.add_handler(tz_conv)
     app.add_handler(sites_custom_conv)  # до общего button_handler
-    app.add_handler(srv_add_conv)
     app.add_handler(srv_domain_conv)
     app.add_handler(srv_rename_conv)
+    _modules.register_bot_handlers(app)  # модули регистрируются до общего button_handler
     app.add_handler(CommandHandler("panel",  cmd_panel))
     app.add_handler(CommandHandler("bot",    cmd_bot))
     app.add_handler(CallbackQueryHandler(button_handler))
-    _modules.register_bot_handlers(app)
 
     # Проверка напоминания о техобслуживании — раз в сутки
     app.job_queue.run_repeating(maintenance_reminder, interval=86400, first=60)
@@ -3746,6 +3485,8 @@ def main():
     app.job_queue.run_once(send_start_hello, when=5)
     # Мониторинг обновлений репозитория — раз в сутки, первая проверка через 20 секунд после старта
     app.job_queue.run_repeating(check_repo_updates, interval=86400, first=20)
+    # Проверка DNS эндпоинтов — каждые 12 часов, первая через 5 минут после старта
+    app.job_queue.run_repeating(_check_endpoint_dns, interval=43200, first=300)
 
     logger.info(f"Бот запущен. Admin ID: {ADMIN_ID}")
     print(f"\n\033[0;32m✓ Бот запущен! Admin ID: {ADMIN_ID}\033[0m\n")

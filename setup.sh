@@ -17,17 +17,25 @@ warn() { echo -e "${YELLOW}[!]${NC} $1"; }
 err()  { echo -e "${RED}[✗]${NC} $1"; exit 1; }
 info() { echo -e "${CYAN}[i]${NC} $1"; }
 
-# Ждёт освобождения dpkg-блокировки (до 120 сек) перед apt-get
+# Ждёт освобождения dpkg-блокировки перед apt-get
 _wait_apt_lock() {
+    # Останавливаем unattended-upgrades — главный источник блокировки
+    systemctl stop unattended-upgrades 2>/dev/null || true
+
     local i=0
-    while flock -n /var/lib/dpkg/lock-frontend true 2>/dev/null; do break; done 2>/dev/null || true
-    while [[ -f /var/lib/dpkg/lock-frontend ]] && fuser /var/lib/dpkg/lock-frontend &>/dev/null; do
+    while fuser /var/lib/dpkg/lock-frontend &>/dev/null 2>&1; do
         if [[ $i -eq 0 ]]; then
-            warn "Ожидание dpkg-блокировки (unattended-upgrades)..."
+            warn "Ожидание dpkg-блокировки..."
         fi
-        sleep 5; (( i += 5 ))
-        if [[ $i -ge 120 ]]; then
-            warn "dpkg-блокировка не снята за 120 сек, продолжаем..."
+        sleep 2; (( i += 2 ))
+        if [[ $i -ge 30 ]]; then
+            local pid
+            pid=$(fuser /var/lib/dpkg/lock-frontend 2>/dev/null | tr -s ' ' '\n' | grep -v '^$' | head -1)
+            if [[ -n "$pid" ]]; then
+                warn "Принудительное завершение процесса $pid (dpkg lock)"
+                kill "$pid" 2>/dev/null || true
+                sleep 3
+            fi
             break
         fi
     done
@@ -133,6 +141,8 @@ PROJECT_FILES=(
     "vpn.sh:/root/vpn.sh"
     "modules/tma/tma_server.py:/root/modules/tma/tma_server.py"
     "tma/index.html:${AWG_DIR}/tma/index.html"
+    "modules/slave_servers/__init__.py:/root/modules/slave_servers/__init__.py"
+    "modules/slave_servers/slave_servers.py:/root/modules/slave_servers/slave_servers.py"
 )
 # modules.conf намеренно исключён — это пользовательский конфиг.
 # Управление модулями: bash /root/setup.sh --modules
@@ -144,6 +154,7 @@ declare -A _MOD_DESC=(
     ["tma"]="Веб-панель TMA (Telegram Mini App)"
     ["mtproxy"]="Прокси Telegram (MTProxy)"
     ["socks5"]="SOCKS5 маршрутизация клиентов"
+    ["slave_servers"]="Управление slave-серверами (добавление secondary VPS через SSH)"
 )
 _BASE_MODS=("bot")
 
@@ -1145,23 +1156,33 @@ if [[ "$SLAVE_MODE" -eq 0 ]]; then
     echo ""
 fi
 
-# Показываем занятые порты при вводе, если есть
-if [[ ${#EXISTING_PORTS[@]} -gt 0 ]]; then
-    warn "Уже занятые порты: ${EXISTING_PORTS[*]} — выберите другой!"
-fi
-
-read -p "  Порт AWG [51820]: " AWG_PORT
-AWG_PORT=${AWG_PORT:-51820}
-
-# Проверяем что введённый порт не занят
-for BUSY_PORT in "${EXISTING_PORTS[@]}"; do
-    if [[ "$AWG_PORT" == "$BUSY_PORT" ]]; then
-        echo ""
-        warn "Порт ${AWG_PORT} уже используется другим AWG-интерфейсом."
-        warn "Это вызовет конфликт. Поменяйте порт и запустите установщик снова."
-        err "Конфликт порта ${AWG_PORT}"
+if [[ "$SLAVE_MODE" -eq 1 ]]; then
+    # Slave: порт временный — будет заменён конфигом primary при клонировании.
+    # Выбираем первый свободный начиная с 51820, пользователя не беспокоим.
+    AWG_PORT=51820
+    while ss -ulnp 2>/dev/null | grep -q ":${AWG_PORT} "; do
+        ((AWG_PORT++))
+    done
+    info "Порт AWG: ${AWG_PORT} (временный — синхронизируется с PRIMARY при добавлении)"
+else
+    # Показываем занятые порты при вводе, если есть
+    if [[ ${#EXISTING_PORTS[@]} -gt 0 ]]; then
+        warn "Уже занятые порты: ${EXISTING_PORTS[*]} — выберите другой!"
     fi
-done
+
+    read -p "  Порт AWG [51820]: " AWG_PORT
+    AWG_PORT=${AWG_PORT:-51820}
+
+    # Проверяем что введённый порт не занят
+    for BUSY_PORT in "${EXISTING_PORTS[@]}"; do
+        if [[ "$AWG_PORT" == "$BUSY_PORT" ]]; then
+            echo ""
+            warn "Порт ${AWG_PORT} уже используется другим AWG-интерфейсом."
+            warn "Это вызовет конфликт. Поменяйте порт и запустите установщик снова."
+            err "Конфликт порта ${AWG_PORT}"
+        fi
+    done
+fi
 
 # ── Шаг 4: Ключи сервера ──────────────────────────────────────────────────────
 log "Генерация ключей сервера..."
@@ -1367,22 +1388,28 @@ else
 fi
 
 # ── Шаг 11.5: Мониторинг трафика и сетевые инструменты ───────────────────────
-log "Установка vnstat (статистика трафика)..."
+log "Установка vnstat и mtr..."
 _wait_apt_lock
-apt-get install -y -qq vnstat || warn "vnstat не установлен — статистика трафика будет недоступна"
-log "Установка mtr (диагностика сети)..."
-apt-get install -y -qq mtr || warn "mtr не установлен — трассировка маршрутов будет недоступна"
+apt-get install -y -qq vnstat mtr || {
+    warn "Не удалось поставить пакеты с первой попытки, повтор..."
+    _wait_apt_lock
+    apt-get install -y -qq vnstat || warn "vnstat не установлен — статистика трафика будет недоступна"
+    apt-get install -y -qq mtr    || warn "mtr не установлен — трассировка маршрутов будет недоступна"
+}
 systemctl enable vnstat --now 2>/dev/null || true
 # Регистрируем основной интерфейс в vnstat если ещё не добавлен
 HOST_IFACE=$(ip route get 8.8.8.8 2>/dev/null | awk '/dev/{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -1)
 HOST_IFACE=${HOST_IFACE:-eth0}
-vnstat -i "$HOST_IFACE" --add 2>/dev/null || true
+vnstat -i "$HOST_IFACE" --add >/dev/null 2>&1 || true
 # Создаём лог-файл для поминутных замеров бота
 touch /var/log/awg-bw.log
 chmod 644 /var/log/awg-bw.log
 # Создаём папку для диагностических отчётов
 mkdir -p /etc/amnezia/amneziawg/diagnostics
 info "Мониторинг трафика настроен (интерфейс: ${HOST_IFACE})"
+
+# Синхронизация времени — критично для корректной работы AWG handshake
+systemctl enable systemd-timesyncd --now 2>/dev/null || true
 
 # ── Шаги 12-13: Бот (только PRIMARY) ─────────────────────────────────────────
 if [[ "$SLAVE_MODE" -eq 0 ]]; then
@@ -1499,14 +1526,11 @@ if [[ "$SLAVE_MODE" -eq 1 ]]; then
     echo ""
     echo -e "  ${BOLD}Данные для добавления в бот PRIMARY:${NC}"
     echo ""
-    echo -e "  🌐 IP:   ${GREEN}${SERVER_IP}${NC}"
-    echo -e "  🔌 Порт: ${GREEN}${AWG_PORT}${NC}"
-    echo ""
-    echo -e "  📋 Публичный ключ AWG:"
-    echo -e "  ${YELLOW}${_SLAVE_PUBKEY}${NC}"
+    echo -e "  🌐 IP:       ${GREEN}${SERVER_IP}${NC}"
+    echo -e "  🔑 SSH-порт: ${GREEN}22${NC} (по умолчанию)"
     echo ""
     echo -e "  ${CYAN}Действие:${NC} Откройте бот PRIMARY → Серверы → Добавить сервер"
-    echo -e "            Введите IP, порт, SSH-данные и публичный ключ выше."
+    echo -e "            Введите IP и SSH-данные для подключения."
     echo ""
     echo -e "  ${CYAN}${BOLD}  Обновление (запускать на этом сервере):${NC}"
     echo -e "  bash /root/setup.sh --update"
@@ -1528,3 +1552,7 @@ else
     echo -e "  bash /root/setup.sh --modules"
 fi
 echo ""
+
+# Дренаж оставшегося ввода — предотвращает "curl: (23) Failure writing output"
+# при запуске через bash <(curl ...). Скрипт завершён, ошибка косметическая.
+dd bs=65536 count=8 of=/dev/null 2>/dev/null || true
