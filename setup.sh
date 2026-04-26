@@ -141,6 +141,8 @@ PROJECT_FILES=(
     "vpn.sh:/root/vpn.sh"
     "modules/tma/tma_server.py:/root/modules/tma/tma_server.py"
     "tma/index.html:${AWG_DIR}/tma/index.html"
+    "modules/slave_servers/__init__.py:/root/modules/slave_servers/__init__.py"
+    "modules/slave_servers/slave_servers.py:/root/modules/slave_servers/slave_servers.py"
 )
 # modules.conf намеренно исключён — это пользовательский конфиг.
 # Управление модулями: bash /root/setup.sh --modules
@@ -152,6 +154,7 @@ declare -A _MOD_DESC=(
     ["tma"]="Веб-панель TMA (Telegram Mini App)"
     ["mtproxy"]="Прокси Telegram (MTProxy)"
     ["socks5"]="SOCKS5 маршрутизация клиентов"
+    ["slave_servers"]="Управление slave-серверами (добавление secondary VPS через SSH)"
 )
 _BASE_MODS=("bot")
 
