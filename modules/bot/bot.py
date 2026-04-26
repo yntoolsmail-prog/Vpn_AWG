@@ -66,6 +66,8 @@ if not os.path.exists(CONFIG_FILE):
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+_SUBNET_REFRESH_RUNNING = threading.Event()
+
 # Состояния ConversationHandler
 WAITING_REGISTER_NAME  = 10
 WAITING_DEVICE_NAME    = 11
@@ -847,7 +849,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "maint_done" and is_admin:
         await do_maint_done(query)
     elif data == "refresh_subnets" and is_admin:
-        await do_refresh_subnets(query)
+        await do_refresh_subnets(query, context)
     elif data == "maint_update_ip" and is_admin:
         await query.edit_message_text("⏳ Определяю текущий IP сервера...")
         real_ip = get_real_server_ip()
@@ -1309,7 +1311,7 @@ async def _do_send_action(query, name: str, action: str, ep: str, server: dict):
 
 async def do_send_conf(query, name: str, ep_key: str):
     """Генерирует .conf в памяти (с сохранёнными исключениями) и отправляет в чат."""
-    allowed_ips = get_allowed_ips_for_client(name)
+    allowed_ips = await asyncio.get_running_loop().run_in_executor(None, get_allowed_ips_for_client, name)
     short    = device_short_name(name)
     ep       = resolve_endpoint(ep_key)
     content  = (make_conf_for_client(name, ep, allowed_ips) or "").encode()
@@ -1332,7 +1334,7 @@ async def do_send_conf(query, name: str, ep_key: str):
 
 async def do_send_qr(query, name: str, ep_key: str):
     """Генерирует .conf в памяти (с сохранёнными исключениями) → QR → отправляет."""
-    allowed_ips = get_allowed_ips_for_client(name)
+    allowed_ips = await asyncio.get_running_loop().run_in_executor(None, get_allowed_ips_for_client, name)
     short   = device_short_name(name)
     ep      = resolve_endpoint(ep_key)
     content = (make_conf_for_client(name, ep, allowed_ips) or "").encode()
@@ -1417,7 +1419,7 @@ async def do_send_conf_direct(query, name: str, ep: str,
                                spub: str = None, sprt: str = None,
                                srv_name: str = None):
     """Отправляет .conf с указанным эндпоинтом и параметрами сервера."""
-    allowed_ips = get_allowed_ips_for_client(name)
+    allowed_ips = await asyncio.get_running_loop().run_in_executor(None, get_allowed_ips_for_client, name)
     short   = device_short_name(name)
     prt     = sprt or SERVER_PORT
     content = (make_conf_for_client_ep(name, ep, spub, sprt, allowed_ips) or "").encode()
@@ -1438,7 +1440,7 @@ async def do_send_qr_direct(query, name: str, ep: str,
                              spub: str = None, sprt: str = None,
                              srv_name: str = None):
     """Отправляет QR с указанным эндпоинтом."""
-    allowed_ips = get_allowed_ips_for_client(name)
+    allowed_ips = await asyncio.get_running_loop().run_in_executor(None, get_allowed_ips_for_client, name)
     short   = device_short_name(name)
     prt     = sprt or SERVER_PORT
     content = (make_conf_for_client_ep(name, ep, spub, sprt, allowed_ips) or "").encode()
@@ -2846,8 +2848,13 @@ async def do_maint_done(query):
         reply_markup=back_kb()
     )
 
-async def do_refresh_subnets(query):
+async def do_refresh_subnets(query, context):
     """Запускает полное обновление кэша подсетей в фоне."""
+    if _SUBNET_REFRESH_RUNNING.is_set():
+        await query.answer()
+        return
+
+    _SUBNET_REFRESH_RUNNING.set()
     await query.edit_message_text(
         "🌐 Обновление кэша подсетей запущено в фоне.\n\n"
         "Опрашиваются все домены из базы и исключений пользователей.\n"
@@ -2856,7 +2863,30 @@ async def do_refresh_subnets(query):
             InlineKeyboardButton("◀️ Техобслуживание", callback_data="maintenance")
         ]])
     )
-    threading.Thread(target=run_subnet_daemon, daemon=True).start()
+    chat_id = query.message.chat_id
+    msg_id  = query.message.message_id
+    loop    = asyncio.get_running_loop()
+    bot     = context.bot
+
+    def _run():
+        try:
+            run_subnet_daemon()
+            text = "✅ Кэш подсетей обновлён."
+        except Exception as e:
+            text = f"❌ Ошибка обновления: {e}"
+        finally:
+            _SUBNET_REFRESH_RUNNING.clear()
+        asyncio.run_coroutine_threadsafe(
+            bot.edit_message_text(
+                chat_id=chat_id, message_id=msg_id, text=text,
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("◀️ Техобслуживание", callback_data="maintenance")
+                ]])
+            ),
+            loop
+        )
+
+    threading.Thread(target=_run, daemon=True).start()
 
 
 async def maintenance_reminder(context: ContextTypes.DEFAULT_TYPE):

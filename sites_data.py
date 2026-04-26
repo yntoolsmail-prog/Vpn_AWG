@@ -14,40 +14,46 @@ SITES = {
     # Банки и платежи
     "sber": {
         "name": "Сбербанк", "emoji": "💚",
-        "domains": ["sber.ru", "sberbank.ru", "online.sberbank.ru", "sberbank.com", "sbrf.ru"],
+        "domains": [
+            "sber.ru", "sberbank.ru", "online.sberbank.ru", "sberbank.com", "sbrf.ru",
+            "securepayments.sberbank.ru", "3dsec.sberbank.ru",
+        ],
     },
     "tbank": {
         "name": "Т-Банк (Тинькофф)", "emoji": "🟡",
-        "domains": ["tbank.ru", "tinkoff.ru", "acdn.tinkoff.ru"],
+        "domains": ["tbank.ru", "tinkoff.ru", "acdn.tinkoff.ru", "cdn.tbank.ru", "cdn-tinkoff.ru"],
     },
     "alfa": {
         "name": "Альфа-Банк", "emoji": "🔴",
-        "domains": ["alfabank.ru", "click.alfabank.ru"],
+        "domains": ["alfabank.ru", "www.alfabank.ru", "alfabank.com", "mobile.auth.alfabank.ru"],
     },
     "vtb": {
         "name": "ВТБ", "emoji": "🔵",
-        "domains": ["vtb.ru", "online.vtb.ru", "mb.vtb.ru"],
+        "domains": [
+            "vtb.ru", "www.vtb.ru", "online.vtb.ru", "lk.vtb.ru",
+            "auth.lk.vtb.ru", "vtb24.ru",
+        ],
     },
     "raiffeisen": {
         "name": "Райффайзен", "emoji": "🟠",
-        "domains": ["raiffeisen.ru", "ecom.raiffeisen.ru"],
+        "domains": ["online.raiffeisen.ru", "pay.raif.ru"],
     },
     "sbp": {
         "name": "СБП / НСПК", "emoji": "⚡",
-        "domains": ["sbp.nspk.ru", "nspk.ru", "qr.nspk.ru"],
+        "domains": ["sbp.nspk.ru", "nspk.ru", "qr.nspk.ru", "pay.mironline.ru", "vamprivet.ru"],
     },
     # Маркетплейсы
     "ozon": {
         "name": "Ozon", "emoji": "🔵",
-        "domains": ["ozon.ru", "static.ozon.ru", "cdn1.ozone.ru"],
+        "domains": ["ozon.ru", "ozone.ru", "cdn1.ozone.ru", "finance.ozon.ru"],
     },
     "wildberries": {
         "name": "Wildberries", "emoji": "🟣",
-        "domains": ["wildberries.ru", "wbstatic.net", "wbbasket.ru", "wbx-static.com"],
+        "domains": ["wildberries.ru", "wb.ru", "wbstatic.net", "paywb.ru", "wb-bank.ru"],
     },
     "avito": {
         "name": "Авито", "emoji": "🟢",
-        "domains": ["avito.ru", "cdn.avito.ru", "m.avito.ru"],
+        "domains": ["avito.ru", "cdn.avito.ru", "m.avito.ru", "avito.st"],
     },
     # Яндекс (одиночный — без заголовка категории)
     "yandex": {
@@ -57,74 +63,85 @@ SITES = {
             "maps.yandex.ru", "taxi.yandex.ru", "go.yandex.ru",
             "music.yandex.ru", "storage.mds.yandex.net",
             "market.yandex.ru", "yastatic.net", "avatars.mds.yandex.net",
+            "passport.yandex.ru", "yandex.st", "strm.yandex.net", "mc.yandex.ru",
         ],
     },
     # Видео и стриминг
     "kinopoisk": {
         "name": "Кинопоиск", "emoji": "🎬",
-        "domains": ["kinopoisk.ru", "www.kinopoisk.ru"],
+        "domains": [
+            "kinopoisk.ru", "www.kinopoisk.ru", "hd.kinopoisk.ru", "graphql.kinopoisk.ru",
+            "widevine-proxy.ott.yandex.ru", "fairplay-proxy.ott.yandex.ru",
+        ],
     },
     "rutube": {
         "name": "Rutube", "emoji": "📺",
-        "domains": ["rutube.ru", "pics.rutube.ru", "strm.rutube.ru"],
+        "domains": ["rutube.ru", "rutube.sport", "pic.rutube.ru"],
     },
     "vkvideo": {
         "name": "VK Видео", "emoji": "📱",
-        "domains": ["vkvideo.ru"],
+        "domains": ["vkvideo.ru", "vkuservideo.net", "vkuservideo.ru"],
     },
     "ivi": {
         "name": "Иви", "emoji": "🍿",
-        "domains": ["ivi.ru", "cdn.ivi.ru"],
+        "domains": ["ivi.ru", "cdn.ivi.ru", "api.digitalaccess.ru", "ivi.tv"],
     },
     "okko": {
         "name": "Okko", "emoji": "🎥",
-        "domains": ["okko.tv", "static.okko.tv", "okko.sport"],
+        "domains": ["okko.tv", "static.okko.tv", "okko.sport", "cdnvideo.ru"],
     },
     "trikolor": {
         "name": "Триколор", "emoji": "📡",
-        "domains": ["trikolor.tv"],
+        "domains": ["tricolor.ru", "sso.tricolor.ru"],
+    },
+    "altplayers": {
+        "name": "Прочие плееры", "emoji": "▶️",
+        "domains": ["wiggle-as.newplayjj.com"],
     },
     # Транспорт и доставка
     "rzd": {
         "name": "РЖД", "emoji": "🚂",
-        "domains": ["rzd.ru", "www.rzd.ru", "pass.rzd.ru", "ticket.rzd.ru"],
+        "domains": ["rzd.ru", "rzd-bonus.ru", "travel.rzd.ru"],
     },
     "pochta": {
         "name": "Почта России", "emoji": "📬",
-        "domains": ["pochta.ru", "www.pochta.ru", "tracking.pochta.ru"],
+        "domains": ["pochta.ru", "www.pochta.ru", "tracking.pochta.ru", "otpravka.pochta.ru"],
     },
     "delivery": {
         "name": "Яндекс Еда / Самокат", "emoji": "🍔",
-        "domains": ["eda.yandex.ru", "eats.yandex.ru", "samokat.ru", "delivery-club.ru"],
+        "domains": ["eda.yandex.ru", "lavka.yandex.ru", "market-delivery.yandex.ru", "samokat.ru"],
     },
     # ЖКХ
     "zhkh_msk": {
-        "name": "ЖКХ Москва (Мосэнергосбыт, ЕИРЦ)", "emoji": "🏘",
-        "domains": ["mosenergosbyt.ru", "lkk.mosenergosbyt.ru", "eirc-mo.ru"],
+        "name": "ЖКХ Москва (Мосэнергосбыт)", "emoji": "🏘",
+        "domains": ["mosenergosbyt.ru", "my.mosenergosbyt.ru", "lkkjr.mosenergosbyt.ru"],
     },
     "zhkh_fed": {
         "name": "ГИС ЖКХ (федеральный)", "emoji": "🏠",
-        "domains": ["dom.gosuslugi.ru", "lkr.reformagkh.ru"],
+        "domains": ["dom.gosuslugi.ru", "my.dom.gosuslugi.ru", "reformagkh.ru", "ais.reformagkh.ru"],
     },
     # Государственные сервисы
     "gosuslugi": {
         "name": "Госуслуги", "emoji": "🏛",
         "domains": [
-            "gosuslugi.ru", "esia.gosuslugi.ru", "lk.gosuslugi.ru",
-            "beta.gosuslugi.ru", "oplata.gosuslugi.ru",
+            "gosuslugi.ru", "www.gosuslugi.ru", "esia.gosuslugi.ru",
+            "lk.gosuslugi.ru", "oplata.gosuslugi.ru",
         ],
     },
     "mos": {
         "name": "Mos.ru", "emoji": "🏙",
-        "domains": ["mos.ru", "www.mos.ru"],
+        "domains": ["mos.ru", "www.mos.ru", "my.mos.ru", "id.mos.ru", "crowd.mos.ru"],
     },
     "nalog": {
         "name": "ФНС / Налоги", "emoji": "📋",
-        "domains": ["nalog.gov.ru", "lkfl.nalog.ru", "lkul.nalog.ru", "pb.nalog.ru"],
+        "domains": [
+            "nalog.gov.ru", "lkfl.nalog.ru", "lkfl2.nalog.ru", "lkul.nalog.ru",
+            "lkip.nalog.ru", "lknpd.nalog.ru", "service.nalog.ru", "pb.nalog.ru",
+        ],
     },
     "emias": {
         "name": "ЕМИАС / Здоровье", "emoji": "🏥",
-        "domains": ["emias.info", "moscow.emias.info"],
+        "domains": ["emias.info", "emias.mos.ru", "lk.emias.mos.ru", "mosgorzdrav.ru"],
     },
     "gibdd": {
         "name": "ГИБДД / Штрафы", "emoji": "🚗",
@@ -132,29 +149,38 @@ SITES = {
     },
     "rosreestr": {
         "name": "Росреестр", "emoji": "🏦",
-        "domains": ["rosreestr.gov.ru", "lk.rosreestr.gov.ru"],
+        "domains": ["rosreestr.gov.ru", "lk.rosreestr.ru", "pkk.rosreestr.ru"],
     },
     "fssp": {
         "name": "ФССП (Приставы)", "emoji": "⚖️",
-        "domains": ["fssprus.ru", "lk.fssprus.ru"],
+        "domains": ["fssp.gov.ru", "fssprus.ru", "lk.fssprus.ru"],
     },
     # Соцсети
     "vk": {
         "name": "ВКонтакте", "emoji": "💙",
-        "domains": ["vk.com", "vk.me", "userapi.com", "vkuseraudio.net", "vk-cdn.net"],
+        "domains": ["vk.com", "userapi.com", "live.vkvideo.ru"],
     },
     "ok": {
         "name": "Одноклассники", "emoji": "🟠",
-        "domains": ["ok.ru", "www.ok.ru", "udn.odnoklassniki.ru"],
+        "domains": ["ok.ru", "www.ok.ru", "odnoklassniki.ru", "mycdn.me", "okcdn.ru"],
+    },
+    # Ростелеком
+    "rostelecom": {
+        "name": "Ростелеком", "emoji": "📡",
+        "domains": [
+            "rt.ru", "www.rt.ru", "rostelecom.ru",
+            "msk.rt.ru", "company.rt.ru", "lk.rt.ru", "id.rt.ru",
+            "wink.ru", "wink.rt.ru", "rtcloud.ru",
+        ],
     },
     # Прочее
     "hh": {
         "name": "HeadHunter (hh.ru)", "emoji": "💼",
-        "domains": ["hh.ru", "api.hh.ru", "hhcdn.ru"],
+        "domains": ["hh.ru", "api.hh.ru", "hhcdn.ru", "chatik.hh.ru", "websocket.hh.ru", "zarplata.ru"],
     },
     "2gis": {
         "name": "2ГИС", "emoji": "🗺",
-        "domains": ["2gis.ru", "2gis.com"],
+        "domains": ["2gis.ru", "2gis.com", "account.2gis.com"],
     },
 }
 
@@ -164,11 +190,12 @@ CATEGORIES = {
     "🏦 Банки и платежи":         ["sber", "tbank", "alfa", "vtb", "raiffeisen", "sbp"],
     "🛒 Маркетплейсы":            ["ozon", "wildberries", "avito"],
     "🔴 Яндекс":                  ["yandex"],
-    "🎬 Видео и стриминг":        ["kinopoisk", "rutube", "vkvideo", "ivi", "okko", "trikolor"],
+    "🎬 Видео и стриминг":        ["kinopoisk", "rutube", "vkvideo", "ivi", "okko", "trikolor", "altplayers"],
     "🚂 Транспорт и доставка":    ["rzd", "pochta", "delivery"],
     "🏘 ЖКХ":                     ["zhkh_msk", "zhkh_fed"],
     "🏛 Государственные сервисы": ["gosuslugi", "mos", "nalog", "emias", "gibdd", "rosreestr", "fssp"],
     "💬 Соцсети":                 ["vk", "ok"],
+    "📡 Ростелеком":              ["rostelecom"],
     "📦 Прочее":                  ["hh", "2gis"],
 }
 

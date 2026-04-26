@@ -489,6 +489,10 @@ def load_subnet_cache() -> dict:
 def _dns_query(domain: str, ns: str, timeout: float = 4.0) -> list:
     """A-запрос к конкретному DNS-серверу через raw UDP. Без внешних зависимостей."""
     import struct as _struct
+    try:
+        domain = '.'.join(lbl.encode('idna').decode('ascii') for lbl in domain.split('.'))
+    except (UnicodeError, UnicodeDecodeError):
+        pass
     # Минимальный DNS query пакет
     tx_id  = os.urandom(2)
     header = tx_id + b'\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00'
@@ -604,28 +608,58 @@ def run_subnet_daemon():
             logger.info(f"subnet_daemon: {domain} — готово")
         except Exception as e:
             logger.warning(f"subnet_daemon: {domain} — ошибка: {e}")
+    # Агрегация по сайтам и очистка устаревших записей
+    with _CACHE_LOCK:
+        cache = load_subnet_cache()
+        _compute_site_results(cache)
+        orphan_keys = [k for k in cache if k != "_sites" and k not in domains]
+        for k in orphan_keys:
+            del cache[k]
+        if orphan_keys:
+            logger.info(f"subnet_daemon: удалено {len(orphan_keys)} устаревших записей: {orphan_keys}")
+        with open(SUBNET_CACHE_FILE, "w") as f:
+            json.dump(cache, f, ensure_ascii=False, indent=2)
     logger.info("subnet_daemon: завершён")
+
+def _compute_site_results(cache: dict):
+    """Объединяет все IP всех доменов одного сайта → агрегированный result.
+    Записывает в cache['_sites']. Вызывается внутри _CACHE_LOCK."""
+    site_results = {}
+    for key, site in SITES.items():
+        all_ips: list = []
+        for domain in site.get("domains", []):
+            for rec in cache.get(domain, {}).get("records", []):
+                all_ips.extend(rec.get("ips", []))
+        if all_ips:
+            site_results[key] = _ips_to_result(list(set(all_ips)))
+    cache["_sites"] = site_results
 
 # ── Split tunneling ─────────────────────────────────────────────────────────────
 def build_allowed_ips(selected_keys, extra_domains=None) -> str:
     excluded: set = set()
     cache = load_subnet_cache()
+    site_agg = cache.get("_sites", {})
 
     for key in selected_keys:
         site = SITES.get(key, {})
         for subnet in site.get("subnets", []):
             excluded.add(subnet)
-        for domain in site.get("domains", []):
-            cached = cache.get(domain, {}).get("result")
-            if cached:
-                excluded.update(cached)
-            else:
-                try:
-                    results = socket.getaddrinfo(domain, None, socket.AF_INET)
-                    for r in results:
-                        excluded.add(f"{r[4][0]}/32")
-                except Exception:
-                    pass
+        # Сначала пробуем агрегированный результат по всему сайту
+        if site_agg.get(key):
+            excluded.update(site_agg[key])
+        else:
+            # Fallback: per-domain или socket
+            for domain in site.get("domains", []):
+                cached = cache.get(domain, {}).get("result")
+                if cached:
+                    excluded.update(cached)
+                else:
+                    try:
+                        results = socket.getaddrinfo(domain, None, socket.AF_INET)
+                        for r in results:
+                            excluded.add(f"{r[4][0]}/32")
+                    except Exception:
+                        pass
 
     # Кастомные домены / IP-адреса
     for entry in (extra_domains or []):
@@ -650,19 +684,29 @@ def build_allowed_ips(selected_keys, extra_domains=None) -> str:
                 pass
     if not excluded:
         return "0.0.0.0/0"
-    allowed = [ipaddress.ip_network("0.0.0.0/0")]
-    for net_str in excluded:
-        target = ipaddress.ip_network(net_str, strict=False)
-        new_allowed = []
-        for net in allowed:
-            if target.overlaps(net):
-                new_allowed.extend(net.address_exclude(target))
-            else:
-                new_allowed.append(net)
-        allowed = new_allowed
-    return ", ".join(
-        str(n) for n in sorted(allowed, key=lambda n: (n.network_address, n.prefixlen))
-    )
+    excl_nets = []
+    for s in excluded:
+        try:
+            excl_nets.append(ipaddress.ip_network(s, strict=False))
+        except ValueError:
+            pass
+    if not excl_nets:
+        return "0.0.0.0/0"
+    # Схлопываем пересекающиеся/смежные исключения, затем берём дополнение за один проход
+    collapsed = list(ipaddress.collapse_addresses(excl_nets))
+    allowed = []
+    start = ipaddress.ip_address("0.0.0.0")
+    end   = ipaddress.ip_address("255.255.255.255")
+    for net in collapsed:
+        if net.network_address > start:
+            allowed.extend(ipaddress.summarize_address_range(start, net.network_address - 1))
+        if net.broadcast_address >= end:
+            start = None
+            break
+        start = net.broadcast_address + 1
+    if start is not None and start <= end:
+        allowed.extend(ipaddress.summarize_address_range(start, end))
+    return ", ".join(str(n) for n in allowed) if allowed else "0.0.0.0/0"
 
 # ── Форматирование ──────────────────────────────────────────────────────────────
 def fmt_bytes(b: int) -> str:
