@@ -1927,10 +1927,25 @@ async def srv_del_ok(query, srv_idx: int):
         except Exception as e:
             stop_note = f"\n⚠️ Не удалось остановить AWG на slave: {e}"
 
+    # Переносим domain-эндпоинты удалённого slave на PRIMARY (не IP — они slave-специфичны)
+    moved_note = ""
+    domain_eps = [ep for ep in srv.get("endpoints", []) if ep.get("type") == "domain"]
+    if domain_eps:
+        primary = next((s for s in servers if s.get("is_primary")), None)
+        if primary:
+            existing = {e["value"] for e in primary.get("endpoints", [])}
+            moved = []
+            for ep in domain_eps:
+                if ep["value"] not in existing:
+                    primary.setdefault("endpoints", []).append(ep)
+                    moved.append(ep["value"])
+            if moved:
+                moved_note = "\n📌 Домены перенесены на PRIMARY: " + ", ".join(f"`{d}`" for d in moved)
+
     servers.pop(srv_idx)
     save_servers(servers)
     await query.edit_message_text(
-        f"✅ Сервер *{emoji} {name}* удалён.{stop_note}",
+        f"✅ Сервер *{emoji} {name}* удалён.{stop_note}{moved_note}",
         reply_markup=back_kb("servers"),
         parse_mode="Markdown"
     )

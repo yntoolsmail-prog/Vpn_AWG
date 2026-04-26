@@ -1145,23 +1145,33 @@ if [[ "$SLAVE_MODE" -eq 0 ]]; then
     echo ""
 fi
 
-# Показываем занятые порты при вводе, если есть
-if [[ ${#EXISTING_PORTS[@]} -gt 0 ]]; then
-    warn "Уже занятые порты: ${EXISTING_PORTS[*]} — выберите другой!"
-fi
-
-read -p "  Порт AWG [51820]: " AWG_PORT
-AWG_PORT=${AWG_PORT:-51820}
-
-# Проверяем что введённый порт не занят
-for BUSY_PORT in "${EXISTING_PORTS[@]}"; do
-    if [[ "$AWG_PORT" == "$BUSY_PORT" ]]; then
-        echo ""
-        warn "Порт ${AWG_PORT} уже используется другим AWG-интерфейсом."
-        warn "Это вызовет конфликт. Поменяйте порт и запустите установщик снова."
-        err "Конфликт порта ${AWG_PORT}"
+if [[ "$SLAVE_MODE" -eq 1 ]]; then
+    # Slave: порт временный — будет заменён конфигом primary при клонировании.
+    # Выбираем первый свободный начиная с 51820, пользователя не беспокоим.
+    AWG_PORT=51820
+    while ss -ulnp 2>/dev/null | grep -q ":${AWG_PORT} "; do
+        ((AWG_PORT++))
+    done
+    info "Порт AWG: ${AWG_PORT} (временный — синхронизируется с PRIMARY при добавлении)"
+else
+    # Показываем занятые порты при вводе, если есть
+    if [[ ${#EXISTING_PORTS[@]} -gt 0 ]]; then
+        warn "Уже занятые порты: ${EXISTING_PORTS[*]} — выберите другой!"
     fi
-done
+
+    read -p "  Порт AWG [51820]: " AWG_PORT
+    AWG_PORT=${AWG_PORT:-51820}
+
+    # Проверяем что введённый порт не занят
+    for BUSY_PORT in "${EXISTING_PORTS[@]}"; do
+        if [[ "$AWG_PORT" == "$BUSY_PORT" ]]; then
+            echo ""
+            warn "Порт ${AWG_PORT} уже используется другим AWG-интерфейсом."
+            warn "Это вызовет конфликт. Поменяйте порт и запустите установщик снова."
+            err "Конфликт порта ${AWG_PORT}"
+        fi
+    done
+fi
 
 # ── Шаг 4: Ключи сервера ──────────────────────────────────────────────────────
 log "Генерация ключей сервера..."
@@ -1376,13 +1386,16 @@ systemctl enable vnstat --now 2>/dev/null || true
 # Регистрируем основной интерфейс в vnstat если ещё не добавлен
 HOST_IFACE=$(ip route get 8.8.8.8 2>/dev/null | awk '/dev/{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -1)
 HOST_IFACE=${HOST_IFACE:-eth0}
-vnstat -i "$HOST_IFACE" --add 2>/dev/null || true
+vnstat -i "$HOST_IFACE" --add >/dev/null 2>&1 || true
 # Создаём лог-файл для поминутных замеров бота
 touch /var/log/awg-bw.log
 chmod 644 /var/log/awg-bw.log
 # Создаём папку для диагностических отчётов
 mkdir -p /etc/amnezia/amneziawg/diagnostics
 info "Мониторинг трафика настроен (интерфейс: ${HOST_IFACE})"
+
+# Синхронизация времени — критично для корректной работы AWG handshake
+systemctl enable systemd-timesyncd --now 2>/dev/null || true
 
 # ── Шаги 12-13: Бот (только PRIMARY) ─────────────────────────────────────────
 if [[ "$SLAVE_MODE" -eq 0 ]]; then
@@ -1499,14 +1512,11 @@ if [[ "$SLAVE_MODE" -eq 1 ]]; then
     echo ""
     echo -e "  ${BOLD}Данные для добавления в бот PRIMARY:${NC}"
     echo ""
-    echo -e "  🌐 IP:   ${GREEN}${SERVER_IP}${NC}"
-    echo -e "  🔌 Порт: ${GREEN}${AWG_PORT}${NC}"
-    echo ""
-    echo -e "  📋 Публичный ключ AWG:"
-    echo -e "  ${YELLOW}${_SLAVE_PUBKEY}${NC}"
+    echo -e "  🌐 IP:       ${GREEN}${SERVER_IP}${NC}"
+    echo -e "  🔑 SSH-порт: ${GREEN}22${NC} (по умолчанию)"
     echo ""
     echo -e "  ${CYAN}Действие:${NC} Откройте бот PRIMARY → Серверы → Добавить сервер"
-    echo -e "            Введите IP, порт, SSH-данные и публичный ключ выше."
+    echo -e "            Введите IP и SSH-данные для подключения."
     echo ""
     echo -e "  ${CYAN}${BOLD}  Обновление (запускать на этом сервере):${NC}"
     echo -e "  bash /root/setup.sh --update"
