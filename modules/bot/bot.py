@@ -3,11 +3,6 @@
 # Version: 3.0
 # Вся бизнес-логика — в awg_core.py и sites_data.py
 import os, subprocess, logging, json, time, tempfile, shutil, re, asyncio, threading, ipaddress
-try:
-    import paramiko
-    _PARAMIKO_AVAILABLE = True
-except ImportError:
-    _PARAMIKO_AVAILABLE = False
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo, BotCommand
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
@@ -33,6 +28,13 @@ from awg_core import (
     save_bw_peak, save_client_excl, save_users,
     load_servers, save_servers, invalidate_servers_cache,
     process_domain, run_subnet_daemon,
+    PARAMIKO_AVAILABLE as _PARAMIKO_AVAILABLE,
+    ssh_read_slave_env      as _ssh_read_slave_env,
+    ssh_clone_awg_to_slave  as _ssh_clone_awg_to_slave,
+    ssh_sync_peer_to_slave  as _ssh_sync_peer_to_slave,
+    ssh_sync_all_clients_to_slave as _ssh_sync_all_clients_to_slave,
+    ssh_stop_slave_awg      as _ssh_stop_slave_awg,
+    ssh_get_slave_peer_count as _ssh_get_slave_peer_count,
 )
 from sites_data import (
     SITES, CATEGORIES, DEFAULT_SELECTED, ALL_SELECTABLE,
@@ -1651,31 +1653,6 @@ async def srv_deldomain_ok(query, domain: str):
     )
 
 
-def _ssh_get_slave_peer_count(server: dict) -> int | None:
-    """SSH на slave, считает кол-во [Peer] в его awg0.conf. None при ошибке."""
-    if not _PARAMIKO_AVAILABLE:
-        return None
-    ssh = server.get("ssh", {})
-    try:
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        client.connect(
-            ssh.get("ip", ""), port=ssh.get("port", 22),
-            username=ssh.get("login", "root"), password=ssh.get("password", ""),
-            timeout=8, banner_timeout=10
-        )
-        try:
-            _, stdout, _ = client.exec_command(
-                "grep -c '^\\[Peer\\]' /etc/amnezia/amneziawg/awg0.conf 2>/dev/null || echo 0",
-                timeout=5
-            )
-            return int(stdout.read().decode().strip())
-        finally:
-            client.close()
-    except Exception:
-        return None
-
-
 async def show_server_card(query, srv_idx: int):
     """Карточка конкретного VPS."""
     servers = load_servers()
@@ -1739,156 +1716,6 @@ async def show_server_card(query, srv_idx: int):
         reply_markup=InlineKeyboardMarkup(rows),
         parse_mode="Markdown"
     )
-
-def _ssh_read_slave_env(ip: str, port: int, login: str, password: str) -> dict:
-    """Подключается к slave по SSH и читает /etc/amnezia/amneziawg/server.env.
-    Проверяет SSH-соединение и наличие AWG на сервере. Бросает исключение при ошибке."""
-    if not _PARAMIKO_AVAILABLE:
-        raise RuntimeError("paramiko не установлен: pip3 install paramiko")
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(ip, port=port, username=login, password=password, timeout=10, banner_timeout=15)
-    try:
-        _, stdout, _ = client.exec_command(
-            "test -f /etc/amnezia/amneziawg/awg0.conf && echo OK || echo MISSING",
-            timeout=10
-        )
-        result = stdout.read().decode().strip()
-    finally:
-        client.close()
-    if result != "OK":
-        raise ValueError("AmneziaWG не установлен — /etc/amnezia/amneziawg/awg0.conf не найден")
-
-
-def _ssh_clone_awg_to_slave(server: dict):
-    """Клонирует AWG-конфиг с primary на slave: одинаковые ключи, обфускация, все клиенты.
-    Slave становится точной копией primary — клиентские конфиги совместимы с обоими серверами."""
-    if not _PARAMIKO_AVAILABLE:
-        raise RuntimeError("paramiko не установлен: pip3 install paramiko")
-    try:
-        with open(AWG_CONF) as f:
-            primary_conf = f.read()
-    except Exception as e:
-        raise ValueError(f"Не удалось прочитать конфиг primary: {e}")
-
-    ssh = server.get("ssh", {})
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(
-        ssh.get("ip", ""), port=ssh.get("port", 22),
-        username=ssh.get("login", "root"), password=ssh.get("password", ""),
-        timeout=10, banner_timeout=15
-    )
-    try:
-        # Читаем PostUp/PostDown со slave (у него свой сетевой интерфейс)
-        _, stdout, _ = client.exec_command(
-            "grep -E '^Post(Up|Down)' /etc/amnezia/amneziawg/awg0.conf 2>/dev/null",
-            timeout=5
-        )
-        slave_post_lines = stdout.read().decode().strip().splitlines()
-
-        # Заменяем PostUp/PostDown в конфиге primary на slave-версию
-        new_conf_lines = []
-        for line in primary_conf.splitlines():
-            if line.strip().startswith("PostUp") or line.strip().startswith("PostDown"):
-                continue
-            new_conf_lines.append(line)
-            if line.strip().startswith("ListenPort") and slave_post_lines:
-                new_conf_lines.extend(slave_post_lines)
-
-        new_conf = "\n".join(new_conf_lines) + "\n"
-
-        # Пишем новый конфиг на slave
-        transport = client.get_transport()
-        chan = transport.open_session()
-        chan.exec_command("cat > /etc/amnezia/amneziawg/awg0.conf")
-        chan.sendall(new_conf.encode())
-        chan.shutdown_write()
-        chan.recv_exit_status()
-        chan.close()
-
-        # Обновляем SERVER_PUBLIC в server.env slave
-        _, stdout, stderr = client.exec_command(
-            f"sed -i 's|^SERVER_PUBLIC=.*|SERVER_PUBLIC={SERVER_PUBLIC}|' "
-            f"/etc/amnezia/amneziawg/server.env",
-            timeout=5
-        )
-        stdout.read(); stderr.read()
-
-        # Перезапускаем интерфейс — down может упасть если интерфейс уже висит
-        _, stdout, stderr = client.exec_command(
-            "awg-quick down awg0 2>/dev/null; awg-quick up /etc/amnezia/amneziawg/awg0.conf",
-            timeout=20
-        )
-        stdout.read(); stderr.read()
-    finally:
-        client.close()
-
-
-def _ssh_sync_peer_to_slave(server: dict, name: str, pub: str, psk: str, ip: str):
-    """Регистрирует peer клиента на slave-сервере через SSH (идемпотентно).
-    ip — без /32, функция сама добавляет суффикс."""
-    if not _PARAMIKO_AVAILABLE:
-        raise RuntimeError("paramiko не установлен: pip3 install paramiko")
-    ssh = server.get("ssh", {})
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(
-        ssh.get("ip", ""), port=ssh.get("port", 22),
-        username=ssh.get("login", "root"), password=ssh.get("password", ""),
-        timeout=10, banner_timeout=15
-    )
-    try:
-        conf_line = (
-            f"\\n# Client: {name}\\n[Peer]\\n"
-            f"PublicKey = {pub}\\nPresharedKey = {psk}\\nAllowedIPs = {ip}/32\\n"
-        )
-        _, stdout, stderr = client.exec_command(
-            f"grep -qF '{pub}' /etc/amnezia/amneziawg/awg0.conf || "
-            f"printf '{conf_line}' >> /etc/amnezia/amneziawg/awg0.conf",
-            timeout=10
-        )
-        stdout.read(); stderr.read()
-        # Добавляем в работающий интерфейс
-        transport = client.get_transport()
-        chan = transport.open_session()
-        chan.exec_command(
-            f"awg set awg0 peer {pub} preshared-key /dev/stdin allowed-ips {ip}/32"
-        )
-        chan.sendall(psk.encode())
-        chan.shutdown_write()
-        chan.recv_exit_status()
-        chan.close()
-    finally:
-        client.close()
-
-
-def _ssh_sync_all_clients_to_slave(server: dict):
-    """Синхронизирует всех существующих клиентов primary → slave через SSH."""
-    import re as _re
-    try:
-        with open(AWG_CONF) as f:
-            conf_text = f.read()
-    except Exception:
-        return
-    for block in _re.split(r'\n(?=# Client:)', conf_text):
-        name_m = _re.search(r'# Client: (.+)', block)
-        pub_m  = _re.search(r'PublicKey = (.+)', block)
-        psk_m  = _re.search(r'PresharedKey = (.+)', block)
-        ip_m   = _re.search(r'AllowedIPs = (\S+?)(?:/32)?$', block, _re.MULTILINE)
-        if not (name_m and pub_m and psk_m and ip_m):
-            continue
-        try:
-            _ssh_sync_peer_to_slave(
-                server,
-                name_m.group(1).strip(),
-                pub_m.group(1).strip(),
-                psk_m.group(1).strip(),
-                ip_m.group(1).strip(),
-            )
-        except Exception:
-            pass
-
 
 async def _sync_peer_to_all_slaves(name: str, pub: str, psk: str, ip: str) -> list:
     """Синхронизирует нового клиента со всеми slave-серверами. Возвращает список ошибок."""
@@ -2107,26 +1934,6 @@ async def srv_del_ok(query, srv_idx: int):
         reply_markup=back_kb("servers"),
         parse_mode="Markdown"
     )
-
-
-def _ssh_stop_slave_awg(ssh: dict):
-    """SSH к slave и останавливает awg-quick@awg0."""
-    if not _PARAMIKO_AVAILABLE:
-        raise RuntimeError("paramiko не установлен: pip3 install paramiko")
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(
-        ssh.get("ip", ""), port=ssh.get("port", 22),
-        username=ssh.get("login", "root"), password=ssh.get("password", ""),
-        timeout=8, banner_timeout=10
-    )
-    try:
-        _, stdout, stderr = client.exec_command(
-            "systemctl stop awg-quick@awg0", timeout=15
-        )
-        stdout.read(); stderr.read()
-    finally:
-        client.close()
 
 
 async def srv_sync_now(query, srv_idx: int):
