@@ -1679,7 +1679,7 @@ def ssh_apply_socks5_on_slave(
 
         chain = f"SOCKS5_{client_ip.replace('.', '_')}"
 
-        # Идемпотентная очистка старых правил
+        # 1. Идемпотентная очистка старых правил
         cleanup = [
             f"iptables -t nat -D PREROUTING -s {client_ip}/32 -p udp --dport 53"
             f" -j DNAT --to-destination 127.0.0.1:5300 2>/dev/null || true",
@@ -1694,31 +1694,32 @@ def ssh_apply_socks5_on_slave(
             _, so, se = client.exec_command(cmd, timeout=5)
             so.read(); se.read()
 
-        # Проверяем dnscrypt-proxy на slave
-        _, stdout, _ = client.exec_command(
-            "ss -tulnp 2>/dev/null | grep -q ':5300' && echo YES || echo NO", timeout=5
-        )
-        dnscrypt_ok = stdout.read().decode().strip() == "YES"
+        # 2. Запускаем redsocks2 ПЕРВЫМ — его dnstc должен слушать :5300
+        #    до применения iptables DNAT-правил для DNS
+        _, stdout, stderr = client.exec_command("systemctl restart redsocks2", timeout=15)
+        rc = stdout.channel.recv_exit_status()
+        if rc != 0:
+            err = stderr.read().decode().strip()
+            return False, f"❌ redsocks2 restart: {err}"
 
-        if dnscrypt_ok:
-            dns_cmds = [
-                f"iptables -t nat -A PREROUTING -s {client_ip}/32 -p udp --dport 53"
-                f" -j DNAT --to-destination 127.0.0.1:5300",
-                f"iptables -t nat -A PREROUTING -s {client_ip}/32 -p tcp --dport 53"
-                f" -j DNAT --to-destination 127.0.0.1:5300",
-            ]
-            for cmd in dns_cmds:
-                _, so, se = client.exec_command(cmd, timeout=5)
-                so.read(); se.read()
-
-        # Резолвим IP прокси на slave
+        # 3. Резолвим IP прокси на slave
         _, stdout, _ = client.exec_command(
             f"getent hosts {socks5_host} 2>/dev/null | awk '{{print $1}}' | head -1 || echo {socks5_host}",
             timeout=5
         )
         socks5_ip = stdout.read().decode().strip() or socks5_host
 
-        # Создаём цепочку и правила TCP
+        # 4. Применяем iptables (redsocks2 уже запущен, dnstc слушает :5300)
+        dns_cmds = [
+            f"iptables -t nat -A PREROUTING -s {client_ip}/32 -p udp --dport 53"
+            f" -j DNAT --to-destination 127.0.0.1:5300",
+            f"iptables -t nat -A PREROUTING -s {client_ip}/32 -p tcp --dport 53"
+            f" -j DNAT --to-destination 127.0.0.1:5300",
+        ]
+        for cmd in dns_cmds:
+            _, so, se = client.exec_command(cmd, timeout=5)
+            so.read(); se.read()
+
         apply_cmds = [
             f"iptables -t nat -N {chain}",
             f"iptables -t nat -A {chain} -d {socks5_ip} -j RETURN",
@@ -1736,13 +1737,6 @@ def ssh_apply_socks5_on_slave(
         for cmd in apply_cmds:
             _, so, se = client.exec_command(cmd, timeout=5)
             so.read(); se.read()
-
-        # Перезапускаем redsocks2
-        _, stdout, stderr = client.exec_command("systemctl restart redsocks2", timeout=15)
-        rc = stdout.channel.recv_exit_status()
-        if rc != 0:
-            err = stderr.read().decode().strip()
-            return False, f"❌ redsocks2 restart: {err}"
 
         return True, "✅ SOCKS5 применён"
     except Exception as e:

@@ -75,17 +75,6 @@ def _is_redsocks_running() -> bool:
         return False
 
 
-def _is_dnscrypt_available() -> bool:
-    """Проверяет, запущен ли dnscrypt-proxy на порту DNS_LOCAL_PORT."""
-    try:
-        r = subprocess.run(
-            ["ss", "-tulnp"], capture_output=True, text=True, timeout=3
-        )
-        return f":{DNS_LOCAL_PORT} " in r.stdout or f":{DNS_LOCAL_PORT}\n" in r.stdout
-    except Exception:
-        return False
-
-
 def _resolve_host(host: str) -> str:
     try:
         return socket.gethostbyname(host)
@@ -168,32 +157,37 @@ def _remove_iptables_for_client(client_ip: str):
 
 def _apply_iptables_for_client(client_ip: str, socks5_host_ip: str) -> tuple[bool, str]:
     """Настраивает iptables для маршрутизации трафика клиента через SOCKS5.
-    DNS перенаправляется через dnscrypt-proxy только если он запущен на порту
-    DNS_LOCAL_PORT; иначе DNS идёт в обход (нет утечек блокируют трафик)."""
+
+    DNS (UDP и TCP) перенаправляется на redsocks2 dnstc (порт DNS_LOCAL_PORT),
+    который конвертирует UDP→TCP и отправляет DNS-запросы через SOCKS5-прокси.
+    Перед применением всегда выполняется идемпотентная очистка старых правил
+    для данного client_ip — это предотвращает дубликаты при повторном вызове.
+    Redsocks2 должен быть запущен до вызова этой функции."""
     try:
         chain = f"SOCKS5_{client_ip.replace('.', '_')}"
-        dnscrypt_ok = _is_dnscrypt_available()
 
-        if dnscrypt_ok:
-            # DNS UDP → dnscrypt-proxy
-            subprocess.run([
-                "iptables", "-t", "nat", "-A", "PREROUTING",
-                "-s", f"{client_ip}/32", "-p", "udp", "--dport", "53",
-                "-j", "DNAT", "--to-destination", f"127.0.0.1:{DNS_LOCAL_PORT}"
-            ], check=True, capture_output=True)
-            # DNS TCP → dnscrypt-proxy
-            subprocess.run([
-                "iptables", "-t", "nat", "-A", "PREROUTING",
-                "-s", f"{client_ip}/32", "-p", "tcp", "--dport", "53",
-                "-j", "DNAT", "--to-destination", f"127.0.0.1:{DNS_LOCAL_PORT}"
-            ], check=True, capture_output=True)
+        # Идемпотентная очистка: удаляем старые правила если есть
+        _remove_iptables_for_client(client_ip)
 
-        # Создаём цепочку для TCP
+        # DNS UDP → redsocks2 dnstc (конвертирует в TCP → уходит через SOCKS5)
+        subprocess.run([
+            "iptables", "-t", "nat", "-A", "PREROUTING",
+            "-s", f"{client_ip}/32", "-p", "udp", "--dport", "53",
+            "-j", "DNAT", "--to-destination", f"127.0.0.1:{DNS_LOCAL_PORT}"
+        ], check=True, capture_output=True)
+        # DNS TCP → redsocks2 dnstc
+        subprocess.run([
+            "iptables", "-t", "nat", "-A", "PREROUTING",
+            "-s", f"{client_ip}/32", "-p", "tcp", "--dport", "53",
+            "-j", "DNAT", "--to-destination", f"127.0.0.1:{DNS_LOCAL_PORT}"
+        ], check=True, capture_output=True)
+
+        # Создаём цепочку для TCP (после очистки выше цепочки нет — -N всегда успешен)
         subprocess.run(
             ["iptables", "-t", "nat", "-N", chain],
             check=True, capture_output=True
         )
-        # Исключение: IP прокси
+        # Исключение: IP прокси (иначе петля)
         subprocess.run([
             "iptables", "-t", "nat", "-A", chain,
             "-d", socks5_host_ip, "-j", "RETURN"
@@ -214,12 +208,12 @@ def _apply_iptables_for_client(client_ip: str, socks5_host_ip: str) -> tuple[boo
             "iptables", "-t", "nat", "-A", chain,
             "-p", "tcp", "-j", "REDIRECT", "--to-ports", str(REDSOCKS2_PORT)
         ], check=True, capture_output=True)
-        # Применяем к трафику клиента
+        # Применяем цепочку к трафику клиента
         subprocess.run([
             "iptables", "-t", "nat", "-A", "PREROUTING",
             "-s", f"{client_ip}/32", "-j", chain
         ], check=True, capture_output=True)
-        # Блокируем UDP кроме DNS
+        # Блокируем UDP кроме DNS (DNS идёт через dnstc → SOCKS5)
         subprocess.run([
             "iptables", "-t", "filter", "-A", "FORWARD",
             "-s", f"{client_ip}/32", "-p", "udp", "!", "--dport", "53",
@@ -231,8 +225,7 @@ def _apply_iptables_for_client(client_ip: str, socks5_host_ip: str) -> tuple[boo
         os.makedirs("/etc/iptables", exist_ok=True)
         subprocess.run(["bash", "-c", "iptables-save > /etc/iptables/rules.v4"], capture_output=True)
 
-        note = "" if dnscrypt_ok else "\n⚠️ dnscrypt-proxy не найден — DNS идёт напрямую"
-        return True, f"✅ Правила iptables применены{note}"
+        return True, "✅ Правила iptables применены"
     except subprocess.CalledProcessError as e:
         return False, f"❌ iptables: {e.stderr.decode().strip() if e.stderr else str(e)}"
     except Exception as e:
@@ -361,14 +354,23 @@ async def _enable_socks5(query, name: str):
 
     socks5_host_ip = _resolve_host(host)
 
-    # Пишем конфиг redsocks2 и применяем iptables на primary
+    # 1. Пишем конфиг redsocks2
     _write_redsocks_conf(host, int(port), state.get("socks5_user", ""), state.get("socks5_pass", ""))
+
+    # 2. Запускаем redsocks2 ПЕРВЫМ — его dnstc должен слушать порт DNS_LOCAL_PORT
+    #    до того как iptables начнёт перенаправлять DNS на этот порт
+    ok2, msg2 = _redsocks_restart()
+    if not ok2:
+        await query.answer(f"❌ redsocks2 не запустился:\n{msg2}", show_alert=True)
+        await _show_socks5_menu(query)
+        return
+
+    # 3. Применяем iptables (idempotent — очищает старые правила внутри)
     ok, msg = _apply_iptables_for_client(client_ip, socks5_host_ip)
     if not ok:
         await query.answer(msg, show_alert=True)
         await _show_socks5_menu(query)
         return
-    ok2, msg2 = _redsocks_restart()
 
     # Применяем на slave-серверах (асинхронно, не блокируем UI)
     slave_errors: list[str] = []
