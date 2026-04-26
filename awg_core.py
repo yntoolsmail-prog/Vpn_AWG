@@ -1535,3 +1535,253 @@ def ssh_stop_slave_awg(ssh: dict) -> None:
     finally:
         client.close()
 
+
+# ── SSH-управление MTProxy на slave ──────────────────────────────────────────
+
+def ssh_sync_mtproxy_secret(server: dict, secret: str, port: str) -> tuple[bool, str]:
+    """Обновляет секрет MTProxy на slave и перезапускает сервис.
+    Возвращает (success, message)."""
+    if not PARAMIKO_AVAILABLE:
+        return False, "paramiko не установлен"
+    ssh = server.get("ssh", {})
+    client = _paramiko.SSHClient()
+    client.set_missing_host_key_policy(_paramiko.AutoAddPolicy())
+    try:
+        client.connect(
+            ssh.get("ip", ""), port=ssh.get("port", 22),
+            username=ssh.get("login", "root"), password=ssh.get("password", ""),
+            timeout=10, banner_timeout=15
+        )
+        # Проверяем наличие MTProxy
+        _, stdout, _ = client.exec_command(
+            "test -f /opt/mtproxy/objs/bin/mtproto-proxy && echo OK || echo NO",
+            timeout=5
+        )
+        if stdout.read().decode().strip() != "OK":
+            return False, "MTProxy не установлен"
+
+        cmds = [
+            "mkdir -p /etc/proxy-bot",
+            # Обновляем или добавляем MTP_SECRET
+            f"grep -q '^MTP_SECRET=' /etc/proxy-bot/proxy_bot.env 2>/dev/null "
+            f"&& sed -i 's|^MTP_SECRET=.*|MTP_SECRET={secret}|' /etc/proxy-bot/proxy_bot.env "
+            f"|| echo 'MTP_SECRET={secret}' >> /etc/proxy-bot/proxy_bot.env",
+            # Обновляем или добавляем MTP_PORT
+            f"grep -q '^MTP_PORT=' /etc/proxy-bot/proxy_bot.env 2>/dev/null "
+            f"&& sed -i 's|^MTP_PORT=.*|MTP_PORT={port}|' /etc/proxy-bot/proxy_bot.env "
+            f"|| echo 'MTP_PORT={port}' >> /etc/proxy-bot/proxy_bot.env",
+            # Перезапускаем сервис
+            "systemctl restart mtproxy 2>/dev/null || true",
+        ]
+        for cmd in cmds:
+            _, stdout, stderr = client.exec_command(cmd, timeout=15)
+            stdout.read(); stderr.read()
+        return True, "✅ MTProxy синхронизирован"
+    except Exception as e:
+        return False, f"❌ {e}"
+    finally:
+        client.close()
+
+
+def ssh_check_mtproxy_installed(server: dict) -> bool:
+    """Проверяет через SSH наличие MTProxy на slave. False при ошибке."""
+    if not PARAMIKO_AVAILABLE:
+        return False
+    ssh = server.get("ssh", {})
+    try:
+        client = _paramiko.SSHClient()
+        client.set_missing_host_key_policy(_paramiko.AutoAddPolicy())
+        client.connect(
+            ssh.get("ip", ""), port=ssh.get("port", 22),
+            username=ssh.get("login", "root"), password=ssh.get("password", ""),
+            timeout=8, banner_timeout=10
+        )
+        try:
+            _, stdout, _ = client.exec_command(
+                "test -f /opt/mtproxy/objs/bin/mtproto-proxy && echo OK || echo NO",
+                timeout=5
+            )
+            return stdout.read().decode().strip() == "OK"
+        finally:
+            client.close()
+    except Exception:
+        return False
+
+
+# ── SSH-управление SOCKS5 на slave ───────────────────────────────────────────
+
+_SOCKS5_PRIVATE_NETS = [
+    "0.0.0.0/8", "10.0.0.0/8", "127.0.0.0/8",
+    "169.254.0.0/16", "172.16.0.0/12", "192.168.0.0/16",
+    "224.0.0.0/4", "240.0.0.0/4",
+]
+
+
+def ssh_apply_socks5_on_slave(
+    server: dict,
+    client_ip: str,
+    socks5_host: str,
+    socks5_port: int,
+    socks5_user: str,
+    socks5_pass: str,
+) -> tuple[bool, str]:
+    """Пишет redsocks2.conf и применяет iptables для клиента на slave-сервере.
+    Возвращает (success, message)."""
+    if not PARAMIKO_AVAILABLE:
+        return False, "paramiko не установлен"
+    ssh = server.get("ssh", {})
+    client = _paramiko.SSHClient()
+    client.set_missing_host_key_policy(_paramiko.AutoAddPolicy())
+    try:
+        client.connect(
+            ssh.get("ip", ""), port=ssh.get("port", 22),
+            username=ssh.get("login", "root"), password=ssh.get("password", ""),
+            timeout=10, banner_timeout=15
+        )
+        # Проверяем наличие redsocks2
+        _, stdout, _ = client.exec_command(
+            "test -f /usr/local/bin/redsocks2 && echo OK || echo NO", timeout=5
+        )
+        if stdout.read().decode().strip() != "OK":
+            return False, "redsocks2 не установлен"
+
+        # Пишем redsocks2.conf
+        auth_lines = ""
+        if socks5_user:
+            auth_lines = f'    login = "{socks5_user}";\n    password = "{socks5_pass}";\n'
+        conf = (
+            "base {\n"
+            "    log_debug = off;\n"
+            "    log_info = on;\n"
+            "    log = \"syslog:daemon\";\n"
+            "    daemon = on;\n"
+            "    redirector = iptables;\n"
+            "}\n\n"
+            "redsocks {\n"
+            "    local_ip = 0.0.0.0;\n"
+            f"    local_port = 12345;\n"
+            f"    ip = {socks5_host};\n"
+            f"    port = {socks5_port};\n"
+            "    type = socks5;\n"
+            f"{auth_lines}"
+            "}\n\n"
+            "dnstc {\n"
+            "    local_ip = 127.0.0.1;\n"
+            "    local_port = 5300;\n"
+            "}\n"
+        )
+        chan = client.get_transport().open_session()
+        chan.exec_command("mkdir -p /etc/redsocks2 && cat > /etc/redsocks2/redsocks2.conf")
+        chan.sendall(conf.encode())
+        chan.shutdown_write()
+        chan.recv_exit_status()
+        chan.close()
+
+        chain = f"SOCKS5_{client_ip.replace('.', '_')}"
+
+        # Идемпотентная очистка старых правил
+        cleanup = [
+            f"iptables -t nat -D PREROUTING -s {client_ip}/32 -p udp --dport 53"
+            f" -j DNAT --to-destination 127.0.0.1:5300 2>/dev/null || true",
+            f"iptables -t nat -D PREROUTING -s {client_ip}/32 -p tcp --dport 53"
+            f" -j DNAT --to-destination 127.0.0.1:5300 2>/dev/null || true",
+            f"iptables -t nat -D PREROUTING -s {client_ip}/32 -j {chain} 2>/dev/null || true",
+            f"iptables -t nat -F {chain} 2>/dev/null || true",
+            f"iptables -t nat -X {chain} 2>/dev/null || true",
+            f"iptables -t filter -D FORWARD -s {client_ip}/32 -p udp ! --dport 53 -j REJECT 2>/dev/null || true",
+        ]
+        for cmd in cleanup:
+            _, so, se = client.exec_command(cmd, timeout=5)
+            so.read(); se.read()
+
+        # Проверяем dnscrypt-proxy на slave
+        _, stdout, _ = client.exec_command(
+            "ss -tulnp 2>/dev/null | grep -q ':5300' && echo YES || echo NO", timeout=5
+        )
+        dnscrypt_ok = stdout.read().decode().strip() == "YES"
+
+        if dnscrypt_ok:
+            dns_cmds = [
+                f"iptables -t nat -A PREROUTING -s {client_ip}/32 -p udp --dport 53"
+                f" -j DNAT --to-destination 127.0.0.1:5300",
+                f"iptables -t nat -A PREROUTING -s {client_ip}/32 -p tcp --dport 53"
+                f" -j DNAT --to-destination 127.0.0.1:5300",
+            ]
+            for cmd in dns_cmds:
+                _, so, se = client.exec_command(cmd, timeout=5)
+                so.read(); se.read()
+
+        # Резолвим IP прокси на slave
+        _, stdout, _ = client.exec_command(
+            f"getent hosts {socks5_host} 2>/dev/null | awk '{{print $1}}' | head -1 || echo {socks5_host}",
+            timeout=5
+        )
+        socks5_ip = stdout.read().decode().strip() or socks5_host
+
+        # Создаём цепочку и правила TCP
+        apply_cmds = [
+            f"iptables -t nat -N {chain}",
+            f"iptables -t nat -A {chain} -d {socks5_ip} -j RETURN",
+        ]
+        for net in _SOCKS5_PRIVATE_NETS:
+            apply_cmds.append(f"iptables -t nat -A {chain} -d {net} -j RETURN")
+        apply_cmds.extend([
+            f"iptables -t nat -A {chain} -p tcp -j REDIRECT --to-ports 12345",
+            f"iptables -t nat -A PREROUTING -s {client_ip}/32 -j {chain}",
+            f"iptables -t filter -A FORWARD -s {client_ip}/32 -p udp ! --dport 53 -j REJECT",
+            "sysctl -w net.ipv4.conf.all.route_localnet=1",
+            "sysctl -w net.ipv4.ip_forward=1",
+            "mkdir -p /etc/iptables && iptables-save > /etc/iptables/rules.v4",
+        ])
+        for cmd in apply_cmds:
+            _, so, se = client.exec_command(cmd, timeout=5)
+            so.read(); se.read()
+
+        # Перезапускаем redsocks2
+        _, stdout, stderr = client.exec_command("systemctl restart redsocks2", timeout=15)
+        rc = stdout.channel.recv_exit_status()
+        if rc != 0:
+            err = stderr.read().decode().strip()
+            return False, f"❌ redsocks2 restart: {err}"
+
+        return True, "✅ SOCKS5 применён"
+    except Exception as e:
+        return False, f"❌ {e}"
+    finally:
+        client.close()
+
+
+def ssh_remove_socks5_from_slave(server: dict, client_ip: str) -> tuple[bool, str]:
+    """Снимает iptables-правила SOCKS5 для клиента с slave-сервера."""
+    if not PARAMIKO_AVAILABLE:
+        return False, "paramiko не установлен"
+    ssh = server.get("ssh", {})
+    client = _paramiko.SSHClient()
+    client.set_missing_host_key_policy(_paramiko.AutoAddPolicy())
+    try:
+        client.connect(
+            ssh.get("ip", ""), port=ssh.get("port", 22),
+            username=ssh.get("login", "root"), password=ssh.get("password", ""),
+            timeout=10, banner_timeout=15
+        )
+        chain = f"SOCKS5_{client_ip.replace('.', '_')}"
+        cmds = [
+            f"iptables -t nat -D PREROUTING -s {client_ip}/32 -p udp --dport 53"
+            f" -j DNAT --to-destination 127.0.0.1:5300 2>/dev/null || true",
+            f"iptables -t nat -D PREROUTING -s {client_ip}/32 -p tcp --dport 53"
+            f" -j DNAT --to-destination 127.0.0.1:5300 2>/dev/null || true",
+            f"iptables -t nat -D PREROUTING -s {client_ip}/32 -j {chain} 2>/dev/null || true",
+            f"iptables -t nat -F {chain} 2>/dev/null || true",
+            f"iptables -t nat -X {chain} 2>/dev/null || true",
+            f"iptables -t filter -D FORWARD -s {client_ip}/32 -p udp ! --dport 53 -j REJECT 2>/dev/null || true",
+            "iptables-save > /etc/iptables/rules.v4 2>/dev/null || true",
+        ]
+        for cmd in cmds:
+            _, so, se = client.exec_command(cmd, timeout=5)
+            so.read(); se.read()
+        return True, "✅ SOCKS5 снят"
+    except Exception as e:
+        return False, f"❌ {e}"
+    finally:
+        client.close()
+
