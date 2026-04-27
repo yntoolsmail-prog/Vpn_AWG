@@ -58,8 +58,8 @@ if [[ -n "$_active_ip" ]]; then
     iptables -t nat -F "$_chain" 2>/dev/null || true
     iptables -t nat -X "$_chain" 2>/dev/null || true
 
-    # FORWARD: блокировка UDP
-    iptables -D FORWARD -s "$_active_ip" -p udp ! --dport 53 -j DROP 2>/dev/null || true
+    # FORWARD: блокировка UDP (правило ставится с REJECT, не DROP)
+    iptables -t filter -D FORWARD -s "$_active_ip" -p udp ! --dport 53 -j REJECT 2>/dev/null || true
 
     # Сохраняем
     iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
