@@ -460,6 +460,8 @@ if [[ "${1}" == "--update" ]]; then
         # Пропускаем файлы которых нет на сервере (например TMA не установлена)
         [[ "$src_file" == "modules/tma/tma_server.py" && ! -f "$dst_file" ]] && continue
         [[ "$src_file" == "tma/index.html" && ! -f "$dst_file" ]] && continue
+        # Пропускаем slave_servers если модуль не установлен (primary-only)
+        [[ "$src_file" == modules/slave_servers/* && ! -d "/root/modules/slave_servers" ]] && continue
         log "Обновляю ${src_file}..."
         if curl -fsSL "${REPO_RAW}/${src_file}" -o "${dst_file}.new"; then
             mv "${dst_file}.new" "$dst_file"

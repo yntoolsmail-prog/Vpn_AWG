@@ -34,7 +34,8 @@ STATE_FILE       = "/etc/awg-socks5/bot_state.json"
 REDSOCKS2_BIN    = "/usr/local/bin/redsocks2"
 REDSOCKS2_CONF   = "/etc/redsocks2/redsocks2.conf"
 REDSOCKS2_PORT   = 12345
-DNS_LOCAL_PORT   = 5300
+# dnscrypt-proxy занимает 5300, поэтому dnstc redsocks2 слушает на 5399
+DNS_LOCAL_PORT   = 5399
 
 _S_HOST = 50
 _S_PORT = 51
@@ -137,31 +138,30 @@ def _remove_iptables_for_client(client_ip: str):
     if not client_ip:
         return
     chain = f"SOCKS5_{client_ip.replace('.', '_')}"
-    cmds = [
-        ["iptables", "-t", "nat", "-D", "PREROUTING",
-         "-s", f"{client_ip}/32", "-p", "udp", "--dport", "53",
-         "-j", "DNAT", "--to-destination", f"127.0.0.1:{DNS_LOCAL_PORT}"],
-        ["iptables", "-t", "nat", "-D", "PREROUTING",
-         "-s", f"{client_ip}/32", "-p", "tcp", "--dport", "53",
-         "-j", "DNAT", "--to-destination", f"127.0.0.1:{DNS_LOCAL_PORT}"],
-        ["iptables", "-t", "nat", "-D", "PREROUTING",
-         "-s", f"{client_ip}/32", "-j", chain],
+    # Чистим правила для текущего порта (5399) и старого (5300) для идемпотентности
+    for dns_port in (DNS_LOCAL_PORT, 5300):
+        for proto in ("udp", "tcp"):
+            subprocess.run([
+                "iptables", "-t", "nat", "-D", "PREROUTING",
+                "-s", f"{client_ip}/32", "-p", proto, "--dport", "53",
+                "-j", "DNAT", "--to-destination", f"127.0.0.1:{dns_port}",
+            ], capture_output=True)
+    for cmd in [
+        ["iptables", "-t", "nat", "-D", "PREROUTING", "-s", f"{client_ip}/32", "-j", chain],
         ["iptables", "-t", "nat", "-F", chain],
         ["iptables", "-t", "nat", "-X", chain],
         ["iptables", "-t", "filter", "-D", "FORWARD",
          "-s", f"{client_ip}/32", "-p", "udp", "!", "--dport", "53", "-j", "REJECT"],
-    ]
-    for cmd in cmds:
+    ]:
         subprocess.run(cmd, capture_output=True)
 
 
 def _apply_iptables_for_client(client_ip: str, socks5_host_ip: str) -> tuple[bool, str]:
     """Настраивает iptables для маршрутизации трафика клиента через SOCKS5.
 
-    DNS (UDP и TCP) перенаправляется на redsocks2 dnstc (порт DNS_LOCAL_PORT),
-    который конвертирует UDP→TCP и отправляет DNS-запросы через SOCKS5-прокси.
-    Перед применением всегда выполняется идемпотентная очистка старых правил
-    для данного client_ip — это предотвращает дубликаты при повторном вызове.
+    DNS (UDP и TCP) перенаправляется на dnstc redsocks2 (порт 5399),
+    который конвертирует UDP→TCP и отправляет DNS через SOCKS5-прокси.
+    Перед применением всегда выполняется идемпотентная очистка.
     Redsocks2 должен быть запущен до вызова этой функции."""
     try:
         chain = f"SOCKS5_{client_ip.replace('.', '_')}"
@@ -357,7 +357,7 @@ async def _enable_socks5(query, name: str):
     # 1. Пишем конфиг redsocks2
     _write_redsocks_conf(host, int(port), state.get("socks5_user", ""), state.get("socks5_pass", ""))
 
-    # 2. Запускаем redsocks2 ПЕРВЫМ — его dnstc должен слушать порт DNS_LOCAL_PORT
+    # 2. Запускаем redsocks2 ПЕРВЫМ — его dnstc должен слушать DNS_LOCAL_PORT (5399)
     #    до того как iptables начнёт перенаправлять DNS на этот порт
     ok2, msg2 = _redsocks_restart()
     if not ok2:
