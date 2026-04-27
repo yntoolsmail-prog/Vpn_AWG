@@ -620,6 +620,8 @@ def register_handlers(app) -> None:
         per_chat=True,
         per_message=False,
         allow_reentry=True,
+        name="socks5_setup",
+        persistent=True,
     )
 
     app.add_handler(conv, group=-1)

@@ -6,7 +6,7 @@ import os, subprocess, logging, json, time, tempfile, shutil, re, asyncio, threa
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo, BotCommand
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
-    MessageHandler, filters, ContextTypes, ConversationHandler
+    MessageHandler, filters, ContextTypes, ConversationHandler, PicklePersistence
 )
 from awg_core import (
     ADMIN_ID, AWG_CONF, AWG_IFACE, BOT_SERVICE, BOT_TOKEN, BW_LOG_FILE,
@@ -3365,7 +3365,9 @@ async def post_init(application) -> None:
 
 
 def main():
-    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+    os.makedirs("/etc/awg-bot", exist_ok=True)
+    persistence = PicklePersistence(filepath="/etc/awg-bot/bot_persistence.pkl")
+    app = Application.builder().token(BOT_TOKEN).post_init(post_init).persistence(persistence).build()
 
     reg_conv = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
