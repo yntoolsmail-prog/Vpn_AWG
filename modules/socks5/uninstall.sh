@@ -43,11 +43,13 @@ if [[ -n "$_active_ip" ]]; then
     log "Снимаю iptables правила для клиента ${_active_ip}..."
     _chain="SOCKS5_$(echo "$_active_ip" | tr '.' '_')"
 
-    # DNS редиректы
-    iptables -t nat -D PREROUTING -s "$_active_ip" -p udp --dport 53 \
-        -j DNAT --to-destination 127.0.0.1:5300 2>/dev/null || true
-    iptables -t nat -D PREROUTING -s "$_active_ip" -p tcp --dport 53 \
-        -j DNAT --to-destination 127.0.0.1:5300 2>/dev/null || true
+    # DNS редиректы (очищаем оба возможных порта для идемпотентности)
+    for _dns_port in 5399 5300; do
+        iptables -t nat -D PREROUTING -s "$_active_ip" -p udp --dport 53 \
+            -j DNAT --to-destination "127.0.0.1:${_dns_port}" 2>/dev/null || true
+        iptables -t nat -D PREROUTING -s "$_active_ip" -p tcp --dport 53 \
+            -j DNAT --to-destination "127.0.0.1:${_dns_port}" 2>/dev/null || true
+    done
 
     # TCP REDIRECT через цепочку
     iptables -t nat -D PREROUTING -s "$_active_ip" -p tcp -j "$_chain" 2>/dev/null || true

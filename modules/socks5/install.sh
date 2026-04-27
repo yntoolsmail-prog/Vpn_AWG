@@ -67,12 +67,11 @@ base {
     log_debug = off;
     log_info = on;
     log = "syslog:daemon";
-    daemon = on;
+    daemon = off;
     redirector = iptables;
 }
 
 redsocks {
-    local_ip = 0.0.0.0;
     local_port = ${REDSOCKS2_PORT};
     ip = 127.0.0.1;
     port = 1080;
