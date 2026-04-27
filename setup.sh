@@ -191,40 +191,42 @@ _apply_modules() {
         local have
         have=$(grep "^${name}=" /root/modules.conf 2>/dev/null | cut -d= -f2 || echo "off")
 
-        if [[ "$want" == "on" ]] && { [[ "$have" != "on" ]] || ! _mod_is_installed "$name"; }; then
-            log "Включение модуля: ${name}..."
-            mkdir -p "/root/modules/${name}"
+        if [[ "$want" == "on" ]]; then
+            if [[ "$have" != "on" ]] || ! _mod_is_installed "$name"; then
+                log "Включение модуля: ${name}..."
+                mkdir -p "/root/modules/${name}"
 
-            # Скачать __init__.py
-            if curl -fsSL "${REPO_RAW}/modules/${name}/__init__.py" \
-                    -o "/root/modules/${name}/__init__.py.new" 2>/dev/null; then
-                mv "/root/modules/${name}/__init__.py.new" "/root/modules/${name}/__init__.py"
-                ok "Файлы модуля ${name} загружены"
-            else
-                warn "Не удалось скачать модуль ${name} — пропуск."
-                continue
+                # Скачать __init__.py
+                if curl -fsSL "${REPO_RAW}/modules/${name}/__init__.py" \
+                        -o "/root/modules/${name}/__init__.py.new" 2>/dev/null; then
+                    mv "/root/modules/${name}/__init__.py.new" "/root/modules/${name}/__init__.py"
+                    ok "Файлы модуля ${name} загружены"
+                else
+                    warn "Не удалось скачать модуль ${name} — пропуск."
+                    continue
+                fi
+
+                # Скачать install.sh (если есть в репо)
+                curl -fsSL "${REPO_RAW}/modules/${name}/install.sh" \
+                        -o "/root/modules/${name}/install.sh.new" 2>/dev/null \
+                    && mv "/root/modules/${name}/install.sh.new" "/root/modules/${name}/install.sh" \
+                    && chmod +x "/root/modules/${name}/install.sh" \
+                    || rm -f "/root/modules/${name}/install.sh.new"
+
+                # Запускать install.sh только если ещё не установлен (нет sentinel)
+                if _mod_is_installed "$name"; then
+                    info "Модуль ${name} уже установлен — пропускаю установщик."
+                elif [[ -f "/root/modules/${name}/install.sh" ]]; then
+                    log "Запуск установщика модуля ${name}..."
+                    bash "/root/modules/${name}/install.sh" || {
+                        warn "Установщик модуля ${name} завершился с ошибкой."
+                        warn "Модуль будет включён в modules.conf — исправьте вручную при необходимости."
+                    }
+                fi
+
+                _modules_conf_set "$name" "on"
+                changed=1
             fi
-
-            # Скачать install.sh (если есть в репо)
-            curl -fsSL "${REPO_RAW}/modules/${name}/install.sh" \
-                    -o "/root/modules/${name}/install.sh.new" 2>/dev/null \
-                && mv "/root/modules/${name}/install.sh.new" "/root/modules/${name}/install.sh" \
-                && chmod +x "/root/modules/${name}/install.sh" \
-                || rm -f "/root/modules/${name}/install.sh.new"
-
-            # Запускать install.sh только если ещё не установлен (нет sentinel)
-            if _mod_is_installed "$name"; then
-                info "Модуль ${name} уже установлен — пропускаю установщик."
-            elif [[ -f "/root/modules/${name}/install.sh" ]]; then
-                log "Запуск установщика модуля ${name}..."
-                bash "/root/modules/${name}/install.sh" || {
-                    warn "Установщик модуля ${name} завершился с ошибкой."
-                    warn "Модуль будет включён в modules.conf — исправьте вручную при необходимости."
-                }
-            fi
-
-            _modules_conf_set "$name" "on"
-            changed=1
 
         elif [[ "$want" == "off" && "$have" == "on" ]]; then
             log "Отключение модуля: ${name}..."
