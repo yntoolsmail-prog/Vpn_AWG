@@ -30,8 +30,8 @@ echo -e "${NC}"
 
 # ── Зависимости ───────────────────────────────────────────────────────────────
 log "Установка зависимостей..."
-apt-get update -qq
-apt-get install -y -qq git build-essential libssl-dev zlib1g-dev xxd curl
+apt-get -o DPkg::Lock::Timeout=120 update -qq
+apt-get -o DPkg::Lock::Timeout=120 install -y -qq git build-essential libssl-dev zlib1g-dev xxd curl
 
 # ── Сборка MTProxy ────────────────────────────────────────────────────────────
 if [[ -f "$MTP_BIN" ]]; then

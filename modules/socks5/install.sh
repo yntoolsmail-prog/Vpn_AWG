@@ -32,8 +32,8 @@ echo -e "${NC}"
 
 # ── Зависимости ───────────────────────────────────────────────────────────────
 log "Установка пакетов..."
-apt-get update -qq
-apt-get install -y -qq \
+apt-get -o DPkg::Lock::Timeout=120 update -qq
+apt-get -o DPkg::Lock::Timeout=120 install -y -qq \
     git build-essential libevent-dev libssl-dev \
     curl wget iptables iptables-persistent dnscrypt-proxy dnsutils
 

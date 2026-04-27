@@ -322,6 +322,18 @@ _modules_menu() {
         fi
     done <<< "$_repo_conf"
 
+    # На slave-серверах показываем только релевантные модули
+    if [[ "${SLAVE_MODE:-0}" -eq 1 ]]; then
+        local -a _slave_only=("socks5" "mtproxy")
+        local -a _filtered=()
+        for _m in "${_avail[@]}"; do
+            for _sm in "${_slave_only[@]}"; do
+                [[ "$_m" == "$_sm" ]] && { _filtered+=("$_m"); break; }
+            done
+        done
+        _avail=("${_filtered[@]}")
+    fi
+
     if [[ ${#_avail[@]} -eq 0 ]]; then
         warn "Дополнительных модулей в репозитории не найдено."
         return
