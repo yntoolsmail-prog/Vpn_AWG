@@ -88,7 +88,7 @@ SITES = {
     },
     "okko": {
         "name": "Okko", "emoji": "🎥",
-        "domains": ["okko.tv", "static.okko.tv", "okko.sport", "cdnvideo.ru"],
+        "domains": ["okko.tv", "static.okko.tv", "okko.sport", "cdnvideo.ru", "api.okko.sport", "sport-updates.okkoapi.tv"],
     },
     "trikolor": {
         "name": "Триколор", "emoji": "📡",
