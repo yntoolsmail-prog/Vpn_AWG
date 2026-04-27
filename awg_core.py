@@ -1654,20 +1654,16 @@ def ssh_apply_socks5_on_slave(
             "    log_debug = off;\n"
             "    log_info = on;\n"
             "    log = \"syslog:daemon\";\n"
-            "    daemon = on;\n"
+            "    daemon = off;\n"
             "    redirector = iptables;\n"
             "}\n\n"
             "redsocks {\n"
-            "    local_ip = 0.0.0.0;\n"
-            f"    local_port = 12345;\n"
-            f"    ip = {socks5_host};\n"
-            f"    port = {socks5_port};\n"
+            f"    bind = \"0.0.0.0:12345\";\n"
+            f"    relay = \"{socks5_host}:{socks5_port}\";\n"
             "    type = socks5;\n"
+            "    autoproxy = 0;\n"
+            "    timeout = 10;\n"
             f"{auth_lines}"
-            "}\n\n"
-            "dnstc {\n"
-            "    local_ip = 127.0.0.1;\n"
-            "    local_port = 5399;\n"
             "}\n"
         )
         chan = client.get_transport().open_session()
@@ -1698,8 +1694,7 @@ def ssh_apply_socks5_on_slave(
             _, so, se = client.exec_command(cmd, timeout=5)
             so.read(); se.read()
 
-        # 2. Запускаем redsocks2 ПЕРВЫМ — его dnstc должен слушать :5399
-        #    до применения iptables DNAT-правил для DNS
+        # 2. Запускаем redsocks2
         _, stdout, stderr = client.exec_command("systemctl restart redsocks2", timeout=15)
         rc = stdout.channel.recv_exit_status()
         if rc != 0:
@@ -1713,12 +1708,12 @@ def ssh_apply_socks5_on_slave(
         )
         socks5_ip = stdout.read().decode().strip() or socks5_host
 
-        # 4. Применяем iptables (redsocks2 уже запущен, dnstc слушает :5399)
+        # 4. Применяем iptables (DNS → dnscrypt-proxy :5300)
         dns_cmds = [
             f"iptables -t nat -A PREROUTING -s {client_ip}/32 -p udp --dport 53"
-            f" -j DNAT --to-destination 127.0.0.1:5399",
+            f" -j DNAT --to-destination 127.0.0.1:5300",
             f"iptables -t nat -A PREROUTING -s {client_ip}/32 -p tcp --dport 53"
-            f" -j DNAT --to-destination 127.0.0.1:5399",
+            f" -j DNAT --to-destination 127.0.0.1:5300",
         ]
         for cmd in dns_cmds:
             _, so, se = client.exec_command(cmd, timeout=5)
@@ -1734,6 +1729,7 @@ def ssh_apply_socks5_on_slave(
             f"iptables -t nat -A {chain} -p tcp -j REDIRECT --to-ports 12345",
             f"iptables -t nat -A PREROUTING -s {client_ip}/32 -j {chain}",
             f"iptables -t filter -A FORWARD -s {client_ip}/32 -p udp ! --dport 53 -j REJECT",
+            f"iptables -t filter -A FORWARD -s {client_ip}/32 -p tcp --dport 853 -j REJECT",
             "sysctl -w net.ipv4.conf.all.route_localnet=1",
             "sysctl -w net.ipv4.ip_forward=1",
             "mkdir -p /etc/iptables && iptables-save > /etc/iptables/rules.v4",
@@ -1776,6 +1772,7 @@ def ssh_remove_socks5_from_slave(server: dict, client_ip: str) -> tuple[bool, st
             f"iptables -t nat -F {chain} 2>/dev/null || true",
             f"iptables -t nat -X {chain} 2>/dev/null || true",
             f"iptables -t filter -D FORWARD -s {client_ip}/32 -p udp ! --dport 53 -j REJECT 2>/dev/null || true",
+            f"iptables -t filter -D FORWARD -s {client_ip}/32 -p tcp --dport 853 -j REJECT 2>/dev/null || true",
             "iptables-save > /etc/iptables/rules.v4 2>/dev/null || true",
         ]
         for cmd in cmds:

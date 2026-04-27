@@ -133,7 +133,7 @@ def _remove_iptables_for_client(client_ip: str):
     if not client_ip:
         return
     chain = f"SOCKS5_{client_ip.replace('.', '_')}"
-    # Чистим правила для текущего порта (5399) и старого (5300) для идемпотентности
+    # Чистим оба порта (5300 — текущий dnscrypt-proxy, 5399 — старый dnstc) для идемпотентности
     for proto in ("udp", "tcp"):
         for dns_port in (5300, 5399):
             subprocess.run([
@@ -511,31 +511,37 @@ async def _socks5_got_pass(update, context):
 
 
 async def _socks5_save(update, context):
-    host  = context.user_data.get("socks5_host", "")
-    port  = context.user_data.get("socks5_port", 1080)
-    user  = context.user_data.get("socks5_user", "")
-    pass_ = context.user_data.get("socks5_pass", "")
+    try:
+        host  = context.user_data.get("socks5_host", "")
+        port  = context.user_data.get("socks5_port", 1080)
+        user  = context.user_data.get("socks5_user", "")
+        pass_ = context.user_data.get("socks5_pass", "")
 
-    state = _load_state()
-    state.update({
-        "socks5_host": host,
-        "socks5_port": port,
-        "socks5_user": user,
-        "socks5_pass": pass_,
-    })
-    _save_state(state)
-    context.user_data.clear()
+        state = _load_state()
+        state.update({
+            "socks5_host": host,
+            "socks5_port": port,
+            "socks5_user": user,
+            "socks5_pass": pass_,
+        })
+        _save_state(state)
+        context.user_data.clear()
 
-    auth_info = f" (логин: {user})" if user else " (без авторизации)"
-    await update.message.reply_text(
-        f"✅ *SOCKS5 настроен*\n\n"
-        f"Прокси: `{host}:{port}`{auth_info}\n\n"
-        f"Выберите клиента в меню для активации.",
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🧦 Открыть меню SOCKS5", callback_data="socks5_menu")]
-        ])
-    )
+        auth_info = f" (логин: {user})" if user else " (без авторизации)"
+        await update.message.reply_text(
+            f"✅ SOCKS5 настроен\n\n"
+            f"Прокси: {host}:{port}{auth_info}\n\n"
+            f"Выберите клиента в меню для активации.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🧦 Открыть меню SOCKS5", callback_data="socks5_menu")]
+            ])
+        )
+    except Exception as e:
+        logger.exception("_socks5_save error: %s", e)
+        try:
+            await update.message.reply_text(f"❌ Ошибка сохранения настроек: {e}")
+        except Exception:
+            pass
     return ConversationHandler.END
 
 
