@@ -72,10 +72,11 @@ base {
 }
 
 redsocks {
-    local_port = ${REDSOCKS2_PORT};
-    ip = 127.0.0.1;
-    port = 1080;
+    bind = "0.0.0.0:${REDSOCKS2_PORT}";
+    relay = "127.0.0.1:1080";
     type = socks5;
+    autoproxy = 0;
+    timeout = 10;
 }
 EOF
     chmod 600 "$REDSOCKS2_CONF"

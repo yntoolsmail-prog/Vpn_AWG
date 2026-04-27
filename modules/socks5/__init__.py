@@ -34,8 +34,7 @@ STATE_FILE       = "/etc/awg-socks5/bot_state.json"
 REDSOCKS2_BIN    = "/usr/local/bin/redsocks2"
 REDSOCKS2_CONF   = "/etc/redsocks2/redsocks2.conf"
 REDSOCKS2_PORT   = 12345
-# dnscrypt-proxy занимает 5300, поэтому dnstc redsocks2 слушает на 5399
-DNS_LOCAL_PORT   = 5399
+DNS_LOCAL_PORT   = 5300
 
 _S_HOST = 50
 _S_PORT = 51
@@ -117,14 +116,12 @@ def _write_redsocks_conf(host: str, port: int, user: str, pass_: str):
         "    redirector = iptables;\n"
         "}\n\n"
         "redsocks {\n"
-        f"    local_port = {REDSOCKS2_PORT};\n"
-        f"    ip = {host};\n"
-        f"    port = {port};\n"
+        f"    bind = \"0.0.0.0:{REDSOCKS2_PORT}\";\n"
+        f"    relay = \"{host}:{port}\";\n"
         "    type = socks5;\n"
+        "    autoproxy = 0;\n"
+        "    timeout = 10;\n"
         f"{auth_lines}"
-        "}\n\n"
-        "dnstc {\n"
-        f"    local_port = {DNS_LOCAL_PORT};\n"
         "}\n"
     )
     with open(REDSOCKS2_CONF, "w") as f:
@@ -137,8 +134,8 @@ def _remove_iptables_for_client(client_ip: str):
         return
     chain = f"SOCKS5_{client_ip.replace('.', '_')}"
     # Чистим правила для текущего порта (5399) и старого (5300) для идемпотентности
-    for dns_port in (DNS_LOCAL_PORT, 5300):
-        for proto in ("udp", "tcp"):
+    for proto in ("udp", "tcp"):
+        for dns_port in (5300, 5399):
             subprocess.run([
                 "iptables", "-t", "nat", "-D", "PREROUTING",
                 "-s", f"{client_ip}/32", "-p", proto, "--dport", "53",
@@ -157,10 +154,10 @@ def _remove_iptables_for_client(client_ip: str):
 def _apply_iptables_for_client(client_ip: str, socks5_host_ip: str) -> tuple[bool, str]:
     """Настраивает iptables для маршрутизации трафика клиента через SOCKS5.
 
-    DNS (UDP и TCP) перенаправляется на dnstc redsocks2 (порт 5399),
-    который конвертирует UDP→TCP и отправляет DNS через SOCKS5-прокси.
-    Перед применением всегда выполняется идемпотентная очистка.
-    Redsocks2 должен быть запущен до вызова этой функции."""
+    DNS (UDP и TCP) → dnscrypt-proxy (порт 5300, DoH).
+    TCP → redsocks2 (порт 12345) → SOCKS5-прокси.
+    UDP кроме DNS — заблокирован (нет WebRTC-утечек).
+    Перед применением выполняется идемпотентная очистка."""
     try:
         chain = f"SOCKS5_{client_ip.replace('.', '_')}"
 
