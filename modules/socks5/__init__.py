@@ -147,6 +147,8 @@ def _remove_iptables_for_client(client_ip: str):
         ["iptables", "-t", "nat", "-X", chain],
         ["iptables", "-t", "filter", "-D", "FORWARD",
          "-s", f"{client_ip}/32", "-p", "udp", "!", "--dport", "53", "-j", "REJECT"],
+        ["iptables", "-t", "filter", "-D", "FORWARD",
+         "-s", f"{client_ip}/32", "-p", "tcp", "--dport", "853", "-j", "REJECT"],
     ]:
         subprocess.run(cmd, capture_output=True)
 
@@ -208,10 +210,16 @@ def _apply_iptables_for_client(client_ip: str, socks5_host_ip: str) -> tuple[boo
             "iptables", "-t", "nat", "-A", "PREROUTING",
             "-s", f"{client_ip}/32", "-j", chain
         ], check=True, capture_output=True)
-        # Блокируем UDP кроме DNS (DNS идёт через dnstc → SOCKS5)
+        # Блокируем UDP кроме DNS
         subprocess.run([
             "iptables", "-t", "filter", "-A", "FORWARD",
             "-s", f"{client_ip}/32", "-p", "udp", "!", "--dport", "53",
+            "-j", "REJECT"
+        ], check=True, capture_output=True)
+        # Блокируем DNS-over-TLS (TCP 853) — иначе утечка DNS через прокси
+        subprocess.run([
+            "iptables", "-t", "filter", "-A", "FORWARD",
+            "-s", f"{client_ip}/32", "-p", "tcp", "--dport", "853",
             "-j", "REJECT"
         ], check=True, capture_output=True)
 
