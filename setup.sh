@@ -191,7 +191,7 @@ _apply_modules() {
         local have
         have=$(grep "^${name}=" /root/modules.conf 2>/dev/null | cut -d= -f2 || echo "off")
 
-        if [[ "$want" == "on" && ("$have" != "on" || ! _mod_is_installed "$name") ]]; then
+        if [[ "$want" == "on" ]] && { [[ "$have" != "on" ]] || ! _mod_is_installed "$name"; }; then
             log "Включение модуля: ${name}..."
             mkdir -p "/root/modules/${name}"
 
