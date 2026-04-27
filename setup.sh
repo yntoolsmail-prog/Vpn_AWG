@@ -584,6 +584,7 @@ fi
 if [[ "${1}" == "--modules" ]]; then
     [[ ! -f "/root/modules.conf" ]] && \
         err "modules.conf не найден — сначала установите систему (setup.sh)"
+    [[ -f /etc/awg-slave ]] && SLAVE_MODE=1
     echo -e "${CYAN}${BOLD}"
     echo "  ╔══════════════════════════════════════════╗"
     echo "  ║    AmneziaWG — Управление модулями      ║"
@@ -1534,6 +1535,8 @@ info "AWG запущен с параметрами: Jc=$JC Jmin=$JMIN Jmax=$JMAX
 echo ""
 
 if [[ "$SLAVE_MODE" -eq 1 ]]; then
+    # Маркер: этот сервер является slave. Используется при последующих запусках setup.sh.
+    touch /etc/awg-slave
     # Итог для slave — выводим публичный ключ для добавления в бот PRIMARY
     _SLAVE_PUBKEY=$(cat /etc/amnezia/amneziawg/server_public.key 2>/dev/null || echo "—")
     echo -e "${CYAN}${BOLD}  ┌─────────────────────────────────────────────────────┐${NC}"
