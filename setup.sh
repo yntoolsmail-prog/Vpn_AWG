@@ -58,7 +58,7 @@ _saved_branch=$(grep "^REPO_BRANCH=" "${AWG_DIR}/server.env" 2>/dev/null | cut -
 if [[ -n "$_REEXEC_BRANCH" ]]; then
     # Уже перезапущены из нужной ветки — пропускаем выбор
     REPO_BRANCH="$_REEXEC_BRANCH"
-elif [[ "${1}" == "--tma" ]]; then
+elif [[ "${1}" == "--tma" || "${1}" == "--ssh" || "${1}" == "--modules" ]]; then
     [[ -n "$_saved_branch" ]] && REPO_BRANCH="$_saved_branch"
 else
     _api=$(curl -fsSL --max-time 8 \
