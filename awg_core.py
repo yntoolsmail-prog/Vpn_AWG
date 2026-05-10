@@ -1725,11 +1725,18 @@ def ssh_apply_socks5_on_slave(
         ]
         for net in _SOCKS5_PRIVATE_NETS:
             apply_cmds.append(f"iptables -t nat -A {chain} -d {net} -j RETURN")
+        # Определяем внешний интерфейс на slave для блокировки прямого доступа к redsocks2
+        _, stdout_iface, _ = client.exec_command(
+            "ip route get 8.8.8.8 | grep -o 'dev [^ ]*' | cut -d' ' -f2", timeout=5
+        )
+        slave_ext_iface = stdout_iface.read().decode().strip() or "eth0"
+
         apply_cmds.extend([
             f"iptables -t nat -A {chain} -p tcp -j REDIRECT --to-ports 12345",
             f"iptables -t nat -A PREROUTING -s {client_ip}/32 -j {chain}",
             f"iptables -t filter -A FORWARD -s {client_ip}/32 -p udp ! --dport 53 -j REJECT",
             f"iptables -t filter -A FORWARD -s {client_ip}/32 -p tcp --dport 853 -j REJECT",
+            f"iptables -I INPUT -i {slave_ext_iface} -p tcp --dport 12345 -j DROP",
             "sysctl -w net.ipv4.conf.all.route_localnet=1",
             "sysctl -w net.ipv4.ip_forward=1",
             "mkdir -p /etc/iptables && iptables-save > /etc/iptables/rules.v4",
@@ -1759,7 +1766,12 @@ def ssh_remove_socks5_from_slave(server: dict, client_ip: str) -> tuple[bool, st
             timeout=10, banner_timeout=15
         )
         chain = f"SOCKS5_{client_ip.replace('.', '_')}"
+        _, stdout_iface, _ = client.exec_command(
+            "ip route get 8.8.8.8 | grep -o 'dev [^ ]*' | cut -d' ' -f2", timeout=5
+        )
+        slave_ext_iface = stdout_iface.read().decode().strip() or "eth0"
         cmds = [
+            f"iptables -D INPUT -i {slave_ext_iface} -p tcp --dport 12345 -j DROP 2>/dev/null || true",
             f"iptables -t nat -D PREROUTING -s {client_ip}/32 -p udp --dport 53"
             f" -j DNAT --to-destination 127.0.0.1:5399 2>/dev/null || true",
             f"iptables -t nat -D PREROUTING -s {client_ip}/32 -p tcp --dport 53"

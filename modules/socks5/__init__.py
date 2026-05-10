@@ -133,6 +133,17 @@ def _remove_iptables_for_client(client_ip: str):
     if not client_ip:
         return
     chain = f"SOCKS5_{client_ip.replace('.', '_')}"
+    # Снимаем INPUT-блокировку внешнего доступа к порту redsocks2
+    try:
+        from awg_core import get_host_iface
+        ext_iface = get_host_iface()
+        subprocess.run([
+            "iptables", "-D", "INPUT",
+            "-i", ext_iface, "-p", "tcp", "--dport", str(REDSOCKS2_PORT),
+            "-j", "DROP"
+        ], capture_output=True)
+    except Exception:
+        pass
     # Чистим оба порта (5300 — текущий dnscrypt-proxy, 5399 — старый dnstc) для идемпотентности
     for proto in ("udp", "tcp"):
         for dns_port in (5300, 5399):
@@ -165,6 +176,18 @@ def _apply_iptables_for_client(client_ip: str, socks5_host_ip: str) -> tuple[boo
 
         # Идемпотентная очистка: удаляем старые правила если есть
         _remove_iptables_for_client(client_ip)
+
+        # Блокируем прямые подключения к redsocks2 снаружи (0.0.0.0 bind — порт виден в интернете)
+        try:
+            from awg_core import get_host_iface
+            ext_iface = get_host_iface()
+            subprocess.run([
+                "iptables", "-I", "INPUT",
+                "-i", ext_iface, "-p", "tcp", "--dport", str(REDSOCKS2_PORT),
+                "-j", "DROP"
+            ], capture_output=True)
+        except Exception:
+            pass
 
         # DNS UDP → redsocks2 dnstc (конвертирует в TCP → уходит через SOCKS5)
         subprocess.run([
