@@ -579,10 +579,16 @@ _ssh_setup_keys() {
     ssh_port=$(grep "^Port " /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' || echo "22")
 
     echo ""
-    echo -e "  ${BOLD}Настройка SSH-ключей${NC}"
+    echo -e "  ${BOLD}Добавление персонального SSH-ключа${NC}"
     echo ""
-    echo -e "  SSH-ключ нужен на КАЖДОМ устройстве, с которого вы входите на сервер."
-    echo -e "  Сначала добавьте ключи со всех устройств, затем отключите пароль."
+    if [[ -f /root/.ssh/awg_admin_key ]]; then
+        echo -e "  ${GREEN}✓ Admin-ключ уже сгенерирован${NC} — скачайте его на устройство (vpn.sh → 10 → 1)"
+        echo -e "    или через бота: Техобслуживание → SSH-доступ → Скачать ключ."
+        echo ""
+        echo -e "  Здесь можно добавить персональный ключ устройства как альтернативу."
+    else
+        echo -e "  Добавьте ключ своего устройства чтобы войти без пароля."
+    fi
     echo ""
 
     mkdir -p /root/.ssh
@@ -590,21 +596,20 @@ _ssh_setup_keys() {
     touch /root/.ssh/authorized_keys
     chmod 600 /root/.ssh/authorized_keys
 
-    # Цикл: добавляем ключи с устройств по одному
     while true; do
         local key_count
-        key_count=$(grep -c "ssh-" /root/.ssh/authorized_keys 2>/dev/null || echo 0)
-        echo -e "  Ключей добавлено: ${CYAN}${key_count}${NC}"
+        key_count=$(grep -s "ssh-" /root/.ssh/authorized_keys 2>/dev/null | wc -l)
+        echo -e "  Ключей в authorized_keys: ${CYAN}${key_count}${NC}"
         echo ""
         echo -e "  ${CYAN}1)${NC} Добавить ключ с Windows"
         echo -e "  ${CYAN}2)${NC} Добавить ключ с Linux / macOS / Termux"
         echo -e "  ${CYAN}3)${NC} Добавить ключ с iOS (Termius)"
+        echo -e "  ${CYAN}4)${NC} Вставить публичный ключ вручную"
         if [[ "$key_count" -gt 0 ]]; then
-            echo -e "  ${CYAN}4)${NC} Добавить ключ вручную (вставить публичный ключ)"
             echo ""
-            echo -e "  ${GREEN}d)${NC} Все ключи добавлены — отключить вход по паролю"
+            echo -e "  ${GREEN}d)${NC} Ключи добавлены — отключить вход по паролю"
         fi
-        echo -e "  ${CYAN}0)${NC} Назад (пароль пока не трогать)"
+        echo -e "  ${CYAN}0)${NC} Назад"
         echo ""
         read -p "  Ваш выбор: " _SSH_OS
 
@@ -613,49 +618,46 @@ _ssh_setup_keys() {
             1|2|3)
                 _ssh_show_key_instructions "$server_ip" "$ssh_port" "$_SSH_OS"
                 echo ""
-                echo -e "  ${RED}НЕ закрывайте текущий терминал пока не проверите вход!${NC}"
+                echo -e "  ${RED}Не закрывайте этот терминал пока не проверите вход в новом окне!${NC}"
                 echo ""
-                read -p "  Ключ добавлен и вход проверен? [y/N]: " _KEY_OK
+                read -p "  Вход проверен? [y/N]: " _KEY_OK
                 [[ "${_KEY_OK,,}" != "y" ]] && { info "Хорошо, продолжайте когда будете готовы."; echo ""; }
                 ;;
             4)
-                if [[ "$key_count" -gt 0 ]]; then
-                    echo ""
-                    echo -e "  Вставьте публичный ключ (строка вида ssh-ed25519 AAAA... или ssh-rsa AAAA...):"
-                    read -p "  > " _MANUAL_KEY
-                    if [[ "$_MANUAL_KEY" == ssh-* ]]; then
-                        echo "$_MANUAL_KEY" >> /root/.ssh/authorized_keys
-                        ok "Ключ добавлен."
-                    else
-                        warn "Не похоже на публичный ключ — должно начинаться с ssh-ed25519 или ssh-rsa."
-                    fi
-                    echo ""
+                echo ""
+                echo -e "  Вставьте публичный ключ (ssh-ed25519 AAAA... или ssh-rsa AAAA...):"
+                read -p "  > " _MANUAL_KEY
+                if [[ "$_MANUAL_KEY" == ssh-* ]]; then
+                    echo "$_MANUAL_KEY" >> /root/.ssh/authorized_keys
+                    ok "Ключ добавлен."
+                else
+                    warn "Не похоже на публичный ключ — должно начинаться с ssh-ed25519 или ssh-rsa."
                 fi
+                echo ""
                 ;;
             d|D)
                 local key_count_final
-                key_count_final=$(grep -c "ssh-" /root/.ssh/authorized_keys 2>/dev/null || echo 0)
+                key_count_final=$(grep -s "ssh-" /root/.ssh/authorized_keys 2>/dev/null | wc -l)
                 if [[ "$key_count_final" -eq 0 ]]; then
-                    warn "Ни одного ключа не добавлено — пароль НЕ отключаем."
+                    warn "Нет ни одного ключа — пароль НЕ отключаем."
                     continue
                 fi
                 echo ""
-                echo -e "  ${YELLOW}Добавлено ключей: ${key_count_final}${NC}"
+                echo -e "  ${YELLOW}Ключей в authorized_keys: ${key_count_final}${NC}"
                 echo -e "  ${RED}После отключения пароля войти можно будет ТОЛЬКО по ключу.${NC}"
-                echo -e "  Убедитесь что все нужные устройства настроены."
                 echo ""
                 read -p "  Отключить вход по паролю? [y/N]: " _DISABLE_OK
                 [[ "${_DISABLE_OK,,}" != "y" ]] && { info "Отменено."; continue; }
-                log "Отключение входа по паролю..."
-                grep -q "^PasswordAuthentication" /etc/ssh/sshd_config \
-                    && sed -i 's/^PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config \
-                    || echo "PasswordAuthentication no" >> /etc/ssh/sshd_config
-                grep -q "^PermitRootLogin" /etc/ssh/sshd_config \
-                    && sed -i 's/^PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config \
-                    || echo "PermitRootLogin prohibit-password" >> /etc/ssh/sshd_config
-                systemctl restart sshd \
-                    && ok "Готово: вход по паролю отключён. Работает только ключ." \
-                    || warn "Не удалось перезапустить sshd — проверьте вручную."
+                log "Применяю на primary и всех slave..."
+                python3 -c "
+from awg_core import ssh_toggle_password_auth_all
+res = ssh_toggle_password_auth_all(False)
+ok = '✓' if res.get('primary') else '✗'
+print(f'  {ok} Primary: пароль отключён')
+for name, s in res.get('slaves', {}).items():
+    ok = '✓' if s else '✗'
+    print(f'  {ok} Slave {name}: пароль отключён')
+" && ok "Готово." || warn "Не удалось перезапустить sshd — проверьте вручную."
                 return
                 ;;
             *) warn "Неверный выбор."; echo "" ;;
