@@ -1450,7 +1450,10 @@ def ssh_toggle_password_auth_all(enable: bool) -> dict:
              f"|| echo 'PasswordAuthentication {val}' >> /etc/ssh/sshd_config"],
             check=True, capture_output=True,
         )
-        _sp.run(["systemctl", "restart", "sshd"], check=True, capture_output=True)
+        _sp.run(
+            ["bash", "-c", "systemctl restart sshd 2>/dev/null || systemctl restart ssh"],
+            check=True, capture_output=True,
+        )
         results["primary"] = True
     except Exception:
         pass
@@ -1469,7 +1472,7 @@ def ssh_toggle_password_auth_all(enable: bool) -> dict:
                     f"grep -q '^PasswordAuthentication' /etc/ssh/sshd_config "
                     f"&& sed -i 's/^PasswordAuthentication.*/PasswordAuthentication {val}/' /etc/ssh/sshd_config "
                     f"|| echo 'PasswordAuthentication {val}' >> /etc/ssh/sshd_config; "
-                    f"systemctl restart sshd"
+                    f"systemctl restart sshd 2>/dev/null || systemctl restart ssh"
                 )
                 client.exec_command(cmd, timeout=15)
             finally:

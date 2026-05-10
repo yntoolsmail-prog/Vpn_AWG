@@ -2456,7 +2456,6 @@ async def do_ssh_getkey(query):
         await query.answer("Ключ не найден — запустите setup.sh ещё раз.", show_alert=True)
         return
     await query.answer()
-    chat_id = query.message.chat_id
 
     server_ip = SERVER_IP or "СЕРВЕР"
     ssh_port_raw = subprocess.run(
@@ -2466,24 +2465,18 @@ async def do_ssh_getkey(query):
 
     instructions = (
         "🔑 *Приватный SSH-ключ*\n\n"
-        "⚠️ Не пересылайте этот файл никому\\. "
-        "Кто имеет его — имеет полный доступ к серверу\\.\n\n"
-        "*Windows \\(PowerShell\\):*\n"
-        f"```\n"
-        f"# Сохраните файл awg\\_admin\\_key в папку .ssh:\n"
-        f"move awg_admin_key $env:USERPROFILE\\.ssh\\awg_admin_key\n"
-        f"# Подключение:\n"
-        f"ssh -i $env:USERPROFILE\\.ssh\\awg_admin_key root@{server_ip} -p {ssh_port_raw}\n"
-        f"```\n\n"
+        "⚠️ Не пересылайте этот файл никому — "
+        "кто имеет его, имеет полный root-доступ к серверу.\n\n"
+        "*Windows (PowerShell):*\n"
+        f"`move awg_admin_key %USERPROFILE%\\.ssh\\awg_admin_key`\n"
+        f"`ssh -i %USERPROFILE%\\.ssh\\awg_admin_key root@{server_ip} -p {ssh_port_raw}`\n\n"
         "*Linux / macOS / Termux:*\n"
-        f"```\n"
-        f"mv ~/Downloads/awg_admin_key ~/.ssh/awg_admin_key\n"
-        f"chmod 600 ~/.ssh/awg_admin_key\n"
-        f"ssh -i ~/.ssh/awg_admin_key root@{server_ip} -p {ssh_port_raw}\n"
-        f"```\n\n"
-        "*iOS \\(Termius\\):* Settings → Keychain → \\+ → Import Key → выбрать файл"
+        f"`mv ~/Downloads/awg_admin_key ~/.ssh/awg_admin_key`\n"
+        f"`chmod 600 ~/.ssh/awg_admin_key`\n"
+        f"`ssh -i ~/.ssh/awg_admin_key root@{server_ip} -p {ssh_port_raw}`\n\n"
+        "*iOS (Termius):* Settings → Keychain → + → Import Key → выбрать файл"
     )
-    await query.message.reply_text(instructions, parse_mode="MarkdownV2")
+    await query.message.reply_text(instructions, parse_mode="Markdown")
     with open(key_path, "rb") as f:
         await query.message.reply_document(
             document=f,
@@ -2510,9 +2503,9 @@ async def do_ssh_toggle_pass(query):
 async def do_ssh_regen_ask(query):
     await query.edit_message_text(
         "🔄 *Пересоздать SSH-ключ?*\n\n"
-        "Будет создан новый ключ\\. Старый ключ на всех устройствах перестанет работать\\.\n"
-        "Новый ключ нужно будет скачать заново\\.",
-        parse_mode="MarkdownV2",
+        "Будет создан новый ключ. Старый ключ на всех устройствах перестанет работать.\n"
+        "Новый ключ нужно будет скачать заново.",
+        parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ Да, пересоздать", callback_data="ssh_regen_do")],
             [InlineKeyboardButton("❌ Отмена",          callback_data="ssh_admin")],
