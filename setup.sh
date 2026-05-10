@@ -6,8 +6,10 @@
 #         setup.sh --slave   — slave-сервер (AWG + модули, без бота)
 #         setup.sh --tma     — доустановить TMA
 #         setup.sh --update  — обновить все файлы проекта
+#         setup.sh --modules — управление модулями
+#         setup.sh --ssh     — настройка защиты SSH
 # =============================================================================
-# Version: 3.1
+# Version: 3.2
 
 set -e
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
@@ -458,6 +460,170 @@ _modules_menu() {
     done
 }
 
+# ── SSH защита ────────────────────────────────────────────────────────────────
+
+_ssh_status_report() {
+    local port pass_auth permit_root fail2ban_status root_keys=0
+    port=$(grep "^Port " /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' || echo "22")
+    pass_auth=$(grep "^PasswordAuthentication " /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' || echo "yes")
+    permit_root=$(grep "^PermitRootLogin " /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' || echo "yes")
+    fail2ban_status=$(systemctl is-active fail2ban 2>/dev/null || echo "inactive")
+    [[ -f /root/.ssh/authorized_keys && -s /root/.ssh/authorized_keys ]] && root_keys=1
+
+    echo ""
+    echo -e "  ${BOLD}Состояние SSH-защиты:${NC}"
+    echo ""
+    echo -e "  Порт SSH: ${CYAN}${port}${NC}"
+    if [[ "$pass_auth" == "no" ]]; then
+        echo -e "  Вход по паролю:  ${GREEN}[✓] отключён${NC}"
+    else
+        echo -e "  Вход по паролю:  ${RED}[✗] включён — опасно!${NC}"
+    fi
+    if [[ "$permit_root" == "prohibit-password" || "$permit_root" == "no" ]]; then
+        echo -e "  Root-логин:      ${GREEN}[✓] только по ключу или запрещён${NC}"
+    else
+        echo -e "  Root-логин:      ${RED}[✗] разрешён паролем — опасно!${NC}"
+    fi
+    if [[ "$root_keys" -eq 1 ]]; then
+        echo -e "  SSH-ключ root:   ${GREEN}[✓] настроен${NC}"
+    else
+        echo -e "  SSH-ключ root:   ${RED}[✗] не настроен${NC}"
+    fi
+    if [[ "$fail2ban_status" == "active" ]]; then
+        local banned
+        banned=$(fail2ban-client status sshd 2>/dev/null | grep "Currently banned" | awk '{print $NF}' || echo "0")
+        echo -e "  fail2ban:        ${GREEN}[✓] работает${NC}  (заблокировано IP: ${banned})"
+    else
+        echo -e "  fail2ban:        ${RED}[✗] не активен${NC}"
+    fi
+    echo ""
+}
+
+_ssh_install_fail2ban() {
+    if systemctl is-active --quiet fail2ban 2>/dev/null; then
+        ok "fail2ban уже работает."
+        return 0
+    fi
+    log "Обновление пакетов..."
+    apt-get update -qq
+    log "Установка fail2ban..."
+    apt-get install -y -qq fail2ban || { warn "Не удалось установить fail2ban."; return 1; }
+    cat > /etc/fail2ban/jail.local << 'JAILEOF'
+[sshd]
+enabled = true
+maxretry = 5
+findtime = 600
+bantime = 3600
+JAILEOF
+    systemctl enable fail2ban --now
+    ok "fail2ban запущен: блокировка на 1 час после 5 неверных попыток за 10 минут."
+}
+
+_ssh_setup_keys() {
+    local server_ip ssh_port
+    server_ip=$(grep "^SERVER_IP=" "${AWG_DIR}/server.env" 2>/dev/null | cut -d= -f2 || \
+                curl -4 -s --max-time 5 ifconfig.me 2>/dev/null || echo "IP_СЕРВЕРА")
+    ssh_port=$(grep "^Port " /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' || echo "22")
+
+    echo ""
+    echo -e "  ${BOLD}Настройка SSH-ключей${NC}"
+    echo ""
+    echo -e "  SSH-ключ — надёжный и единственный правильный способ входа на сервер."
+    echo -e "  После добавления ключа вход по паролю будет отключён."
+    echo ""
+    echo -e "  ${YELLOW}Выберите вашу операционную систему для инструкций:${NC}"
+    echo ""
+    echo -e "  ${CYAN}1)${NC} Windows"
+    echo -e "  ${CYAN}2)${NC} Linux / macOS"
+    echo -e "  ${CYAN}0)${NC} Назад"
+    echo ""
+    read -p "  Ваш выбор: " _SSH_OS
+    case "$_SSH_OS" in
+        1)
+            echo ""
+            echo -e "${CYAN}${BOLD}  Инструкция для Windows (PowerShell)${NC}"
+            echo ""
+            echo -e "  ${BOLD}Шаг 1.${NC} Откройте PowerShell и создайте ключ:"
+            echo -e "  ${YELLOW}  ssh-keygen -t ed25519 -C \"vpn-server\"${NC}"
+            echo -e "  (нажмите Enter 3 раза чтобы принять defaults)"
+            echo ""
+            echo -e "  ${BOLD}Шаг 2.${NC} Скопируйте публичный ключ на сервер:"
+            echo -e "  ${YELLOW}  type \"\$env:USERPROFILE\\.ssh\\id_ed25519.pub\" | ssh -p ${ssh_port} root@${server_ip} \"mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys\"${NC}"
+            echo ""
+            echo -e "  ${BOLD}Шаг 3.${NC} Откройте НОВЫЙ PowerShell и проверьте вход по ключу:"
+            echo -e "  ${YELLOW}  ssh -p ${ssh_port} -i \"\$env:USERPROFILE\\.ssh\\id_ed25519\" root@${server_ip}${NC}"
+            echo ""
+            echo -e "  ${BOLD}Шаг 4.${NC} Если вход прошёл — вернитесь сюда и нажмите Enter."
+            echo -e "  ${RED}  НЕ отключайте пароль пока не убедились что ключ работает!${NC}"
+            ;;
+        2)
+            echo ""
+            echo -e "${CYAN}${BOLD}  Инструкция для Linux / macOS (Terminal)${NC}"
+            echo ""
+            echo -e "  ${BOLD}Шаг 1.${NC} Откройте терминал и создайте ключ:"
+            echo -e "  ${YELLOW}  ssh-keygen -t ed25519 -C \"vpn-server\"${NC}"
+            echo -e "  (нажмите Enter 3 раза чтобы принять defaults)"
+            echo ""
+            echo -e "  ${BOLD}Шаг 2.${NC} Скопируйте ключ на сервер:"
+            echo -e "  ${YELLOW}  ssh-copy-id -p ${ssh_port} root@${server_ip}${NC}"
+            echo ""
+            echo -e "  ${BOLD}Шаг 3.${NC} Откройте НОВЫЙ терминал и проверьте вход по ключу:"
+            echo -e "  ${YELLOW}  ssh -p ${ssh_port} root@${server_ip}${NC}"
+            echo ""
+            echo -e "  ${BOLD}Шаг 4.${NC} Если вход прошёл — вернитесь сюда и нажмите Enter."
+            echo -e "  ${RED}  НЕ отключайте пароль пока не убедились что ключ работает!${NC}"
+            ;;
+        0) return ;;
+        *) warn "Неверный выбор."; return ;;
+    esac
+
+    echo ""
+    read -p "  Ключ настроен и вход через ключ проверен? [y/N]: " _KEY_OK
+    [[ "${_KEY_OK,,}" != "y" ]] && { info "Возвращаемся в меню. Повторите после настройки ключа."; return; }
+
+    if [[ ! -f /root/.ssh/authorized_keys || ! -s /root/.ssh/authorized_keys ]]; then
+        warn "/root/.ssh/authorized_keys пуст или не существует — ключ не добавлен?"
+        warn "Пароль НЕ отключаем во избежание потери доступа."
+        return
+    fi
+
+    log "Отключение входа по паролю..."
+    grep -q "^PasswordAuthentication" /etc/ssh/sshd_config \
+        && sed -i 's/^PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config \
+        || echo "PasswordAuthentication no" >> /etc/ssh/sshd_config
+    grep -q "^PermitRootLogin" /etc/ssh/sshd_config \
+        && sed -i 's/^PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config \
+        || echo "PermitRootLogin prohibit-password" >> /etc/ssh/sshd_config
+    systemctl restart sshd \
+        && ok "sshd перезапущен: вход по паролю отключён. Только ключ." \
+        || warn "Не удалось перезапустить sshd — проверьте вручную."
+}
+
+_ssh_security_menu() {
+    while true; do
+        clear
+        echo -e "${CYAN}${BOLD}"
+        echo "  ╔══════════════════════════════════════════╗"
+        echo "  ║       AmneziaWG — Защита SSH             ║"
+        echo "  ╚══════════════════════════════════════════╝"
+        echo -e "${NC}"
+        _ssh_status_report
+        echo -e "  ${BOLD}Действия:${NC}"
+        echo ""
+        echo -e "  ${CYAN}1)${NC} Установить fail2ban  (блокировка перебора паролей)"
+        echo -e "  ${CYAN}2)${NC} Настроить SSH-ключ и отключить вход по паролю"
+        echo -e "  ${CYAN}0)${NC} Выйти"
+        echo ""
+        read -p "  > " _SSH_ACT
+        case "$_SSH_ACT" in
+            1) echo ""; _ssh_install_fail2ban; read -p "  Нажмите Enter..." _d ;;
+            2) _ssh_setup_keys; read -p "  Нажмите Enter..." _d ;;
+            0) return ;;
+            *) warn "Введите 0, 1 или 2."; sleep 1 ;;
+        esac
+    done
+}
+
 # ── Режим --update ────────────────────────────────────────────────────────────
 if [[ "${1}" == "--update" ]]; then
     echo -e "${CYAN}${BOLD}"
@@ -577,6 +743,12 @@ if [[ "${1}" == "--tma" ]]; then
         chmod +x "$_TMA_INSTALLER"
     fi
     bash "$_TMA_INSTALLER"
+    exit 0
+fi
+
+# ── Режим --ssh ───────────────────────────────────────────────────────────────
+if [[ "${1}" == "--ssh" ]]; then
+    _ssh_security_menu
     exit 0
 fi
 
@@ -1524,6 +1696,17 @@ else
     fi
 fi
 
+# ── Предложить настройку SSH защиты ──────────────────────────────────────────
+echo ""
+echo -e "  ${BOLD}Защита SSH${NC}"
+echo -e "  SSH-порт открыт на весь интернет. Атаки перебора паролей начнутся сразу."
+echo -e "  Рекомендуется: установить fail2ban и перейти на ключи."
+echo ""
+read -p "  Настроить защиту SSH прямо сейчас? [y/N]: " _ASK_SSH
+if [[ "${_ASK_SSH,,}" == "y" ]]; then
+    _ssh_security_menu
+fi
+
 # ── Готово ────────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}${BOLD}══════════════════════════════════════════${NC}"
@@ -1569,6 +1752,9 @@ else
     echo ""
     echo -e "${CYAN}${BOLD}  Управление модулями (TMA, MTProxy, SOCKS5, ...):${NC}"
     echo -e "  bash /root/setup.sh --modules"
+    echo ""
+    echo -e "${CYAN}${BOLD}  Защита SSH (fail2ban + ключи):${NC}"
+    echo -e "  bash /root/setup.sh --ssh"
 fi
 echo ""
 

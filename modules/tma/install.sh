@@ -130,6 +130,8 @@ if [[ "$USE_SSL" -eq 1 ]]; then
 fi
 
 # ── Зависимости ───────────────────────────────────────────────────────────────
+log "Обновление пакетов..."
+apt-get update -qq
 log "Установка nginx..."
 apt-get install -y -qq nginx
 if [[ "$USE_SSL" -eq 1 ]]; then
