@@ -1255,12 +1255,13 @@ main_menu() {
         echo "  7) Бэкапы"
         echo "  8) Обновление"
         echo "  9) Управление модулями"
+        echo " 10) Защита SSH (fail2ban, ключи)"
         echo ""
         echo "  ── Диагностика ──────────────────────"
-        echo " 10) Полный диагностический отчёт"
-        echo " 11) Анализ конфигов клиентов"
-        echo " 12) Просмотр предыдущих диагностик"
-        echo " 13) Проверить целостность клиентов"
+        echo " 11) Полный диагностический отчёт"
+        echo " 12) Анализ конфигов клиентов"
+        echo " 13) Просмотр предыдущих диагностик"
+        echo " 14) Проверить целостность клиентов"
         echo ""
         echo "  0) Выход"
         echo ""
@@ -1276,10 +1277,11 @@ main_menu() {
             7)  manage_backups ;;
             8)  manage_updates ;;
             9)  bash /root/setup.sh --modules ;;
-            10) run_diagnostics ;;
-            11) analyze_configs ;;
-            12) view_old_diagnostics ;;
-            13) check_peer_integrity ;;
+            10) bash /root/setup.sh --ssh ;;
+            11) run_diagnostics ;;
+            12) analyze_configs ;;
+            13) view_old_diagnostics ;;
+            14) check_peer_integrity ;;
             0|"")  echo ""; exit 0 ;;
             *)  echo -e "  ${RED}Неверный выбор${NC}"; sleep 1 ;;
         esac
