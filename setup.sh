@@ -519,6 +519,59 @@ JAILEOF
     ok "fail2ban запущен: блокировка на 1 час после 5 неверных попыток за 10 минут."
 }
 
+_ssh_show_key_instructions() {
+    local server_ip="$1" ssh_port="$2" os_choice="$3"
+    case "$os_choice" in
+        1)
+            echo ""
+            echo -e "${CYAN}${BOLD}  Windows (PowerShell)${NC}"
+            echo ""
+            echo -e "  ${BOLD}Шаг 1.${NC} Создайте ключ (один раз — если уже есть, пропустите):"
+            echo -e "  ${YELLOW}  ssh-keygen -t ed25519 -C \"vpn-server\"${NC}"
+            echo -e "  (нажмите Enter 3 раза чтобы принять defaults)"
+            echo ""
+            echo -e "  ${BOLD}Шаг 2.${NC} Скопируйте ключ на сервер:"
+            echo -e "  ${YELLOW}  type \"\$env:USERPROFILE\\.ssh\\id_ed25519.pub\" | ssh -p ${ssh_port} root@${server_ip} \"mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys\"${NC}"
+            echo ""
+            echo -e "  ${BOLD}Шаг 3.${NC} Проверьте вход в НОВОМ окне PowerShell:"
+            echo -e "  ${YELLOW}  ssh -p ${ssh_port} -i \"\$env:USERPROFILE\\.ssh\\id_ed25519\" root@${server_ip}${NC}"
+            ;;
+        2)
+            echo ""
+            echo -e "${CYAN}${BOLD}  Linux / macOS / Termux (Terminal)${NC}"
+            echo ""
+            echo -e "  ${BOLD}Шаг 1.${NC} Создайте ключ (один раз — если уже есть, пропустите):"
+            echo -e "  ${YELLOW}  ssh-keygen -t ed25519 -C \"vpn-server\"${NC}"
+            echo -e "  (нажмите Enter 3 раза чтобы принять defaults)"
+            echo ""
+            echo -e "  ${BOLD}Шаг 2.${NC} Скопируйте ключ на сервер:"
+            echo -e "  ${YELLOW}  ssh-copy-id -p ${ssh_port} root@${server_ip}${NC}"
+            echo -e "  (в Termux: если нет ssh-copy-id, используйте команду из варианта Windows/Шаг 2"
+            echo -e "   но с: cat ~/.ssh/id_ed25519.pub | ssh -p ${ssh_port} root@${server_ip} ...)"
+            echo ""
+            echo -e "  ${BOLD}Шаг 3.${NC} Проверьте вход в НОВОМ терминале:"
+            echo -e "  ${YELLOW}  ssh -p ${ssh_port} root@${server_ip}${NC}"
+            ;;
+        3)
+            echo ""
+            echo -e "${CYAN}${BOLD}  iOS (Termius / Blink Shell)${NC}"
+            echo ""
+            echo -e "  ${BOLD}Шаг 1.${NC} В приложении Termius:"
+            echo -e "  Settings → Keychain → + → Generate Key → Ed25519"
+            echo -e "  Дайте имя ключу (например: vpn-server)"
+            echo ""
+            echo -e "  ${BOLD}Шаг 2.${NC} Экспортируйте публичный ключ:"
+            echo -e "  Нажмите на ключ → Share Public Key → скопируйте текст"
+            echo ""
+            echo -e "  ${BOLD}Шаг 3.${NC} Добавьте ключ на сервер (выполните здесь на сервере):"
+            echo -e "  ${YELLOW}  echo 'вставьте_сюда_публичный_ключ' >> /root/.ssh/authorized_keys${NC}"
+            echo -e "  ${YELLOW}  chmod 600 /root/.ssh/authorized_keys${NC}"
+            echo ""
+            echo -e "  ${BOLD}Шаг 4.${NC} В Termius при добавлении хоста выберите этот ключ."
+            ;;
+    esac
+}
+
 _ssh_setup_keys() {
     local server_ip ssh_port
     server_ip=$(grep "^SERVER_IP=" "${AWG_DIR}/server.env" 2>/dev/null | cut -d= -f2 || \
@@ -528,75 +581,86 @@ _ssh_setup_keys() {
     echo ""
     echo -e "  ${BOLD}Настройка SSH-ключей${NC}"
     echo ""
-    echo -e "  SSH-ключ — надёжный и единственный правильный способ входа на сервер."
-    echo -e "  После добавления ключа вход по паролю будет отключён."
+    echo -e "  SSH-ключ нужен на КАЖДОМ устройстве, с которого вы входите на сервер."
+    echo -e "  Сначала добавьте ключи со всех устройств, затем отключите пароль."
     echo ""
-    echo -e "  ${YELLOW}Выберите вашу операционную систему для инструкций:${NC}"
-    echo ""
-    echo -e "  ${CYAN}1)${NC} Windows"
-    echo -e "  ${CYAN}2)${NC} Linux / macOS"
-    echo -e "  ${CYAN}0)${NC} Назад"
-    echo ""
-    read -p "  Ваш выбор: " _SSH_OS
-    case "$_SSH_OS" in
-        1)
-            echo ""
-            echo -e "${CYAN}${BOLD}  Инструкция для Windows (PowerShell)${NC}"
-            echo ""
-            echo -e "  ${BOLD}Шаг 1.${NC} Откройте PowerShell и создайте ключ:"
-            echo -e "  ${YELLOW}  ssh-keygen -t ed25519 -C \"vpn-server\"${NC}"
-            echo -e "  (нажмите Enter 3 раза чтобы принять defaults)"
-            echo ""
-            echo -e "  ${BOLD}Шаг 2.${NC} Скопируйте публичный ключ на сервер:"
-            echo -e "  ${YELLOW}  type \"\$env:USERPROFILE\\.ssh\\id_ed25519.pub\" | ssh -p ${ssh_port} root@${server_ip} \"mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys\"${NC}"
-            echo ""
-            echo -e "  ${BOLD}Шаг 3.${NC} Откройте НОВЫЙ PowerShell и проверьте вход по ключу:"
-            echo -e "  ${YELLOW}  ssh -p ${ssh_port} -i \"\$env:USERPROFILE\\.ssh\\id_ed25519\" root@${server_ip}${NC}"
-            echo ""
-            echo -e "  ${BOLD}Шаг 4.${NC} Если вход прошёл — вернитесь сюда и нажмите Enter."
-            echo -e "  ${RED}  НЕ отключайте пароль пока не убедились что ключ работает!${NC}"
-            ;;
-        2)
-            echo ""
-            echo -e "${CYAN}${BOLD}  Инструкция для Linux / macOS (Terminal)${NC}"
-            echo ""
-            echo -e "  ${BOLD}Шаг 1.${NC} Откройте терминал и создайте ключ:"
-            echo -e "  ${YELLOW}  ssh-keygen -t ed25519 -C \"vpn-server\"${NC}"
-            echo -e "  (нажмите Enter 3 раза чтобы принять defaults)"
-            echo ""
-            echo -e "  ${BOLD}Шаг 2.${NC} Скопируйте ключ на сервер:"
-            echo -e "  ${YELLOW}  ssh-copy-id -p ${ssh_port} root@${server_ip}${NC}"
-            echo ""
-            echo -e "  ${BOLD}Шаг 3.${NC} Откройте НОВЫЙ терминал и проверьте вход по ключу:"
-            echo -e "  ${YELLOW}  ssh -p ${ssh_port} root@${server_ip}${NC}"
-            echo ""
-            echo -e "  ${BOLD}Шаг 4.${NC} Если вход прошёл — вернитесь сюда и нажмите Enter."
-            echo -e "  ${RED}  НЕ отключайте пароль пока не убедились что ключ работает!${NC}"
-            ;;
-        0) return ;;
-        *) warn "Неверный выбор."; return ;;
-    esac
 
-    echo ""
-    read -p "  Ключ настроен и вход через ключ проверен? [y/N]: " _KEY_OK
-    [[ "${_KEY_OK,,}" != "y" ]] && { info "Возвращаемся в меню. Повторите после настройки ключа."; return; }
+    mkdir -p /root/.ssh
+    chmod 700 /root/.ssh
+    touch /root/.ssh/authorized_keys
+    chmod 600 /root/.ssh/authorized_keys
 
-    if [[ ! -f /root/.ssh/authorized_keys || ! -s /root/.ssh/authorized_keys ]]; then
-        warn "/root/.ssh/authorized_keys пуст или не существует — ключ не добавлен?"
-        warn "Пароль НЕ отключаем во избежание потери доступа."
-        return
-    fi
+    # Цикл: добавляем ключи с устройств по одному
+    while true; do
+        local key_count
+        key_count=$(grep -c "ssh-" /root/.ssh/authorized_keys 2>/dev/null || echo 0)
+        echo -e "  Ключей добавлено: ${CYAN}${key_count}${NC}"
+        echo ""
+        echo -e "  ${CYAN}1)${NC} Добавить ключ с Windows"
+        echo -e "  ${CYAN}2)${NC} Добавить ключ с Linux / macOS / Termux"
+        echo -e "  ${CYAN}3)${NC} Добавить ключ с iOS (Termius)"
+        if [[ "$key_count" -gt 0 ]]; then
+            echo -e "  ${CYAN}4)${NC} Добавить ключ вручную (вставить публичный ключ)"
+            echo ""
+            echo -e "  ${GREEN}d)${NC} Все ключи добавлены — отключить вход по паролю"
+        fi
+        echo -e "  ${CYAN}0)${NC} Назад (пароль пока не трогать)"
+        echo ""
+        read -p "  Ваш выбор: " _SSH_OS
 
-    log "Отключение входа по паролю..."
-    grep -q "^PasswordAuthentication" /etc/ssh/sshd_config \
-        && sed -i 's/^PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config \
-        || echo "PasswordAuthentication no" >> /etc/ssh/sshd_config
-    grep -q "^PermitRootLogin" /etc/ssh/sshd_config \
-        && sed -i 's/^PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config \
-        || echo "PermitRootLogin prohibit-password" >> /etc/ssh/sshd_config
-    systemctl restart sshd \
-        && ok "sshd перезапущен: вход по паролю отключён. Только ключ." \
-        || warn "Не удалось перезапустить sshd — проверьте вручную."
+        case "$_SSH_OS" in
+            0) return ;;
+            1|2|3)
+                _ssh_show_key_instructions "$server_ip" "$ssh_port" "$_SSH_OS"
+                echo ""
+                echo -e "  ${RED}НЕ закрывайте текущий терминал пока не проверите вход!${NC}"
+                echo ""
+                read -p "  Ключ добавлен и вход проверен? [y/N]: " _KEY_OK
+                [[ "${_KEY_OK,,}" != "y" ]] && { info "Хорошо, продолжайте когда будете готовы."; echo ""; }
+                ;;
+            4)
+                if [[ "$key_count" -gt 0 ]]; then
+                    echo ""
+                    echo -e "  Вставьте публичный ключ (строка вида ssh-ed25519 AAAA... или ssh-rsa AAAA...):"
+                    read -p "  > " _MANUAL_KEY
+                    if [[ "$_MANUAL_KEY" == ssh-* ]]; then
+                        echo "$_MANUAL_KEY" >> /root/.ssh/authorized_keys
+                        ok "Ключ добавлен."
+                    else
+                        warn "Не похоже на публичный ключ — должно начинаться с ssh-ed25519 или ssh-rsa."
+                    fi
+                    echo ""
+                fi
+                ;;
+            d|D)
+                local key_count_final
+                key_count_final=$(grep -c "ssh-" /root/.ssh/authorized_keys 2>/dev/null || echo 0)
+                if [[ "$key_count_final" -eq 0 ]]; then
+                    warn "Ни одного ключа не добавлено — пароль НЕ отключаем."
+                    continue
+                fi
+                echo ""
+                echo -e "  ${YELLOW}Добавлено ключей: ${key_count_final}${NC}"
+                echo -e "  ${RED}После отключения пароля войти можно будет ТОЛЬКО по ключу.${NC}"
+                echo -e "  Убедитесь что все нужные устройства настроены."
+                echo ""
+                read -p "  Отключить вход по паролю? [y/N]: " _DISABLE_OK
+                [[ "${_DISABLE_OK,,}" != "y" ]] && { info "Отменено."; continue; }
+                log "Отключение входа по паролю..."
+                grep -q "^PasswordAuthentication" /etc/ssh/sshd_config \
+                    && sed -i 's/^PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config \
+                    || echo "PasswordAuthentication no" >> /etc/ssh/sshd_config
+                grep -q "^PermitRootLogin" /etc/ssh/sshd_config \
+                    && sed -i 's/^PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config \
+                    || echo "PermitRootLogin prohibit-password" >> /etc/ssh/sshd_config
+                systemctl restart sshd \
+                    && ok "Готово: вход по паролю отключён. Работает только ключ." \
+                    || warn "Не удалось перезапустить sshd — проверьте вручную."
+                return
+                ;;
+            *) warn "Неверный выбор."; echo "" ;;
+        esac
+    done
 }
 
 _ssh_security_menu() {
