@@ -1737,6 +1737,16 @@ else
     info "Автозапуск уже настроен, пропускаем"
 fi
 
+# ── SSH-ключ администратора ────────────────────────────────────────────────────
+if [[ ! -f /root/.ssh/awg_admin_key ]]; then
+    mkdir -p /root/.ssh
+    chmod 700 /root/.ssh
+    ssh-keygen -t ed25519 -f /root/.ssh/awg_admin_key -N "" -C "awg-admin" -q
+    grep -qF "$(cat /root/.ssh/awg_admin_key.pub)" /root/.ssh/authorized_keys 2>/dev/null \
+        || cat /root/.ssh/awg_admin_key.pub >> /root/.ssh/authorized_keys
+    chmod 600 /root/.ssh/authorized_keys
+    ok "SSH-ключ администратора создан (/root/.ssh/awg_admin_key)"
+fi
 
 # ── Выбор дополнительных модулей ─────────────────────────────────────────────
 echo ""

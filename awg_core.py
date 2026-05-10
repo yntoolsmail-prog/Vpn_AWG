@@ -1341,6 +1341,184 @@ except ImportError:
     _paramiko = None
     PARAMIKO_AVAILABLE = False
 
+ADMIN_KEY_PATH = "/root/.ssh/awg_admin_key"
+
+
+def _ssh_connect(ssh: dict, timeout: int = 10):
+    """Подключение к SSH: сначала пробует ключ awg_admin_key, при неудаче — пароль."""
+    client = _paramiko.SSHClient()
+    client.set_missing_host_key_policy(_paramiko.AutoAddPolicy())
+    key_only = ssh.get("auth") == "key"
+    if os.path.exists(ADMIN_KEY_PATH):
+        try:
+            client.connect(
+                ssh.get("ip", ""), port=ssh.get("port", 22),
+                username=ssh.get("login", "root"),
+                key_filename=ADMIN_KEY_PATH,
+                timeout=timeout, banner_timeout=timeout + 5,
+                look_for_keys=False, allow_agent=False,
+            )
+            return client
+        except Exception:
+            if key_only:
+                raise
+    client.connect(
+        ssh.get("ip", ""), port=ssh.get("port", 22),
+        username=ssh.get("login", "root"),
+        password=ssh.get("password", ""),
+        timeout=timeout, banner_timeout=timeout + 5,
+        look_for_keys=False, allow_agent=False,
+    )
+    return client
+
+
+def get_admin_pubkey() -> str:
+    """Возвращает содержимое awg_admin_key.pub или пустую строку."""
+    try:
+        with open(ADMIN_KEY_PATH + ".pub") as f:
+            return f.read().strip()
+    except Exception:
+        return ""
+
+
+def get_ssh_password_auth_local() -> bool:
+    """True если на локальном sshd включён вход по паролю."""
+    try:
+        with open("/etc/ssh/sshd_config") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("PasswordAuthentication "):
+                    return line.split()[1].lower() == "yes"
+    except Exception:
+        pass
+    return True
+
+
+def ssh_push_admin_key(server: dict) -> bool:
+    """Копирует awg_admin_key.pub в authorized_keys на slave-сервере."""
+    if not PARAMIKO_AVAILABLE:
+        return False
+    pubkey = get_admin_pubkey()
+    if not pubkey:
+        return False
+    ssh = server.get("ssh", {})
+    try:
+        client = _ssh_connect(ssh)
+        try:
+            cmd = (
+                "mkdir -p ~/.ssh && chmod 700 ~/.ssh && "
+                f"grep -qF '{pubkey}' ~/.ssh/authorized_keys 2>/dev/null || "
+                f"echo '{pubkey}' >> ~/.ssh/authorized_keys && "
+                "chmod 600 ~/.ssh/authorized_keys"
+            )
+            _, _, stderr = client.exec_command(cmd, timeout=10)
+            stderr.read()
+        finally:
+            client.close()
+        return True
+    except Exception:
+        return False
+
+
+def ssh_toggle_password_auth_all(enable: bool) -> dict:
+    """Включает/выключает PasswordAuthentication на primary и всех slave.
+    Возвращает {"primary": bool, "slaves": {name: bool}}."""
+    import subprocess as _sp
+    val = "yes" if enable else "no"
+    results: dict = {"primary": False, "slaves": {}}
+
+    # Primary — локально
+    try:
+        _sp.run(
+            ["bash", "-c",
+             f"grep -q '^PasswordAuthentication' /etc/ssh/sshd_config "
+             f"&& sed -i 's/^PasswordAuthentication.*/PasswordAuthentication {val}/' /etc/ssh/sshd_config "
+             f"|| echo 'PasswordAuthentication {val}' >> /etc/ssh/sshd_config"],
+            check=True, capture_output=True,
+        )
+        _sp.run(["systemctl", "restart", "sshd"], check=True, capture_output=True)
+        results["primary"] = True
+    except Exception:
+        pass
+
+    # Slaves
+    if not PARAMIKO_AVAILABLE:
+        return results
+    for srv in load_servers():
+        if srv.get("is_primary"):
+            continue
+        name = srv.get("name", srv.get("ssh", {}).get("ip", "?"))
+        try:
+            client = _ssh_connect(srv.get("ssh", {}))
+            try:
+                cmd = (
+                    f"grep -q '^PasswordAuthentication' /etc/ssh/sshd_config "
+                    f"&& sed -i 's/^PasswordAuthentication.*/PasswordAuthentication {val}/' /etc/ssh/sshd_config "
+                    f"|| echo 'PasswordAuthentication {val}' >> /etc/ssh/sshd_config; "
+                    f"systemctl restart sshd"
+                )
+                client.exec_command(cmd, timeout=15)
+            finally:
+                client.close()
+            results["slaves"][name] = True
+        except Exception:
+            results["slaves"][name] = False
+    return results
+
+
+def ssh_regen_admin_key() -> bool:
+    """Перегенерирует awg_admin_key: создаёт новую пару, обновляет authorized_keys
+    локально и на всех slave-серверах (используя старый ключ пока он ещё работает)."""
+    import subprocess as _sp
+    temp = ADMIN_KEY_PATH + ".new"
+    try:
+        _sp.run(
+            ["ssh-keygen", "-t", "ed25519", "-f", temp, "-N", "", "-C", "awg-admin", "-q"],
+            check=True, capture_output=True,
+        )
+        with open(temp + ".pub") as f:
+            new_pub = f.read().strip()
+
+        # Обновляем slave-серверы, пока ещё работает старый ключ
+        if PARAMIKO_AVAILABLE:
+            for srv in load_servers():
+                if srv.get("is_primary"):
+                    continue
+                try:
+                    client = _ssh_connect(srv.get("ssh", {}))
+                    try:
+                        client.exec_command(
+                            f"sed -i '/awg-admin/d' ~/.ssh/authorized_keys 2>/dev/null; "
+                            f"echo '{new_pub}' >> ~/.ssh/authorized_keys",
+                            timeout=10,
+                        )
+                    finally:
+                        client.close()
+                except Exception:
+                    pass
+
+        # Обновляем локальный authorized_keys
+        auth = "/root/.ssh/authorized_keys"
+        if os.path.exists(auth):
+            with open(auth) as f:
+                lines = [l for l in f if "awg-admin" not in l]
+            with open(auth, "w") as f:
+                f.writelines(lines)
+        with open(auth, "a") as f:
+            f.write(new_pub + "\n")
+
+        # Заменяем ключ
+        os.replace(temp, ADMIN_KEY_PATH)
+        os.replace(temp + ".pub", ADMIN_KEY_PATH + ".pub")
+        return True
+    except Exception:
+        for p in [temp, temp + ".pub"]:
+            try:
+                os.unlink(p)
+            except Exception:
+                pass
+        return False
+
 
 def ssh_get_slave_peer_count(server: dict):
     """SSH на slave, считает кол-во [Peer] в его awg0.conf. None при ошибке."""
@@ -1348,13 +1526,7 @@ def ssh_get_slave_peer_count(server: dict):
         return None
     ssh = server.get("ssh", {})
     try:
-        client = _paramiko.SSHClient()
-        client.set_missing_host_key_policy(_paramiko.AutoAddPolicy())
-        client.connect(
-            ssh.get("ip", ""), port=ssh.get("port", 22),
-            username=ssh.get("login", "root"), password=ssh.get("password", ""),
-            timeout=8, banner_timeout=10
-        )
+        client = _ssh_connect(ssh, timeout=8)
         try:
             _, stdout, _ = client.exec_command(
                 "grep -c '^\\[Peer\\]' /etc/amnezia/amneziawg/awg0.conf 2>/dev/null || echo 0",
@@ -1398,13 +1570,7 @@ def ssh_clone_awg_to_slave(server: dict) -> None:
         raise ValueError(f"Не удалось прочитать конфиг primary: {e}")
 
     ssh = server.get("ssh", {})
-    client = _paramiko.SSHClient()
-    client.set_missing_host_key_policy(_paramiko.AutoAddPolicy())
-    client.connect(
-        ssh.get("ip", ""), port=ssh.get("port", 22),
-        username=ssh.get("login", "root"), password=ssh.get("password", ""),
-        timeout=10, banner_timeout=15
-    )
+    client = _ssh_connect(ssh)
     try:
         # Читаем PostUp/PostDown со slave (у него свой сетевой интерфейс)
         _, stdout, _ = client.exec_command(
@@ -1457,13 +1623,7 @@ def ssh_sync_peer_to_slave(server: dict, name: str, pub: str, psk: str, ip: str)
     if not PARAMIKO_AVAILABLE:
         raise RuntimeError("paramiko не установлен: pip3 install paramiko")
     ssh = server.get("ssh", {})
-    client = _paramiko.SSHClient()
-    client.set_missing_host_key_policy(_paramiko.AutoAddPolicy())
-    client.connect(
-        ssh.get("ip", ""), port=ssh.get("port", 22),
-        username=ssh.get("login", "root"), password=ssh.get("password", ""),
-        timeout=10, banner_timeout=15
-    )
+    client = _ssh_connect(ssh)
     try:
         conf_line = (
             f"\\n# Client: {name}\\n[Peer]\\n"
@@ -1520,13 +1680,7 @@ def ssh_stop_slave_awg(ssh: dict) -> None:
     """SSH к slave и останавливает awg-quick@awg0."""
     if not PARAMIKO_AVAILABLE:
         raise RuntimeError("paramiko не установлен: pip3 install paramiko")
-    client = _paramiko.SSHClient()
-    client.set_missing_host_key_policy(_paramiko.AutoAddPolicy())
-    client.connect(
-        ssh.get("ip", ""), port=ssh.get("port", 22),
-        username=ssh.get("login", "root"), password=ssh.get("password", ""),
-        timeout=8, banner_timeout=10
-    )
+    client = _ssh_connect(ssh, timeout=8)
     try:
         _, stdout, stderr = client.exec_command(
             "systemctl stop awg-quick@awg0", timeout=15
@@ -1544,14 +1698,8 @@ def ssh_sync_mtproxy_secret(server: dict, secret: str, port: str) -> tuple[bool,
     if not PARAMIKO_AVAILABLE:
         return False, "paramiko не установлен"
     ssh = server.get("ssh", {})
-    client = _paramiko.SSHClient()
-    client.set_missing_host_key_policy(_paramiko.AutoAddPolicy())
     try:
-        client.connect(
-            ssh.get("ip", ""), port=ssh.get("port", 22),
-            username=ssh.get("login", "root"), password=ssh.get("password", ""),
-            timeout=10, banner_timeout=15
-        )
+        client = _ssh_connect(ssh)
         # Проверяем наличие MTProxy
         _, stdout, _ = client.exec_command(
             "test -f /opt/mtproxy/objs/bin/mtproto-proxy && echo OK || echo NO",
@@ -1589,13 +1737,7 @@ def ssh_check_mtproxy_installed(server: dict) -> bool:
         return False
     ssh = server.get("ssh", {})
     try:
-        client = _paramiko.SSHClient()
-        client.set_missing_host_key_policy(_paramiko.AutoAddPolicy())
-        client.connect(
-            ssh.get("ip", ""), port=ssh.get("port", 22),
-            username=ssh.get("login", "root"), password=ssh.get("password", ""),
-            timeout=8, banner_timeout=10
-        )
+        client = _ssh_connect(ssh, timeout=8)
         try:
             _, stdout, _ = client.exec_command(
                 "test -f /opt/mtproxy/objs/bin/mtproto-proxy && echo OK || echo NO",
@@ -1630,14 +1772,8 @@ def ssh_apply_socks5_on_slave(
     if not PARAMIKO_AVAILABLE:
         return False, "paramiko не установлен"
     ssh = server.get("ssh", {})
-    client = _paramiko.SSHClient()
-    client.set_missing_host_key_policy(_paramiko.AutoAddPolicy())
     try:
-        client.connect(
-            ssh.get("ip", ""), port=ssh.get("port", 22),
-            username=ssh.get("login", "root"), password=ssh.get("password", ""),
-            timeout=10, banner_timeout=15
-        )
+        client = _ssh_connect(ssh)
         # Проверяем наличие redsocks2
         _, stdout, _ = client.exec_command(
             "test -f /usr/local/bin/redsocks2 && echo OK || echo NO", timeout=5
@@ -1757,14 +1893,8 @@ def ssh_remove_socks5_from_slave(server: dict, client_ip: str) -> tuple[bool, st
     if not PARAMIKO_AVAILABLE:
         return False, "paramiko не установлен"
     ssh = server.get("ssh", {})
-    client = _paramiko.SSHClient()
-    client.set_missing_host_key_policy(_paramiko.AutoAddPolicy())
     try:
-        client.connect(
-            ssh.get("ip", ""), port=ssh.get("port", 22),
-            username=ssh.get("login", "root"), password=ssh.get("password", ""),
-            timeout=10, banner_timeout=15
-        )
+        client = _ssh_connect(ssh)
         chain = f"SOCKS5_{client_ip.replace('.', '_')}"
         _, stdout_iface, _ = client.exec_command(
             "ip route get 8.8.8.8 | grep -o 'dev [^ ]*' | cut -d' ' -f2", timeout=5

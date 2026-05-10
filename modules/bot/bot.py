@@ -35,6 +35,9 @@ from awg_core import (
     ssh_sync_all_clients_to_slave as _ssh_sync_all_clients_to_slave,
     ssh_stop_slave_awg      as _ssh_stop_slave_awg,
     ssh_get_slave_peer_count as _ssh_get_slave_peer_count,
+    get_admin_pubkey, get_ssh_password_auth_local,
+    ssh_toggle_password_auth_all, ssh_regen_admin_key,
+    ADMIN_KEY_PATH,
 )
 from sites_data import (
     SITES, CATEGORIES, DEFAULT_SELECTED, ALL_SELECTABLE,
@@ -833,6 +836,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await do_backup(query)
     elif data == "maintenance" and is_admin:
         await show_maintenance(query)
+    elif data == "ssh_admin" and is_admin:
+        await show_ssh_admin(query)
+    elif data == "ssh_getkey" and is_admin:
+        await do_ssh_getkey(query)
+    elif data == "ssh_toggle_pass" and is_admin:
+        await do_ssh_toggle_pass(query)
+    elif data == "ssh_regen_ask" and is_admin:
+        await do_ssh_regen_ask(query)
+    elif data == "ssh_regen_do" and is_admin:
+        await do_ssh_regen(query)
     elif data == "maint_upgrade" and is_admin:
         await do_maint_upgrade(query)
     elif data == "maint_ptb" and is_admin:
@@ -2412,6 +2425,114 @@ def get_ptb_version() -> str:
     except:
         return "неизвестно"
 
+async def show_ssh_admin(query):
+    pubkey = get_admin_pubkey()
+    pw_on  = get_ssh_password_auth_local()
+
+    pw_icon  = "🔓" if pw_on  else "🔒"
+    pw_label = "ВКЛ (небезопасно)" if pw_on else "ВЫКЛ"
+    pw_btn   = "Выключить пароль SSH" if pw_on else "Включить пароль SSH"
+
+    key_line = f"`{pubkey[:50]}…`" if pubkey else "_ключ не найден_"
+    text = (
+        f"🔑 *SSH-доступ*\n\n"
+        f"Публичный ключ:\n{key_line}\n\n"
+        f"{pw_icon} Вход по паролю: *{pw_label}*\n\n"
+        f"Скачайте приватный ключ на устройство и подключайтесь по нему.\n"
+        f"Один ключ работает на мейне и всех slave-серверах."
+    )
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📥 Скачать приватный ключ", callback_data="ssh_getkey")],
+        [InlineKeyboardButton(f"{pw_icon} {pw_btn}",       callback_data="ssh_toggle_pass")],
+        [InlineKeyboardButton("🔄 Пересоздать ключ",       callback_data="ssh_regen_ask")],
+        [InlineKeyboardButton("◀️ Техобслуживание",        callback_data="maintenance")],
+    ])
+    await query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
+
+
+async def do_ssh_getkey(query):
+    key_path = ADMIN_KEY_PATH
+    if not os.path.exists(key_path):
+        await query.answer("Ключ не найден — запустите setup.sh ещё раз.", show_alert=True)
+        return
+    await query.answer()
+    chat_id = query.message.chat_id
+
+    server_ip = SERVER_IP or "СЕРВЕР"
+    ssh_port_raw = subprocess.run(
+        ["bash", "-c", "grep '^Port ' /etc/ssh/sshd_config | awk '{print $2}'"],
+        capture_output=True, text=True
+    ).stdout.strip() or "22"
+
+    instructions = (
+        "🔑 *Приватный SSH-ключ*\n\n"
+        "⚠️ Не пересылайте этот файл никому\\. "
+        "Кто имеет его — имеет полный доступ к серверу\\.\n\n"
+        "*Windows \\(PowerShell\\):*\n"
+        f"```\n"
+        f"# Сохраните файл awg\\_admin\\_key в папку .ssh:\n"
+        f"move awg_admin_key $env:USERPROFILE\\.ssh\\awg_admin_key\n"
+        f"# Подключение:\n"
+        f"ssh -i $env:USERPROFILE\\.ssh\\awg_admin_key root@{server_ip} -p {ssh_port_raw}\n"
+        f"```\n\n"
+        "*Linux / macOS / Termux:*\n"
+        f"```\n"
+        f"mv ~/Downloads/awg_admin_key ~/.ssh/awg_admin_key\n"
+        f"chmod 600 ~/.ssh/awg_admin_key\n"
+        f"ssh -i ~/.ssh/awg_admin_key root@{server_ip} -p {ssh_port_raw}\n"
+        f"```\n\n"
+        "*iOS \\(Termius\\):* Settings → Keychain → \\+ → Import Key → выбрать файл"
+    )
+    await query.message.reply_text(instructions, parse_mode="MarkdownV2")
+    with open(key_path, "rb") as f:
+        await query.message.reply_document(
+            document=f,
+            filename="awg_admin_key",
+            caption="Приватный SSH-ключ администратора"
+        )
+
+
+async def do_ssh_toggle_pass(query):
+    pw_on = get_ssh_password_auth_local()
+    enable = not pw_on
+    await query.answer("Применяю…")
+    results = await asyncio.get_event_loop().run_in_executor(
+        None, ssh_toggle_password_auth_all, enable
+    )
+    state = "включён" if enable else "выключен"
+    lines = [f"{'✅' if results['primary'] else '❌'} Primary: пароль {state}"]
+    for name, ok in results.get("slaves", {}).items():
+        lines.append(f"{'✅' if ok else '❌'} {name}: пароль {state}")
+    await query.message.reply_text("\n".join(lines))
+    await show_ssh_admin(query)
+
+
+async def do_ssh_regen_ask(query):
+    await query.edit_message_text(
+        "🔄 *Пересоздать SSH-ключ?*\n\n"
+        "Будет создан новый ключ\\. Старый ключ на всех устройствах перестанет работать\\.\n"
+        "Новый ключ нужно будет скачать заново\\.",
+        parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Да, пересоздать", callback_data="ssh_regen_do")],
+            [InlineKeyboardButton("❌ Отмена",          callback_data="ssh_admin")],
+        ])
+    )
+
+
+async def do_ssh_regen(query):
+    await query.answer("Создаю новый ключ…")
+    ok = await asyncio.get_event_loop().run_in_executor(None, ssh_regen_admin_key)
+    if ok:
+        await query.message.reply_text(
+            "✅ Ключ пересоздан и обновлён на всех серверах.\n"
+            "Скачайте новый ключ через меню SSH-доступа."
+        )
+    else:
+        await query.message.reply_text("❌ Ошибка при пересоздании ключа — проверьте логи бота.")
+    await show_ssh_admin(query)
+
+
 async def show_maintenance(query):
     m         = get_maintenance()
     last_date = m.get("last_date") or "никогда"
@@ -2449,6 +2570,7 @@ async def show_maintenance(query):
         [InlineKeyboardButton("🕐 Сменить часовой пояс",        callback_data="maint_tz")],
         [InlineKeyboardButton("🔄 Обновить IP сервера",         callback_data="maint_update_ip")],
         [InlineKeyboardButton("♻️ Обновить IP исключений",        callback_data="refresh_subnets")],
+        [InlineKeyboardButton("🔑 SSH-доступ",                     callback_data="ssh_admin")],
         [InlineKeyboardButton("✅ Отмечено — всё ок",            callback_data="maint_done")],
         [InlineKeyboardButton("◀️ В меню",                       callback_data="back")],
     ])
