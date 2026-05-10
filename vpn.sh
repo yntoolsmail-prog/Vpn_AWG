@@ -524,11 +524,19 @@ manage_backups() {
                 TS=$(date +"%Y%m%d_%H%M%S")
                 FILE="${BACKUP_DIR}/awg_backup_${TS}.tar.gz"
                 echo -e "  ${CYAN}Создаю бэкап...${NC}"
-                if tar -czf "$FILE" \
-                    -C /etc/amnezia/amneziawg \
-                    "${VPN_IFACE}.conf" server.env clients/ \
-                    $([ -f "$USERS_FILE" ] && echo "users.json") \
-                    2>/dev/null; then
+                local TAR_FILE="${FILE%.gz}"   # сначала без сжатия для возможности tar -rf
+                # Основные файлы AWG
+                local _TAR_ARGS=("${VPN_IFACE}.conf" "server.env" "clients/")
+                [ -f /etc/amnezia/amneziawg/users.json ]        && _TAR_ARGS+=("users.json")
+                [ -f /etc/amnezia/amneziawg/subnet_cache.json ] && _TAR_ARGS+=("subnet_cache.json")
+                [ -f /etc/amnezia/amneziawg/servers.json ]      && _TAR_ARGS+=("servers.json")
+                if tar -cf "$TAR_FILE" -C /etc/amnezia/amneziawg "${_TAR_ARGS[@]}" 2>/dev/null; then
+                    # Дополняем бэкап файлами из других мест
+                    [ -f /root/.ssh/awg_admin_key ]         && tar -rf "$TAR_FILE" /root/.ssh/awg_admin_key         2>/dev/null || true
+                    [ -f /root/.ssh/awg_admin_key.pub ]     && tar -rf "$TAR_FILE" /root/.ssh/awg_admin_key.pub     2>/dev/null || true
+                    [ -f /etc/awg-bot/bot_persistence.pkl ] && tar -rf "$TAR_FILE" /etc/awg-bot/bot_persistence.pkl 2>/dev/null || true
+                    [ -f /root/modules.conf ]               && tar -rf "$TAR_FILE" /root/modules.conf               2>/dev/null || true
+                    gzip -f "$TAR_FILE" && mv -f "${TAR_FILE}.gz" "$FILE" 2>/dev/null || FILE="$TAR_FILE"
                     local SIZE
                     SIZE=$(du -sh "$FILE" | cut -f1)
                     echo -e "${GREEN}  ✓ Бэкап создан: ${FILE} (${SIZE})${NC}"
@@ -577,6 +585,142 @@ manage_backups() {
                 fi
                 sleep 2
                 ;;
+            0) return ;;
+        esac
+    done
+}
+
+# =============================================================================
+# SSH — КЛЮЧИ И ДОСТУП
+# =============================================================================
+
+manage_ssh() {
+    local ADMIN_KEY="/root/.ssh/awg_admin_key"
+    while true; do
+        show_header
+        echo -e "${BOLD}  SSH — ключи и доступ${NC}"
+        echo ""
+
+        # Статус admin-ключа
+        if [[ -f "$ADMIN_KEY.pub" ]]; then
+            local FP
+            FP=$(ssh-keygen -l -f "$ADMIN_KEY.pub" 2>/dev/null | awk '{print $2}')
+            echo -e "  Admin-ключ:     ${GREEN}✓ Сгенерирован${NC}  ($FP)"
+        else
+            echo -e "  Admin-ключ:     ${RED}✗ Не найден${NC}"
+        fi
+
+        # Статус входа по паролю
+        local PASS_AUTH
+        PASS_AUTH=$(grep "^PasswordAuthentication" /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' || echo "yes")
+        if [[ "$PASS_AUTH" == "no" ]]; then
+            echo -e "  Вход по паролю: ${YELLOW}Отключён${NC} (только ключ)"
+        else
+            echo -e "  Вход по паролю: ${GREEN}Включён${NC}"
+        fi
+
+        echo ""
+        echo "  ─────────────────────────────────────────────"
+        echo "  1) Скачать admin-ключ (SCP-команды)"
+        echo "  2) Добавить ключ устройства / настройка key-auth"
+        echo "  3) Пересоздать admin-ключ (обновит все slave)"
+        if [[ "$PASS_AUTH" == "no" ]]; then
+            echo "  4) Включить вход по паролю SSH"
+        else
+            echo "  4) Отключить вход по паролю SSH"
+        fi
+        echo "  5) Защита от перебора (fail2ban)"
+        echo "  0) Назад"
+        echo ""
+        read -p "  Выбор: " CHOICE
+        case $CHOICE in
+            1)
+                echo ""
+                if [[ ! -f "$ADMIN_KEY" ]]; then
+                    echo -e "  ${RED}Ключ не найден. Запустите setup.sh для установки системы.${NC}"
+                else
+                    local SSH_PORT SRV_IP
+                    SSH_PORT=$(grep "^Port " /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}')
+                    SSH_PORT="${SSH_PORT:-22}"
+                    SRV_IP=$(grep "^SERVER_IP=" /etc/amnezia/amneziawg/server.env 2>/dev/null | cut -d= -f2)
+                    [[ -z "$SRV_IP" ]] && SRV_IP=$(curl -4 -s --max-time 5 ifconfig.me 2>/dev/null || echo "IP_СЕРВЕРА")
+                    echo -e "  ${BOLD}Выполните на СВОЁМ устройстве (не на сервере):${NC}"
+                    echo ""
+                    echo -e "  ${CYAN}Windows PowerShell:${NC}"
+                    echo -e "  ${YELLOW}scp -P ${SSH_PORT} root@${SRV_IP}:/root/.ssh/awg_admin_key \"\$env:USERPROFILE\\.ssh\\awg_admin_key\"${NC}"
+                    echo -e "  ${YELLOW}icacls \"\$env:USERPROFILE\\.ssh\\awg_admin_key\" /inheritance:r /grant \"\${env:USERNAME}:(F)\"${NC}"
+                    echo ""
+                    echo -e "  ${CYAN}Linux / macOS / Termux:${NC}"
+                    echo -e "  ${YELLOW}scp -P ${SSH_PORT} root@${SRV_IP}:/root/.ssh/awg_admin_key ~/.ssh/awg_admin_key && chmod 600 ~/.ssh/awg_admin_key${NC}"
+                    echo ""
+                    echo -e "  ${CYAN}Подключение после скачивания:${NC}"
+                    echo -e "  ${YELLOW}ssh -p ${SSH_PORT} -i ~/.ssh/awg_admin_key root@${SRV_IP}${NC}"
+                    echo ""
+                    echo -e "  ${RED}Ключ даёт root-доступ к серверу. Храните надёжно.${NC}"
+                fi
+                press_enter
+                ;;
+            2) bash /root/setup.sh --ssh ;;
+            3)
+                echo ""
+                echo -e "  ${YELLOW}Будет создан новый admin-ключ.${NC}"
+                echo -e "  Новый ключ автоматически отправится на все slave-серверы."
+                echo -e "  После завершения скачайте новый ключ на все устройства (п. 1)."
+                echo ""
+                read -p "  Подтвердить пересоздание? [y/N]: " _CONFIRM
+                if [[ "${_CONFIRM,,}" == "y" ]]; then
+                    echo -e "  ${CYAN}Пересоздаю ключ...${NC}"
+                    local _RESULT
+                    _RESULT=$(python3 -c "
+from awg_core import ssh_regen_admin_key
+ok = ssh_regen_admin_key()
+print('OK' if ok else 'FAIL')
+" 2>&1)
+                    if [[ "$_RESULT" == "OK" ]]; then
+                        echo -e "  ${GREEN}✓ Ключ пересоздан. Скачайте новый ключ на все устройства (п. 1).${NC}"
+                    else
+                        echo -e "  ${RED}✗ Ошибка: $_RESULT${NC}"
+                    fi
+                fi
+                press_enter
+                ;;
+            4)
+                echo ""
+                if [[ "$PASS_AUTH" == "no" ]]; then
+                    read -p "  Включить вход по паролю SSH? [y/N]: " _C
+                    if [[ "${_C,,}" == "y" ]]; then
+                        grep -q "^PasswordAuthentication" /etc/ssh/sshd_config \
+                            && sed -i 's/^PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config \
+                            || echo "PasswordAuthentication yes" >> /etc/ssh/sshd_config
+                        systemctl restart sshd \
+                            && echo -e "  ${GREEN}✓ Вход по паролю включён.${NC}" \
+                            || echo -e "  ${RED}✗ Ошибка перезапуска sshd.${NC}"
+                    fi
+                else
+                    local KC
+                    KC=$(grep -c "ssh-" /root/.ssh/authorized_keys 2>/dev/null || echo 0)
+                    if [[ "$KC" -eq 0 ]]; then
+                        echo -e "  ${RED}Нет ключей в authorized_keys — опасно отключать пароль!${NC}"
+                        echo -e "  Сначала скачайте admin-ключ на устройство (п. 1) или добавьте ключ (п. 2)."
+                    else
+                        echo -e "  Ключей добавлено: ${CYAN}${KC}${NC}"
+                        read -p "  Отключить вход по паролю? [y/N]: " _C
+                        if [[ "${_C,,}" == "y" ]]; then
+                            grep -q "^PasswordAuthentication" /etc/ssh/sshd_config \
+                                && sed -i 's/^PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config \
+                                || echo "PasswordAuthentication no" >> /etc/ssh/sshd_config
+                            grep -q "^PermitRootLogin" /etc/ssh/sshd_config \
+                                && sed -i 's/^PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config \
+                                || echo "PermitRootLogin prohibit-password" >> /etc/ssh/sshd_config
+                            systemctl restart sshd \
+                                && echo -e "  ${GREEN}✓ Вход по паролю отключён.${NC}" \
+                                || echo -e "  ${RED}✗ Ошибка перезапуска sshd.${NC}"
+                        fi
+                    fi
+                fi
+                press_enter
+                ;;
+            5) bash /root/setup.sh --ssh ;;
             0) return ;;
         esac
     done
@@ -1277,7 +1421,7 @@ main_menu() {
             7)  manage_backups ;;
             8)  manage_updates ;;
             9)  bash /root/setup.sh --modules ;;
-            10) bash /root/setup.sh --ssh ;;
+            10) manage_ssh ;;
             11) run_diagnostics ;;
             12) analyze_configs ;;
             13) view_old_diagnostics ;;

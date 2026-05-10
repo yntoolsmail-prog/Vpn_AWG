@@ -1212,6 +1212,20 @@ def create_backup(prefix: str = "awg_backup") -> str:
             tar.add(USERS_FILE, arcname="users.json")
         if os.path.exists(SUBNET_CACHE_FILE):
             tar.add(SUBNET_CACHE_FILE, arcname="subnet_cache.json")
+        if os.path.exists(SERVERS_FILE):
+            tar.add(SERVERS_FILE, arcname="servers.json")
+        # SSH admin keypair — критично для доступа к slave-серверам
+        if os.path.exists(ADMIN_KEY_PATH):
+            tar.add(ADMIN_KEY_PATH,           arcname="ssh/awg_admin_key")
+        if os.path.exists(ADMIN_KEY_PATH + ".pub"):
+            tar.add(ADMIN_KEY_PATH + ".pub",  arcname="ssh/awg_admin_key.pub")
+        # Bot persistence (user data, conversation states)
+        _bot_pkl = "/etc/awg-bot/bot_persistence.pkl"
+        if os.path.exists(_bot_pkl):
+            tar.add(_bot_pkl, arcname="bot_persistence.pkl")
+        # Module config
+        if os.path.exists("/root/modules.conf"):
+            tar.add("/root/modules.conf", arcname="modules.conf")
     return backup_path
 
 # ── Техобслуживание ─────────────────────────────────────────────────────────────
