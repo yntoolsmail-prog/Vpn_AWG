@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import socket
 import subprocess
 
@@ -271,6 +272,44 @@ def _redsocks_restart() -> tuple[bool, str]:
         return False, f"❌ {e}"
 
 
+# ── Диагностика прокси ────────────────────────────────────────────────────────
+
+def _get_proxy_from_conf() -> tuple[str, int]:
+    """Читает relay host:port напрямую из redsocks2.conf — источник правды."""
+    try:
+        with open(REDSOCKS2_CONF) as f:
+            for line in f:
+                m = re.search(r'relay\s*=\s*"([^"]+):(\d+)"', line)
+                if m:
+                    return m.group(1), int(m.group(2))
+    except Exception:
+        pass
+    return "", 0
+
+
+def _check_proxy_tcp(host: str, port: int, timeout: int = 5) -> bool:
+    """TCP-пинг прокси-сервера: True если порт отвечает."""
+    if not host or not port:
+        return False
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except Exception:
+        return False
+
+
+def _has_recent_auth_errors() -> bool:
+    """True если в последних 50 строках лога redsocks2 есть 'server failure'."""
+    try:
+        r = subprocess.run(
+            ["journalctl", "-u", "redsocks2", "-n", "50", "--no-pager"],
+            capture_output=True, text=True, timeout=5
+        )
+        return "server failure" in r.stdout
+    except Exception:
+        return False
+
+
 # ── UI — главное меню SOCKS5 ──────────────────────────────────────────────────
 
 async def _show_socks5_menu(query):
@@ -290,9 +329,6 @@ async def _show_socks5_menu(query):
         )
         return
 
-    svc_status    = "🟢 Работает" if _is_redsocks_running() else "🔴 Остановлен"
-    host          = state.get("socks5_host", "—")
-    port          = state.get("socks5_port", "—")
     active_client = state.get("active_client", "")
 
     try:
@@ -301,11 +337,31 @@ async def _show_socks5_menu(query):
     except Exception:
         all_clients = []
 
-    header = (
-        f"🧦 *SOCKS5 прокси*\n\n"
-        f"redsocks2: {svc_status}\n"
-        f"Прокси: `{host}:{port}`\n"
-    )
+    # Адрес прокси: конфиг redsocks2.conf — источник правды; state — запасной
+    conf_host, conf_port = _get_proxy_from_conf()
+    display_host = conf_host or state.get("socks5_host") or "—"
+    display_port = conf_port or state.get("socks5_port") or "—"
+
+    # Статус сервиса
+    running = _is_redsocks_running()
+    svc_line = "🟢 redsocks2 работает" if running else "🔴 redsocks2 остановлен"
+
+    # Доступность прокси-сервера (только если сервис запущен)
+    if running and conf_host and conf_port:
+        tcp_ok = _check_proxy_tcp(conf_host, conf_port)
+        auth_errors = _has_recent_auth_errors()
+        if not tcp_ok:
+            proxy_line = f"⛔ Прокси недоступен ({display_host}:{display_port})"
+        elif auth_errors:
+            proxy_line = f"⚠️ Прокси отвечает, но есть ошибки авторизации\n   `{display_host}:{display_port}`"
+        else:
+            proxy_line = f"✅ Прокси работает: `{display_host}:{display_port}`"
+    elif conf_host:
+        proxy_line = f"💤 Прокси не проверен: `{display_host}:{display_port}`"
+    else:
+        proxy_line = "⚙️ Прокси не настроен"
+
+    header = f"🧦 *SOCKS5 прокси*\n\n{svc_line}\n{proxy_line}\n"
     if active_client:
         header += f"Активен для: *{active_client}*\n"
     header += "\nВыберите клиента для управления SOCKS5:"
