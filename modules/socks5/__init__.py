@@ -299,10 +299,10 @@ def _check_proxy_tcp(host: str, port: int, timeout: int = 5) -> bool:
 
 
 def _has_recent_auth_errors() -> bool:
-    """True если в последних 50 строках лога redsocks2 есть 'server failure'."""
+    """True если за последние 10 минут в логе redsocks2 есть 'server failure'."""
     try:
         r = subprocess.run(
-            ["journalctl", "-u", "redsocks2", "-n", "50", "--no-pager"],
+            ["journalctl", "-u", "redsocks2", "--since", "10 minutes ago", "--no-pager"],
             capture_output=True, text=True, timeout=5
         )
         return "server failure" in r.stdout
