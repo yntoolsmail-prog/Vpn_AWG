@@ -595,24 +595,22 @@ manage_backups() {
 # =============================================================================
 
 manage_ssh() {
-    local ADMIN_KEY="/root/.ssh/awg_admin_key"
     while true; do
         show_header
         echo -e "${BOLD}  SSH — ключи и доступ${NC}"
         echo ""
 
-        # Статус admin-ключа
-        if [[ -f "$ADMIN_KEY.pub" ]]; then
-            local FP
-            FP=$(ssh-keygen -l -f "$ADMIN_KEY.pub" 2>/dev/null | awk '{print $2}')
+        # Статус через Python-ядро (единственный источник истины)
+        local KEY_OK PASS_AUTH FP
+        KEY_OK=$(python3 -c "from awg_core import get_admin_pubkey; print('yes' if get_admin_pubkey() else 'no')" 2>/dev/null)
+        PASS_AUTH=$(python3 -c "from awg_core import get_ssh_password_auth_local; print('yes' if get_ssh_password_auth_local() else 'no')" 2>/dev/null || echo "yes")
+        FP=$(ssh-keygen -l -f /root/.ssh/awg_admin_key.pub 2>/dev/null | awk '{print $2}')
+
+        if [[ "$KEY_OK" == "yes" ]]; then
             echo -e "  Admin-ключ:     ${GREEN}✓ Сгенерирован${NC}  ($FP)"
         else
             echo -e "  Admin-ключ:     ${RED}✗ Не найден${NC}"
         fi
-
-        # Статус входа по паролю
-        local PASS_AUTH
-        PASS_AUTH=$(grep "^PasswordAuthentication" /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' || echo "yes")
         if [[ "$PASS_AUTH" == "no" ]]; then
             echo -e "  Вход по паролю: ${YELLOW}Отключён${NC} (только ключ)"
         else
@@ -625,9 +623,9 @@ manage_ssh() {
         echo "  2) Добавить ключ устройства / настройка key-auth"
         echo "  3) Пересоздать admin-ключ (обновит все slave)"
         if [[ "$PASS_AUTH" == "no" ]]; then
-            echo "  4) Включить вход по паролю SSH"
+            echo "  4) Включить вход по паролю SSH (primary + все slave)"
         else
-            echo "  4) Отключить вход по паролю SSH"
+            echo "  4) Отключить вход по паролю SSH (primary + все slave)"
         fi
         echo "  5) Защита от перебора (fail2ban)"
         echo "  0) Назад"
@@ -636,7 +634,7 @@ manage_ssh() {
         case $CHOICE in
             1)
                 echo ""
-                if [[ ! -f "$ADMIN_KEY" ]]; then
+                if [[ "$KEY_OK" != "yes" ]]; then
                     echo -e "  ${RED}Ключ не найден. Запустите setup.sh для установки системы.${NC}"
                 else
                     local SSH_PORT SRV_IP
@@ -686,37 +684,35 @@ print('OK' if ok else 'FAIL')
                 ;;
             4)
                 echo ""
+                local _ENABLE
                 if [[ "$PASS_AUTH" == "no" ]]; then
-                    read -p "  Включить вход по паролю SSH? [y/N]: " _C
-                    if [[ "${_C,,}" == "y" ]]; then
-                        grep -q "^PasswordAuthentication" /etc/ssh/sshd_config \
-                            && sed -i 's/^PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config \
-                            || echo "PasswordAuthentication yes" >> /etc/ssh/sshd_config
-                        systemctl restart sshd \
-                            && echo -e "  ${GREEN}✓ Вход по паролю включён.${NC}" \
-                            || echo -e "  ${RED}✗ Ошибка перезапуска sshd.${NC}"
-                    fi
+                    read -p "  Включить вход по паролю на всех серверах? [y/N]: " _C
+                    _ENABLE="True"
                 else
                     local KC
                     KC=$(grep -c "ssh-" /root/.ssh/authorized_keys 2>/dev/null || echo 0)
                     if [[ "$KC" -eq 0 ]]; then
                         echo -e "  ${RED}Нет ключей в authorized_keys — опасно отключать пароль!${NC}"
                         echo -e "  Сначала скачайте admin-ключ на устройство (п. 1) или добавьте ключ (п. 2)."
-                    else
-                        echo -e "  Ключей добавлено: ${CYAN}${KC}${NC}"
-                        read -p "  Отключить вход по паролю? [y/N]: " _C
-                        if [[ "${_C,,}" == "y" ]]; then
-                            grep -q "^PasswordAuthentication" /etc/ssh/sshd_config \
-                                && sed -i 's/^PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config \
-                                || echo "PasswordAuthentication no" >> /etc/ssh/sshd_config
-                            grep -q "^PermitRootLogin" /etc/ssh/sshd_config \
-                                && sed -i 's/^PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config \
-                                || echo "PermitRootLogin prohibit-password" >> /etc/ssh/sshd_config
-                            systemctl restart sshd \
-                                && echo -e "  ${GREEN}✓ Вход по паролю отключён.${NC}" \
-                                || echo -e "  ${RED}✗ Ошибка перезапуска sshd.${NC}"
-                        fi
+                        press_enter; continue
                     fi
+                    echo -e "  Ключей в authorized_keys: ${CYAN}${KC}${NC}"
+                    read -p "  Отключить вход по паролю на всех серверах? [y/N]: " _C
+                    _ENABLE="False"
+                fi
+                if [[ "${_C,,}" == "y" ]]; then
+                    echo -e "  ${CYAN}Применяю на primary и всех slave...${NC}"
+                    python3 -c "
+import json
+from awg_core import ssh_toggle_password_auth_all
+res = ssh_toggle_password_auth_all(${_ENABLE})
+action = 'включён' if ${_ENABLE} else 'отключён'
+ok = '✓' if res.get('primary') else '✗'
+print(f'  {ok} Primary: пароль {action}')
+for name, s in res.get('slaves', {}).items():
+    ok = '✓' if s else '✗'
+    print(f'  {ok} Slave {name}: пароль {action}')
+"
                 fi
                 press_enter
                 ;;
