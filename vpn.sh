@@ -600,7 +600,6 @@ manage_ssh() {
         echo -e "${BOLD}  SSH — ключи и доступ${NC}"
         echo ""
 
-        # Статус через Python-ядро (единственный источник истины)
         local KEY_OK PASS_AUTH FP
         KEY_OK=$(python3 -c "from awg_core import get_admin_pubkey; print('yes' if get_admin_pubkey() else 'no')" 2>/dev/null)
         PASS_AUTH=$(python3 -c "from awg_core import get_ssh_password_auth_local; print('yes' if get_ssh_password_auth_local() else 'no')" 2>/dev/null || echo "yes")
@@ -620,14 +619,13 @@ manage_ssh() {
         echo ""
         echo "  ─────────────────────────────────────────────"
         echo "  1) Скачать admin-ключ (SCP-команды)"
-        echo "  2) Добавить ключ устройства / настройка key-auth"
+        echo "  2) Защита от перебора (fail2ban)"
         echo "  3) Пересоздать admin-ключ (обновит все slave)"
         if [[ "$PASS_AUTH" == "no" ]]; then
             echo "  4) Включить вход по паролю SSH (primary + все slave)"
         else
             echo "  4) Отключить вход по паролю SSH (primary + все slave)"
         fi
-        echo "  5) Защита от перебора (fail2ban)"
         echo "  0) Назад"
         echo ""
         read -p "  Выбор: " CHOICE
@@ -690,10 +688,10 @@ print('OK' if ok else 'FAIL')
                     _ENABLE="True"
                 else
                     local KC
-                    KC=$(grep -c "ssh-" /root/.ssh/authorized_keys 2>/dev/null || echo 0)
+                    KC=$(grep -s "ssh-" /root/.ssh/authorized_keys 2>/dev/null | wc -l)
                     if [[ "$KC" -eq 0 ]]; then
                         echo -e "  ${RED}Нет ключей в authorized_keys — опасно отключать пароль!${NC}"
-                        echo -e "  Сначала скачайте admin-ключ на устройство (п. 1) или добавьте ключ (п. 2)."
+                        echo -e "  Сначала скачайте admin-ключ на устройство (п. 1)."
                         press_enter; continue
                     fi
                     echo -e "  Ключей в authorized_keys: ${CYAN}${KC}${NC}"
@@ -703,7 +701,6 @@ print('OK' if ok else 'FAIL')
                 if [[ "${_C,,}" == "y" ]]; then
                     echo -e "  ${CYAN}Применяю на primary и всех slave...${NC}"
                     python3 -c "
-import json
 from awg_core import ssh_toggle_password_auth_all
 res = ssh_toggle_password_auth_all(${_ENABLE})
 action = 'включён' if ${_ENABLE} else 'отключён'
@@ -716,7 +713,6 @@ for name, s in res.get('slaves', {}).items():
                 fi
                 press_enter
                 ;;
-            5) bash /root/setup.sh --ssh ;;
             0) return ;;
         esac
     done
