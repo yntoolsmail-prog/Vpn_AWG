@@ -70,6 +70,18 @@ else
     info "Активного клиента нет — iptables не трогаем."
 fi
 
+# ── Очистка глобальной цепочки REDSOCKS (если осталась от старых версий) ──────
+if iptables -t nat -L REDSOCKS 2>/dev/null | grep -q "REDIRECT"; then
+    log "Удаляю глобальную цепочку REDSOCKS..."
+    # Убираем вызов из OUTPUT и PREROUTING (если там есть)
+    iptables -t nat -D OUTPUT    -j REDSOCKS 2>/dev/null || true
+    iptables -t nat -D PREROUTING -j REDSOCKS 2>/dev/null || true
+    iptables -t nat -F REDSOCKS 2>/dev/null || true
+    iptables -t nat -X REDSOCKS 2>/dev/null || true
+    iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+    log "Глобальная цепочка REDSOCKS удалена."
+fi
+
 # ── Остановка и удаление redsocks2 ───────────────────────────────────────────
 if systemctl is-active --quiet redsocks2 2>/dev/null; then
     log "Останавливаю redsocks2..."

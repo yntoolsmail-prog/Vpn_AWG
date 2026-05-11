@@ -213,11 +213,12 @@ def _apply_iptables_for_client(client_ip: str, socks5_host_ip: str) -> tuple[boo
             "iptables", "-t", "nat", "-A", chain,
             "-d", socks5_host_ip, "-j", "RETURN"
         ], check=True, capture_output=True)
-        # Исключения: приватные сети
+        # Исключения: приватные сети + Telegram DC (mtproto-proxy не должен идти через прокси)
         private_nets = [
             "0.0.0.0/8", "10.0.0.0/8", "127.0.0.0/8",
             "169.254.0.0/16", "172.16.0.0/12", "192.168.0.0/16",
             "224.0.0.0/4", "240.0.0.0/4",
+            "91.108.0.0/16", "149.154.0.0/16", "91.105.192.0/23", "149.154.160.0/20",
         ]
         for net in private_nets:
             subprocess.run([
