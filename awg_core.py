@@ -1396,15 +1396,29 @@ def get_admin_pubkey() -> str:
 
 
 def get_ssh_password_auth_local() -> bool:
-    """True если на локальном sshd включён вход по паролю."""
+    """True если на локальном sshd включён вход по паролю.
+    Использует sshd -T для получения итоговой конфигурации с учётом всех
+    Include и sshd_config.d/*.conf (Ubuntu/Debian cloud-init может переопределять)."""
+    import subprocess as _sp
     try:
-        with open("/etc/ssh/sshd_config") as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith("PasswordAuthentication "):
-                    return line.split()[1].lower() == "yes"
+        out = _sp.run(["sshd", "-T"], capture_output=True, text=True, timeout=5).stdout
+        for line in out.splitlines():
+            if line.lower().startswith("passwordauthentication "):
+                return line.split()[1].lower() == "yes"
     except Exception:
         pass
+    # Fallback: читаем файлы в порядке приоритета (drop-ins первыми, как делает sshd)
+    import glob as _glob
+    paths = sorted(_glob.glob("/etc/ssh/sshd_config.d/*.conf")) + ["/etc/ssh/sshd_config"]
+    for path in paths:
+        try:
+            with open(path) as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("PasswordAuthentication "):
+                        return line.split()[1].lower() == "yes"
+        except Exception:
+            pass
     return True
 
 
@@ -1445,9 +1459,15 @@ def ssh_toggle_password_auth_all(enable: bool) -> dict:
     try:
         _sp.run(
             ["bash", "-c",
+             # Обновить основной файл
              f"grep -q '^PasswordAuthentication' /etc/ssh/sshd_config "
              f"&& sed -i 's/^PasswordAuthentication.*/PasswordAuthentication {val}/' /etc/ssh/sshd_config "
-             f"|| echo 'PasswordAuthentication {val}' >> /etc/ssh/sshd_config"],
+             f"|| echo 'PasswordAuthentication {val}' >> /etc/ssh/sshd_config; "
+             # Обновить все drop-in файлы (Ubuntu cloud-init и т.п.)
+             f"for f in /etc/ssh/sshd_config.d/*.conf; do "
+             f"  [ -f \"$f\" ] && grep -q '^PasswordAuthentication' \"$f\" "
+             f"  && sed -i 's/^PasswordAuthentication.*/PasswordAuthentication {val}/' \"$f\"; "
+             f"done"],
             check=True, capture_output=True,
         )
         _sp.run(
@@ -1472,6 +1492,10 @@ def ssh_toggle_password_auth_all(enable: bool) -> dict:
                     f"grep -q '^PasswordAuthentication' /etc/ssh/sshd_config "
                     f"&& sed -i 's/^PasswordAuthentication.*/PasswordAuthentication {val}/' /etc/ssh/sshd_config "
                     f"|| echo 'PasswordAuthentication {val}' >> /etc/ssh/sshd_config; "
+                    f"for f in /etc/ssh/sshd_config.d/*.conf; do "
+                    f"  [ -f \"$f\" ] && grep -q '^PasswordAuthentication' \"$f\" "
+                    f"  && sed -i 's/^PasswordAuthentication.*/PasswordAuthentication {val}/' \"$f\"; "
+                    f"done; "
                     f"systemctl restart sshd 2>/dev/null || systemctl restart ssh"
                 )
                 client.exec_command(cmd, timeout=15)
