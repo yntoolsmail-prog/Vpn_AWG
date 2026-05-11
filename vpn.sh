@@ -611,9 +611,9 @@ manage_ssh() {
             echo -e "  Admin-ключ:     ${RED}✗ Не найден${NC}"
         fi
         if [[ "$PASS_AUTH" == "no" ]]; then
-            echo -e "  Вход по паролю: ${YELLOW}Отключён${NC} (только ключ)"
+            echo -e "  Вход по паролю: ${GREEN}Отключён${NC} (только ключ)"
         else
-            echo -e "  Вход по паролю: ${GREEN}Включён${NC}"
+            echo -e "  Вход по паролю: ${RED}Включён${NC} (небезопасно)"
         fi
 
         echo ""
@@ -643,17 +643,19 @@ manage_ssh() {
                     echo -e "  ${BOLD}Выполните на СВОЁМ устройстве (не на сервере):${NC}"
                     echo ""
                     echo -e "  ${CYAN}Windows PowerShell:${NC}"
-                    # printf %s не интерпретирует \a в аргументе → путь выводится буквально
-                    local _W1 _W2 _W3
+                    # printf %s не интерпретирует \a → путь с \awg_admin_key выводится буквально
+                    local _W0 _W1 _W2 _W3
+                    _W0="New-Item -ItemType Directory -Force \"\$env:USERPROFILE\\.ssh\" | Out-Null"
                     _W1="scp -P ${SSH_PORT} root@${SRV_IP}:/root/.ssh/awg_admin_key \"\$env:USERPROFILE\\.ssh\\awg_admin_key\""
                     _W2="icacls \"\$env:USERPROFILE\\.ssh\\awg_admin_key\" /inheritance:r /grant \"\${env:USERNAME}:(F)\""
                     _W3="ssh -p ${SSH_PORT} -i \"\$env:USERPROFILE\\.ssh\\awg_admin_key\" root@${SRV_IP}"
+                    printf "  ${YELLOW}%s${NC}\n" "$_W0"
                     printf "  ${YELLOW}%s${NC}\n" "$_W1"
                     printf "  ${YELLOW}%s${NC}\n" "$_W2"
                     printf "  ${YELLOW}%s${NC}\n" "$_W3"
                     echo ""
                     echo -e "  ${CYAN}Linux / macOS / Termux:${NC}"
-                    echo -e "  ${YELLOW}scp -P ${SSH_PORT} root@${SRV_IP}:/root/.ssh/awg_admin_key ~/.ssh/awg_admin_key && chmod 600 ~/.ssh/awg_admin_key${NC}"
+                    echo -e "  ${YELLOW}mkdir -p ~/.ssh && scp -P ${SSH_PORT} root@${SRV_IP}:/root/.ssh/awg_admin_key ~/.ssh/awg_admin_key && chmod 600 ~/.ssh/awg_admin_key${NC}"
                     echo -e "  ${YELLOW}ssh -p ${SSH_PORT} -i ~/.ssh/awg_admin_key root@${SRV_IP}${NC}"
                     echo ""
                     echo -e "  ${BOLD}Второе устройство (если пароль уже отключён):${NC}"

@@ -2465,16 +2465,17 @@ async def do_ssh_getkey(query):
 
     instructions = (
         "🔑 *Приватный SSH-ключ*\n\n"
-        "⚠️ Не пересылайте этот файл никому — "
-        "кто имеет его, имеет полный root-доступ к серверу.\n\n"
-        "*Windows (PowerShell):*\n"
-        f"`move awg_admin_key %USERPROFILE%\\.ssh\\awg_admin_key`\n"
-        f"`ssh -i %USERPROFILE%\\.ssh\\awg_admin_key root@{server_ip} -p {ssh_port_raw}`\n\n"
+        "⚠️ Не пересылайте этот файл — кто имеет его, имеет root-доступ к серверу.\n\n"
+        "Файл отправлен выше. Сохраните его в папку `.ssh` и подключайтесь:\n\n"
+        "*Windows (PowerShell) — вместо скачивания через Telegram лучше SCP:*\n"
+        f"`New-Item -ItemType Directory -Force \"$env:USERPROFILE\\.ssh\"`\n"
+        f"`scp -P {ssh_port_raw} root@{server_ip}:/root/.ssh/awg_admin_key \"$env:USERPROFILE\\.ssh\\awg_admin_key\"`\n"
+        f"`ssh -p {ssh_port_raw} -i \"$env:USERPROFILE\\.ssh\\awg_admin_key\" root@{server_ip}`\n\n"
         "*Linux / macOS / Termux:*\n"
-        f"`mv ~/Downloads/awg_admin_key ~/.ssh/awg_admin_key`\n"
-        f"`chmod 600 ~/.ssh/awg_admin_key`\n"
-        f"`ssh -i ~/.ssh/awg_admin_key root@{server_ip} -p {ssh_port_raw}`\n\n"
-        "*iOS (Termius):* Settings → Keychain → + → Import Key → выбрать файл"
+        f"`mkdir -p ~/.ssh && chmod 700 ~/.ssh`\n"
+        f"`mv ~/Downloads/awg_admin_key ~/.ssh/awg_admin_key && chmod 600 ~/.ssh/awg_admin_key`\n"
+        f"`ssh -p {ssh_port_raw} -i ~/.ssh/awg_admin_key root@{server_ip}`\n\n"
+        "*iOS (Termius):* Settings → Keychain → + → Import Key → выбрать файл awg\\_admin\\_key"
     )
     await query.message.reply_text(instructions, parse_mode="Markdown")
     with open(key_path, "rb") as f:
