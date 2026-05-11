@@ -2472,43 +2472,42 @@ async def do_ssh_getkey(query):
 
     w_dir = f"\"$env:USERPROFILE\\.ssh\""
     w_key = f"\"$env:USERPROFILE\\.ssh\\awg_admin_key\""
-    w_dl  = f"\"$env:USERPROFILE\\Downloads\\awg_admin_key\""
     instructions = (
-        "Файл выше — ваш пропуск на сервер. Кто имеет этот файл, тот имеет root-доступ. Не пересылайте.\n\n"
+        "Файл выше — ваш пропуск на сервер. Кто имеет его — имеет root-доступ. Не пересылайте.\n\n"
 
-        "*Что такое папка .ssh и куда класть файл*\n"
-        "SSH-программы ищут ключи в специальной папке:\n"
-        f"Windows: `C:\\Users\\ВашеИмя\\.ssh\\` (скрытая, создайте командой ниже)\n"
-        f"macOS/Linux: `~/.ssh/` — это `/home/вашеимя/.ssh/`\n\n"
+        "*Куда положить файл*\n"
+        "SSH ищет ключи в папке `.ssh` в вашем домашнем каталоге:\n"
+        "Windows: `C:\\Users\\ВашеИмя\\.ssh\\awg_admin_key`\n"
+        "macOS/Linux: `~/.ssh/awg_admin_key`\n\n"
+        "Файл из Telegram — переложите его туда через Проводник или Finder.\n"
+        "Важно: файл должен называться точно `awg_admin_key` (без расширения).\n"
+        "На Windows папку `.ssh` нужно создать сначала — она скрытая и не создаётся сама:\n"
+        f"`New-Item -ItemType Directory -Force {w_dir}`\n\n"
 
-        "*Рекомендуемый способ — скачать через терминал (SCP)*\n"
-        "SCP копирует файл прямо с сервера без посредников.\n"
-        "Для этого нужен пароль от сервера — убедитесь, что вход по паролю включён\n"
-        "(в этом меню кнопка «Вход по паролю»).\n\n"
-
-        "Windows — откройте PowerShell и выполните три команды:\n"
+        "*Скачать напрямую с сервера (SCP) — надёжнее*\n"
+        "Нужен пароль от сервера — убедитесь что вход по паролю включён.\n\n"
+        f"Windows PowerShell:\n"
         f"`New-Item -ItemType Directory -Force {w_dir}`\n"
-        f"`scp -P {ssh_port_raw} root@{server_ip}:/root/.ssh/awg_admin_key {w_key}`\n"
-        f"`ssh -p {ssh_port_raw} -i {w_key} root@{server_ip}`\n\n"
+        f"`scp -P {ssh_port_raw} root@{server_ip}:/root/.ssh/awg_admin_key {w_key}`\n\n"
+        f"Linux / macOS / Termux:\n"
+        f"`mkdir -p ~/.ssh && scp -P {ssh_port_raw} root@{server_ip}:/root/.ssh/awg_admin_key ~/.ssh/awg_admin_key && chmod 600 ~/.ssh/awg_admin_key`\n\n"
 
-        f"Linux / macOS / Termux — одной строкой:\n"
-        f"`mkdir -p ~/.ssh && scp -P {ssh_port_raw} root@{server_ip}:/root/.ssh/awg_admin_key ~/.ssh/awg_admin_key && chmod 600 ~/.ssh/awg_admin_key`\n"
-        f"Затем проверьте: `ssh -p {ssh_port_raw} -i ~/.ssh/awg_admin_key root@{server_ip}`\n\n"
+        "*Как заходить на сервер*\n"
+        f"Первый раз (проверить что ключ работает):\n"
+        f"Windows: `ssh -p {ssh_port_raw} -i {w_key} root@{server_ip}`\n"
+        f"Linux/macOS: `ssh -p {ssh_port_raw} -i ~/.ssh/awg_admin_key root@{server_ip}`\n\n"
+        "Чтобы не вводить длинную команду каждый раз — создайте файл `~/.ssh/config`\n"
+        "(Windows: `C:\\Users\\ВашеИмя\\.ssh\\config`) с таким содержимым:\n"
+        f"`Host server`\n"
+        f"`    HostName {server_ip}`\n"
+        f"`    User root`\n"
+        f"`    Port {ssh_port_raw}`\n"
+        f"`    IdentityFile ~/.ssh/awg_admin_key`\n\n"
+        "После этого просто: `ssh server`\n\n"
 
-        "*Альтернатива — переместить файл из Telegram*\n"
-        "Сохраните файл `awg_admin_key` через Telegram на устройство, затем:\n\n"
-
-        "Windows PowerShell:\n"
-        f"`New-Item -ItemType Directory -Force {w_dir}`\n"
-        f"`Move-Item {w_dl} {w_key}`\n"
-        "(если Telegram сохранил файл не в Downloads — поправьте путь)\n\n"
-
-        "Linux / macOS:\n"
-        "`mv ~/Downloads/awg_admin_key ~/.ssh/awg_admin_key && chmod 600 ~/.ssh/awg_admin_key`\n\n"
-
-        "*После успешного входа по ключу*\n"
+        "*После успешного входа*\n"
         "Вернитесь в меню SSH и отключите вход по паролю.\n"
-        "Второе устройство: сначала включите пароль, скачайте ключ, затем отключите снова."
+        "Второе устройство: сначала включите пароль, скачайте ключ на него, затем снова отключите."
     )
     await query.message.reply_text(instructions, parse_mode="Markdown")
 
