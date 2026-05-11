@@ -1435,12 +1435,14 @@ def ssh_push_admin_key(server: dict) -> bool:
         try:
             cmd = (
                 "mkdir -p ~/.ssh && chmod 700 ~/.ssh && "
-                f"grep -qF '{pubkey}' ~/.ssh/authorized_keys 2>/dev/null || "
-                f"echo '{pubkey}' >> ~/.ssh/authorized_keys && "
+                f"{{ grep -qF '{pubkey}' ~/.ssh/authorized_keys 2>/dev/null || "
+                f"echo '{pubkey}' >> ~/.ssh/authorized_keys; }} && "
                 "chmod 600 ~/.ssh/authorized_keys"
             )
-            _, _, stderr = client.exec_command(cmd, timeout=10)
-            stderr.read()
+            _, stdout, stderr = client.exec_command(cmd, timeout=10)
+            stdout.read(); stderr.read()
+            if stdout.channel.recv_exit_status() != 0:
+                return False
         finally:
             client.close()
         return True
@@ -1521,22 +1523,25 @@ def ssh_regen_admin_key() -> bool:
             new_pub = f.read().strip()
 
         # Обновляем slave-серверы, пока ещё работает старый ключ
+        slave_errors: list[str] = []
         if PARAMIKO_AVAILABLE:
             for srv in load_servers():
                 if srv.get("is_primary"):
                     continue
+                name = srv.get("name", srv.get("ssh", {}).get("ip", "?"))
                 try:
                     client = _ssh_connect(srv.get("ssh", {}))
                     try:
-                        client.exec_command(
+                        _, stdout, stderr = client.exec_command(
                             f"sed -i '/awg-admin/d' ~/.ssh/authorized_keys 2>/dev/null; "
                             f"echo '{new_pub}' >> ~/.ssh/authorized_keys",
                             timeout=10,
                         )
+                        stdout.read(); stderr.read()
                     finally:
                         client.close()
-                except Exception:
-                    pass
+                except Exception as _e:
+                    slave_errors.append(f"{name}: {_e}")
 
         # Обновляем локальный authorized_keys
         auth = "/root/.ssh/authorized_keys"
@@ -1551,14 +1556,14 @@ def ssh_regen_admin_key() -> bool:
         # Заменяем ключ
         os.replace(temp, ADMIN_KEY_PATH)
         os.replace(temp + ".pub", ADMIN_KEY_PATH + ".pub")
-        return True
+        return True, slave_errors
     except Exception:
         for p in [temp, temp + ".pub"]:
             try:
                 os.unlink(p)
             except Exception:
                 pass
-        return False
+        return False, []
 
 
 def ssh_get_slave_peer_count(server: dict):
@@ -1570,7 +1575,7 @@ def ssh_get_slave_peer_count(server: dict):
         client = _ssh_connect(ssh, timeout=8)
         try:
             _, stdout, _ = client.exec_command(
-                "grep -c '^\\[Peer\\]' /etc/amnezia/amneziawg/awg0.conf 2>/dev/null || echo 0",
+                "grep -F '[Peer]' /etc/amnezia/amneziawg/awg0.conf 2>/dev/null | wc -l",
                 timeout=5
             )
             return int(stdout.read().decode().strip())

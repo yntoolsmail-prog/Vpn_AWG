@@ -2542,14 +2542,18 @@ async def do_ssh_regen_ask(query):
 
 async def do_ssh_regen(query):
     await query.answer("Создаю новый ключ…")
-    ok = await asyncio.get_event_loop().run_in_executor(None, ssh_regen_admin_key)
+    ok, slave_errors = await asyncio.get_event_loop().run_in_executor(None, ssh_regen_admin_key)
     if ok:
-        await query.message.reply_text(
-            "✅ Ключ пересоздан и обновлён на всех серверах.\n"
-            "Скачайте новый ключ через меню SSH-доступа."
-        )
+        msg = "✅ Ключ пересоздан и обновлён на всех серверах.\nСкачайте новый ключ через меню SSH-доступа."
+        if slave_errors:
+            msg = (
+                "✅ Ключ пересоздан, но не удалось обновить некоторые slave:\n"
+                + "\n".join(f"• {e}" for e in slave_errors)
+                + "\n\nЭти slave нужно обновить вручную через консоль VPS провайдера."
+            )
     else:
-        await query.message.reply_text("❌ Ошибка при пересоздании ключа — проверьте логи бота.")
+        msg = "❌ Ошибка при пересоздании ключа — проверьте логи бота."
+    await query.message.reply_text(msg)
     await show_ssh_admin(query)
 
 

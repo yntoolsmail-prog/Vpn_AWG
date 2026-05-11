@@ -702,11 +702,22 @@ manage_ssh() {
                     local _RESULT
                     _RESULT=$(python3 -c "
 from awg_core import ssh_regen_admin_key
-ok = ssh_regen_admin_key()
-print('OK' if ok else 'FAIL')
+ok, errs = ssh_regen_admin_key()
+if not ok:
+    print('FAIL')
+elif errs:
+    print('WARN:' + '|'.join(errs))
+else:
+    print('OK')
 " 2>&1)
                     if [[ "$_RESULT" == "OK" ]]; then
                         echo -e "  ${GREEN}✓ Ключ пересоздан. Скачайте новый ключ на все устройства (п. 1).${NC}"
+                    elif [[ "$_RESULT" == WARN:* ]]; then
+                        echo -e "  ${YELLOW}✓ Ключ пересоздан, но не обновлён на некоторых slave:${NC}"
+                        echo "${_RESULT#WARN:}" | tr '|' '\n' | while read -r _ERR; do
+                            echo -e "  ${RED}• $_ERR${NC}"
+                        done
+                        echo -e "  ${YELLOW}Для этих slave нужен доступ через консоль VPS-провайдера.${NC}"
                     else
                         echo -e "  ${RED}✗ Ошибка: $_RESULT${NC}"
                     fi
