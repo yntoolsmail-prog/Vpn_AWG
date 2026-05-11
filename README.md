@@ -240,6 +240,53 @@ apt-get update && apt-get upgrade -y && systemctl restart awg-bot
 
 ---
 
+## Защита SSH
+
+SSH-порт сервера открыт в интернет — автоматические сканеры начинают перебирать пароли через минуты после установки.
+
+### fail2ban
+
+Блокирует IP после 5 неверных попыток за 10 минут. Устанавливается через меню vpn.sh (пункт 10 → 5) или напрямую:
+
+```bash
+bash /root/setup.sh --ssh
+```
+
+### SSH-ключ администратора
+
+При установке система автоматически генерирует единый ключ `/root/.ssh/awg_admin_key`. Этот же ключ бот использует для подключения к slave-серверам. Скачайте его на каждое устройство — и пароль для SSH вам больше не нужен.
+
+**Получить команды для скачивания** — vpn.sh → пункт 10 → пункт 1, или через бота: Техобслуживание → SSH-доступ → Скачать ключ.
+
+**Linux / macOS / Termux:**
+```bash
+scp -P 22 root@IP_СЕРВЕРА:/root/.ssh/awg_admin_key ~/.ssh/awg_admin_key
+chmod 600 ~/.ssh/awg_admin_key
+ssh -i ~/.ssh/awg_admin_key root@IP_СЕРВЕРА
+```
+
+**Windows (PowerShell):**
+```powershell
+scp -P 22 root@IP_СЕРВЕРА:/root/.ssh/awg_admin_key "$env:USERPROFILE\.ssh\awg_admin_key"
+icacls "$env:USERPROFILE\.ssh\awg_admin_key" /inheritance:r /grant "${env:USERNAME}:(F)"
+ssh -i "$env:USERPROFILE\.ssh\awg_admin_key" root@IP_СЕРВЕРА
+```
+
+После того как убедились что вход по ключу работает — отключите пароль (vpn.sh → пункт 10 → пункт 4). Это распространится на primary и все slave-серверы автоматически.
+
+### Свои ключи устройств (альтернатива)
+
+Если предпочитаете держать отдельный ключ на каждом устройстве — используйте мастер:
+
+```bash
+# vpn.sh → пункт 10 → пункт 2, или напрямую:
+bash /root/setup.sh --ssh
+```
+
+Мастер поможет сгенерировать ключ на устройстве, скопировать публичный ключ на сервер и проверить вход перед отключением пароля.
+
+---
+
 ## Благодарности
 
 - [AmneziaWG](https://github.com/amnezia-vpn/amneziawg-linux-kernel-module) — форк WireGuard с обфускацией трафика

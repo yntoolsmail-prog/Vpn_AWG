@@ -524,11 +524,19 @@ manage_backups() {
                 TS=$(date +"%Y%m%d_%H%M%S")
                 FILE="${BACKUP_DIR}/awg_backup_${TS}.tar.gz"
                 echo -e "  ${CYAN}Создаю бэкап...${NC}"
-                if tar -czf "$FILE" \
-                    -C /etc/amnezia/amneziawg \
-                    "${VPN_IFACE}.conf" server.env clients/ \
-                    $([ -f "$USERS_FILE" ] && echo "users.json") \
-                    2>/dev/null; then
+                local TAR_FILE="${FILE%.gz}"   # сначала без сжатия для возможности tar -rf
+                # Основные файлы AWG
+                local _TAR_ARGS=("${VPN_IFACE}.conf" "server.env" "clients/")
+                [ -f /etc/amnezia/amneziawg/users.json ]        && _TAR_ARGS+=("users.json")
+                [ -f /etc/amnezia/amneziawg/subnet_cache.json ] && _TAR_ARGS+=("subnet_cache.json")
+                [ -f /etc/amnezia/amneziawg/servers.json ]      && _TAR_ARGS+=("servers.json")
+                if tar -cf "$TAR_FILE" -C /etc/amnezia/amneziawg "${_TAR_ARGS[@]}" 2>/dev/null; then
+                    # Дополняем бэкап файлами из других мест
+                    [ -f /root/.ssh/awg_admin_key ]         && tar -rf "$TAR_FILE" /root/.ssh/awg_admin_key         2>/dev/null || true
+                    [ -f /root/.ssh/awg_admin_key.pub ]     && tar -rf "$TAR_FILE" /root/.ssh/awg_admin_key.pub     2>/dev/null || true
+                    [ -f /etc/awg-bot/bot_persistence.pkl ] && tar -rf "$TAR_FILE" /etc/awg-bot/bot_persistence.pkl 2>/dev/null || true
+                    [ -f /root/modules.conf ]               && tar -rf "$TAR_FILE" /root/modules.conf               2>/dev/null || true
+                    gzip -f "$TAR_FILE" && mv -f "${TAR_FILE}.gz" "$FILE" 2>/dev/null || FILE="$TAR_FILE"
                     local SIZE
                     SIZE=$(du -sh "$FILE" | cut -f1)
                     echo -e "${GREEN}  ✓ Бэкап создан: ${FILE} (${SIZE})${NC}"
@@ -576,6 +584,178 @@ manage_backups() {
                     echo -e "${GREEN}  ✓ Удалено: ${COUNT} файлов${NC}"
                 fi
                 sleep 2
+                ;;
+            0) return ;;
+        esac
+    done
+}
+
+# =============================================================================
+# SSH — КЛЮЧИ И ДОСТУП
+# =============================================================================
+
+manage_ssh() {
+    while true; do
+        show_header
+        echo -e "${BOLD}  SSH — ключи и доступ${NC}"
+        echo ""
+
+        local KEY_OK PASS_AUTH FP
+        KEY_OK=$(python3 -c "from awg_core import get_admin_pubkey; print('yes' if get_admin_pubkey() else 'no')" 2>/dev/null)
+        PASS_AUTH=$(python3 -c "from awg_core import get_ssh_password_auth_local; print('yes' if get_ssh_password_auth_local() else 'no')" 2>/dev/null || echo "yes")
+        FP=$(ssh-keygen -l -f /root/.ssh/awg_admin_key.pub 2>/dev/null | awk '{print $2}')
+
+        if [[ "$KEY_OK" == "yes" ]]; then
+            echo -e "  Admin-ключ:     ${GREEN}✓ Сгенерирован${NC}  ($FP)"
+        else
+            echo -e "  Admin-ключ:     ${RED}✗ Не найден${NC}"
+        fi
+        if [[ "$PASS_AUTH" == "no" ]]; then
+            echo -e "  Вход по паролю: ${GREEN}Отключён${NC} (только ключ)"
+        else
+            echo -e "  Вход по паролю: ${RED}Включён${NC} (небезопасно)"
+        fi
+
+        echo ""
+        echo "  ─────────────────────────────────────────────"
+        echo "  1) Скачать admin-ключ (SCP-команды)"
+        echo "  2) Защита от перебора (fail2ban)"
+        echo "  3) Пересоздать admin-ключ (обновит все slave)"
+        if [[ "$PASS_AUTH" == "no" ]]; then
+            echo "  4) Включить вход по паролю SSH (primary + все slave)"
+        else
+            echo "  4) Отключить вход по паролю SSH (primary + все slave)"
+        fi
+        echo "  0) Назад"
+        echo ""
+        read -p "  Выбор: " CHOICE
+        case $CHOICE in
+            1)
+                echo ""
+                if [[ "$KEY_OK" != "yes" ]]; then
+                    echo -e "  ${RED}Ключ не найден. Запустите setup.sh для установки системы.${NC}"
+                else
+                    local SSH_PORT SRV_IP
+                    SSH_PORT=$(grep "^Port " /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}')
+                    SSH_PORT="${SSH_PORT:-22}"
+                    SRV_IP=$(grep "^SERVER_IP=" /etc/amnezia/amneziawg/server.env 2>/dev/null | cut -d= -f2)
+                    [[ -z "$SRV_IP" ]] && SRV_IP=$(curl -4 -s --max-time 5 ifconfig.me 2>/dev/null || echo "IP_СЕРВЕРА")
+
+                    echo -e "  ${BOLD}Как скачать ключ на устройство${NC}"
+                    echo ""
+                    echo -e "  Откройте ${BOLD}новое${NC} окно терминала на своём устройстве (не закрывая это)."
+                    echo -e "  Скопируйте и выполните команды ниже — они спросят пароль от сервера"
+                    echo -e "  и скачают ключ прямо в нужную папку."
+                    echo ""
+                    echo -e "  ${BOLD}Папка для ключа:${NC}"
+                    echo -e "  Windows:     C:\\Users\\ВашеИмя\\.ssh\\  (скрытая, создаётся командой ниже)"
+                    echo -e "  Linux/macOS: ~/.ssh/  (то же что /home/вашеимя/.ssh/)"
+                    echo ""
+
+                    echo -e "  ── ${CYAN}Windows — PowerShell${NC} ─────────────────────────"
+                    # printf %s: аргумент %s не проходит через escape-интерпретацию,
+                    # поэтому \awg_admin_key не превращается в BEL + wg_admin_key
+                    local _W0 _W1 _W2 _W3 _W4
+                    _W0="# Шаг 1: создать папку .ssh (если нет)"
+                    _W1="New-Item -ItemType Directory -Force \"\$env:USERPROFILE\\.ssh\" | Out-Null"
+                    _W2="# Шаг 2: скачать ключ (введите пароль сервера когда спросит)"
+                    _W3="scp -P ${SSH_PORT} root@${SRV_IP}:/root/.ssh/awg_admin_key \"\$env:USERPROFILE\\.ssh\\awg_admin_key\""
+                    _W4="# Шаг 3: проверить подключение по ключу (пароль вводить НЕ нужно)"
+                    local _W5="ssh -p ${SSH_PORT} -i \"\$env:USERPROFILE\\.ssh\\awg_admin_key\" root@${SRV_IP}"
+                    printf "  ${BOLD}%s${NC}\n" "$_W0"
+                    printf "  ${YELLOW}%s${NC}\n" "$_W1"
+                    printf "  ${BOLD}%s${NC}\n" "$_W2"
+                    printf "  ${YELLOW}%s${NC}\n" "$_W3"
+                    printf "  ${BOLD}%s${NC}\n" "$_W4"
+                    printf "  ${YELLOW}%s${NC}\n" "$_W5"
+                    echo ""
+
+                    echo -e "  ── ${CYAN}Linux / macOS / Termux${NC} ──────────────────────"
+                    echo -e "  ${BOLD}# Шаг 1: создать папку и скачать ключ за одну команду${NC}"
+                    echo -e "  ${YELLOW}mkdir -p ~/.ssh && scp -P ${SSH_PORT} root@${SRV_IP}:/root/.ssh/awg_admin_key ~/.ssh/awg_admin_key && chmod 600 ~/.ssh/awg_admin_key${NC}"
+                    echo -e "  ${BOLD}# Шаг 2: проверить подключение (без пароля)${NC}"
+                    echo -e "  ${YELLOW}ssh -p ${SSH_PORT} -i ~/.ssh/awg_admin_key root@${SRV_IP}${NC}"
+                    echo ""
+
+                    echo -e "  ${BOLD}Что делать после:${NC}"
+                    echo -e "  Если вошли по ключу успешно — вернитесь в это меню и выберите"
+                    echo -e "  пункт 4 «Отключить вход по паролю». После этого пароль не потребуется."
+                    echo ""
+                    echo -e "  ${BOLD}Второе устройство (если пароль уже отключён):${NC}"
+                    echo -e "  Бот → Техобслуживание → SSH-доступ → Включить пароль временно,"
+                    echo -e "  скачайте ключ на новое устройство, затем снова отключите пароль."
+                    echo ""
+                    echo -e "  ${RED}⚠  Ключ = root-доступ к серверу. Не отправляйте его никому.${NC}"
+                fi
+                press_enter
+                ;;
+            2) bash /root/setup.sh --ssh ;;
+            3)
+                echo ""
+                echo -e "  ${YELLOW}Будет создан новый admin-ключ.${NC}"
+                echo -e "  Новый ключ автоматически отправится на все slave-серверы."
+                echo -e "  После завершения скачайте новый ключ на все устройства (п. 1)."
+                echo ""
+                read -p "  Подтвердить пересоздание? [y/N]: " _CONFIRM
+                if [[ "${_CONFIRM,,}" == "y" ]]; then
+                    echo -e "  ${CYAN}Пересоздаю ключ...${NC}"
+                    local _RESULT
+                    _RESULT=$(python3 -c "
+from awg_core import ssh_regen_admin_key
+ok, errs = ssh_regen_admin_key()
+if not ok:
+    print('FAIL')
+elif errs:
+    print('WARN:' + '|'.join(errs))
+else:
+    print('OK')
+" 2>&1)
+                    if [[ "$_RESULT" == "OK" ]]; then
+                        echo -e "  ${GREEN}✓ Ключ пересоздан. Скачайте новый ключ на все устройства (п. 1).${NC}"
+                    elif [[ "$_RESULT" == WARN:* ]]; then
+                        echo -e "  ${YELLOW}✓ Ключ пересоздан, но не обновлён на некоторых slave:${NC}"
+                        echo "${_RESULT#WARN:}" | tr '|' '\n' | while read -r _ERR; do
+                            echo -e "  ${RED}• $_ERR${NC}"
+                        done
+                        echo -e "  ${YELLOW}Для этих slave нужен доступ через консоль VPS-провайдера.${NC}"
+                    else
+                        echo -e "  ${RED}✗ Ошибка: $_RESULT${NC}"
+                    fi
+                fi
+                press_enter
+                ;;
+            4)
+                echo ""
+                local _ENABLE
+                if [[ "$PASS_AUTH" == "no" ]]; then
+                    read -p "  Включить вход по паролю на всех серверах? [y/N]: " _C
+                    _ENABLE="True"
+                else
+                    local KC
+                    KC=$(grep -s "ssh-" /root/.ssh/authorized_keys 2>/dev/null | wc -l)
+                    if [[ "$KC" -eq 0 ]]; then
+                        echo -e "  ${RED}Нет ключей в authorized_keys — опасно отключать пароль!${NC}"
+                        echo -e "  Сначала скачайте admin-ключ на устройство (п. 1)."
+                        press_enter; continue
+                    fi
+                    echo -e "  Ключей в authorized_keys: ${CYAN}${KC}${NC}"
+                    read -p "  Отключить вход по паролю на всех серверах? [y/N]: " _C
+                    _ENABLE="False"
+                fi
+                if [[ "${_C,,}" == "y" ]]; then
+                    echo -e "  ${CYAN}Применяю на primary и всех slave...${NC}"
+                    python3 -c "
+from awg_core import ssh_toggle_password_auth_all
+res = ssh_toggle_password_auth_all(${_ENABLE})
+action = 'включён' if ${_ENABLE} else 'отключён'
+ok = '✓' if res.get('primary') else '✗'
+print(f'  {ok} Primary: пароль {action}')
+for name, s in res.get('slaves', {}).items():
+    ok = '✓' if s else '✗'
+    print(f'  {ok} Slave {name}: пароль {action}')
+"
+                fi
+                press_enter
                 ;;
             0) return ;;
         esac
@@ -1255,12 +1435,13 @@ main_menu() {
         echo "  7) Бэкапы"
         echo "  8) Обновление"
         echo "  9) Управление модулями"
+        echo " 10) Защита SSH (fail2ban, ключи)"
         echo ""
         echo "  ── Диагностика ──────────────────────"
-        echo " 10) Полный диагностический отчёт"
-        echo " 11) Анализ конфигов клиентов"
-        echo " 12) Просмотр предыдущих диагностик"
-        echo " 13) Проверить целостность клиентов"
+        echo " 11) Полный диагностический отчёт"
+        echo " 12) Анализ конфигов клиентов"
+        echo " 13) Просмотр предыдущих диагностик"
+        echo " 14) Проверить целостность клиентов"
         echo ""
         echo "  0) Выход"
         echo ""
@@ -1276,10 +1457,11 @@ main_menu() {
             7)  manage_backups ;;
             8)  manage_updates ;;
             9)  bash /root/setup.sh --modules ;;
-            10) run_diagnostics ;;
-            11) analyze_configs ;;
-            12) view_old_diagnostics ;;
-            13) check_peer_integrity ;;
+            10) manage_ssh ;;
+            11) run_diagnostics ;;
+            12) analyze_configs ;;
+            13) view_old_diagnostics ;;
+            14) check_peer_integrity ;;
             0|"")  echo ""; exit 0 ;;
             *)  echo -e "  ${RED}Неверный выбор${NC}"; sleep 1 ;;
         esac

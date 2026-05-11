@@ -22,6 +22,7 @@ from awg_core import (
     load_servers,
     save_servers,
     ssh_clone_awg_to_slave,
+    ssh_push_admin_key,
     ssh_read_slave_env,
 )
 
@@ -178,6 +179,23 @@ async def srv_add_emoji(update, context: ContextTypes.DEFAULT_TYPE):
                 f"⚠️ Не удалось склонировать конфиг: `{e}`\n"
                 f"Запустите `bash /root/setup.sh --update` на slave вручную.",
                 parse_mode="Markdown"
+            )
+
+        # Закидываем admin-ключ на slave и переходим на key-auth
+        key_ok = await asyncio.get_event_loop().run_in_executor(
+            None, ssh_push_admin_key, new_srv
+        )
+        if key_ok:
+            servers_upd = load_servers()
+            for s in servers_upd:
+                if s.get("id") == new_srv["id"]:
+                    s["ssh"]["auth"] = "key"
+                    s["ssh"]["password"] = ""
+                    break
+            save_servers(servers_upd)
+            await update.message.reply_text(
+                "🔑 SSH-ключ администратора установлен на slave.\n"
+                "Подключение бота переключено на key-auth."
             )
 
     return ConversationHandler.END

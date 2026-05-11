@@ -32,8 +32,8 @@ echo -e "${NC}"
 
 # ── Зависимости ───────────────────────────────────────────────────────────────
 log "Установка пакетов..."
-apt-get update -qq
-apt-get install -y -qq \
+apt-get -o DPkg::Lock::Timeout=120 update -qq
+apt-get -o DPkg::Lock::Timeout=120 install -y -qq \
     git build-essential libevent-dev libssl-dev \
     curl wget iptables iptables-persistent dnscrypt-proxy dnsutils
 
@@ -67,16 +67,16 @@ base {
     log_debug = off;
     log_info = on;
     log = "syslog:daemon";
-    daemon = on;
+    daemon = off;
     redirector = iptables;
 }
 
 redsocks {
-    local_ip = 0.0.0.0;
-    local_port = ${REDSOCKS2_PORT};
-    ip = 127.0.0.1;
-    port = 1080;
+    bind = "0.0.0.0:${REDSOCKS2_PORT}";
+    relay = "127.0.0.1:1080";
     type = socks5;
+    autoproxy = 0;
+    timeout = 10;
 }
 EOF
     chmod 600 "$REDSOCKS2_CONF"

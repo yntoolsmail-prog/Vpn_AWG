@@ -6,7 +6,7 @@ import os, subprocess, logging, json, time, tempfile, shutil, re, asyncio, threa
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo, BotCommand
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
-    MessageHandler, filters, ContextTypes, ConversationHandler
+    MessageHandler, filters, ContextTypes, ConversationHandler, PicklePersistence
 )
 from awg_core import (
     ADMIN_ID, AWG_CONF, AWG_IFACE, BOT_SERVICE, BOT_TOKEN, BW_LOG_FILE,
@@ -35,6 +35,9 @@ from awg_core import (
     ssh_sync_all_clients_to_slave as _ssh_sync_all_clients_to_slave,
     ssh_stop_slave_awg      as _ssh_stop_slave_awg,
     ssh_get_slave_peer_count as _ssh_get_slave_peer_count,
+    get_admin_pubkey, get_ssh_password_auth_local,
+    ssh_toggle_password_auth_all, ssh_regen_admin_key,
+    ADMIN_KEY_PATH,
 )
 from sites_data import (
     SITES, CATEGORIES, DEFAULT_SELECTED, ALL_SELECTABLE,
@@ -833,6 +836,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await do_backup(query)
     elif data == "maintenance" and is_admin:
         await show_maintenance(query)
+    elif data == "ssh_admin" and is_admin:
+        await show_ssh_admin(query)
+    elif data == "ssh_getkey" and is_admin:
+        await do_ssh_getkey(query)
+    elif data == "ssh_toggle_pass" and is_admin:
+        await do_ssh_toggle_pass(query)
+    elif data == "ssh_regen_ask" and is_admin:
+        await do_ssh_regen_ask(query)
+    elif data == "ssh_regen_do" and is_admin:
+        await do_ssh_regen(query)
     elif data == "maint_upgrade" and is_admin:
         await do_maint_upgrade(query)
     elif data == "maint_ptb" and is_admin:
@@ -2412,6 +2425,138 @@ def get_ptb_version() -> str:
     except:
         return "неизвестно"
 
+async def show_ssh_admin(query):
+    pubkey = get_admin_pubkey()
+    pw_on  = get_ssh_password_auth_local()
+
+    pw_icon  = "🔓" if pw_on  else "🔒"
+    pw_label = "ВКЛ (небезопасно)" if pw_on else "ВЫКЛ"
+    pw_btn   = "Выключить пароль SSH" if pw_on else "Включить пароль SSH"
+
+    key_line = f"`{pubkey[:50]}…`" if pubkey else "_ключ не найден_"
+    text = (
+        f"🔑 *SSH-доступ*\n\n"
+        f"Публичный ключ:\n{key_line}\n\n"
+        f"{pw_icon} Вход по паролю: *{pw_label}*\n\n"
+        f"Скачайте приватный ключ на устройство и подключайтесь по нему.\n"
+        f"Один ключ работает на мейне и всех slave-серверах."
+    )
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📥 Скачать приватный ключ", callback_data="ssh_getkey")],
+        [InlineKeyboardButton(f"{pw_icon} {pw_btn}",       callback_data="ssh_toggle_pass")],
+        [InlineKeyboardButton("🔄 Пересоздать ключ",       callback_data="ssh_regen_ask")],
+        [InlineKeyboardButton("◀️ Техобслуживание",        callback_data="maintenance")],
+    ])
+    await query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
+
+
+async def do_ssh_getkey(query):
+    key_path = ADMIN_KEY_PATH
+    if not os.path.exists(key_path):
+        await query.answer("Ключ не найден — запустите setup.sh ещё раз.", show_alert=True)
+        return
+    await query.answer()
+
+    server_ip = SERVER_IP or "СЕРВЕР"
+    ssh_port_raw = subprocess.run(
+        ["bash", "-c", "grep '^Port ' /etc/ssh/sshd_config | awk '{print $2}'"],
+        capture_output=True, text=True
+    ).stdout.strip() or "22"
+
+    with open(key_path, "rb") as f:
+        await query.message.reply_document(
+            document=f,
+            filename="awg_admin_key",
+            caption="Приватный SSH-ключ администратора"
+        )
+
+    w_dir = f"\"$env:USERPROFILE\\.ssh\""
+    w_key = f"\"$env:USERPROFILE\\.ssh\\awg_admin_key\""
+    instructions = (
+        "Файл выше — ваш пропуск на сервер. Кто имеет его — имеет root-доступ. Не пересылайте.\n\n"
+
+        "*Куда положить файл*\n"
+        "SSH ищет ключи в папке `.ssh` в вашем домашнем каталоге:\n"
+        "Windows: `C:\\Users\\ВашеИмя\\.ssh\\awg_admin_key`\n"
+        "macOS/Linux: `~/.ssh/awg_admin_key`\n\n"
+        "Файл из Telegram — переложите его туда через Проводник или Finder.\n"
+        "Важно: файл должен называться точно `awg_admin_key` (без расширения).\n"
+        "На Windows папку `.ssh` нужно создать сначала — она скрытая и не создаётся сама:\n"
+        f"`New-Item -ItemType Directory -Force {w_dir}`\n\n"
+
+        "*Скачать напрямую с сервера (SCP) — надёжнее*\n"
+        "Нужен пароль от сервера — убедитесь что вход по паролю включён.\n\n"
+        f"Windows PowerShell:\n"
+        f"`New-Item -ItemType Directory -Force {w_dir}`\n"
+        f"`scp -P {ssh_port_raw} root@{server_ip}:/root/.ssh/awg_admin_key {w_key}`\n\n"
+        f"Linux / macOS / Termux:\n"
+        f"`mkdir -p ~/.ssh && scp -P {ssh_port_raw} root@{server_ip}:/root/.ssh/awg_admin_key ~/.ssh/awg_admin_key && chmod 600 ~/.ssh/awg_admin_key`\n\n"
+
+        "*Как заходить на сервер*\n"
+        f"Первый раз (проверить что ключ работает):\n"
+        f"Windows: `ssh -p {ssh_port_raw} -i {w_key} root@{server_ip}`\n"
+        f"Linux/macOS: `ssh -p {ssh_port_raw} -i ~/.ssh/awg_admin_key root@{server_ip}`\n\n"
+        "Чтобы не вводить длинную команду каждый раз — создайте файл `~/.ssh/config`\n"
+        "(Windows: `C:\\Users\\ВашеИмя\\.ssh\\config`) с таким содержимым:\n"
+        f"`Host server`\n"
+        f"`    HostName {server_ip}`\n"
+        f"`    User root`\n"
+        f"`    Port {ssh_port_raw}`\n"
+        f"`    IdentityFile ~/.ssh/awg_admin_key`\n\n"
+        "После этого просто: `ssh server`\n\n"
+
+        "*После успешного входа*\n"
+        "Вернитесь в меню SSH и отключите вход по паролю.\n"
+        "Второе устройство: сначала включите пароль, скачайте ключ на него, затем снова отключите."
+    )
+    await query.message.reply_text(instructions, parse_mode="Markdown")
+
+
+async def do_ssh_toggle_pass(query):
+    pw_on = get_ssh_password_auth_local()
+    enable = not pw_on
+    await query.answer("Применяю…")
+    results = await asyncio.get_event_loop().run_in_executor(
+        None, ssh_toggle_password_auth_all, enable
+    )
+    state = "включён" if enable else "выключен"
+    lines = [f"{'✅' if results['primary'] else '❌'} Primary: пароль {state}"]
+    for name, ok in results.get("slaves", {}).items():
+        lines.append(f"{'✅' if ok else '❌'} {name}: пароль {state}")
+    await query.message.reply_text("\n".join(lines))
+    await show_ssh_admin(query)
+
+
+async def do_ssh_regen_ask(query):
+    await query.edit_message_text(
+        "🔄 *Пересоздать SSH-ключ?*\n\n"
+        "Будет создан новый ключ. Старый ключ на всех устройствах перестанет работать.\n"
+        "Новый ключ нужно будет скачать заново.",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Да, пересоздать", callback_data="ssh_regen_do")],
+            [InlineKeyboardButton("❌ Отмена",          callback_data="ssh_admin")],
+        ])
+    )
+
+
+async def do_ssh_regen(query):
+    await query.answer("Создаю новый ключ…")
+    ok, slave_errors = await asyncio.get_event_loop().run_in_executor(None, ssh_regen_admin_key)
+    if ok:
+        msg = "✅ Ключ пересоздан и обновлён на всех серверах.\nСкачайте новый ключ через меню SSH-доступа."
+        if slave_errors:
+            msg = (
+                "✅ Ключ пересоздан, но не удалось обновить некоторые slave:\n"
+                + "\n".join(f"• {e}" for e in slave_errors)
+                + "\n\nЭти slave нужно обновить вручную через консоль VPS провайдера."
+            )
+    else:
+        msg = "❌ Ошибка при пересоздании ключа — проверьте логи бота."
+    await query.message.reply_text(msg)
+    await show_ssh_admin(query)
+
+
 async def show_maintenance(query):
     m         = get_maintenance()
     last_date = m.get("last_date") or "никогда"
@@ -2449,6 +2594,7 @@ async def show_maintenance(query):
         [InlineKeyboardButton("🕐 Сменить часовой пояс",        callback_data="maint_tz")],
         [InlineKeyboardButton("🔄 Обновить IP сервера",         callback_data="maint_update_ip")],
         [InlineKeyboardButton("♻️ Обновить IP исключений",        callback_data="refresh_subnets")],
+        [InlineKeyboardButton("🔑 SSH-доступ",                     callback_data="ssh_admin")],
         [InlineKeyboardButton("✅ Отмечено — всё ок",            callback_data="maint_done")],
         [InlineKeyboardButton("◀️ В меню",                       callback_data="back")],
     ])
@@ -3365,7 +3511,9 @@ async def post_init(application) -> None:
 
 
 def main():
-    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
+    os.makedirs("/etc/awg-bot", exist_ok=True)
+    persistence = PicklePersistence(filepath="/etc/awg-bot/bot_persistence.pkl")
+    app = Application.builder().token(BOT_TOKEN).post_init(post_init).persistence(persistence).build()
 
     reg_conv = ConversationHandler(
         entry_points=[CommandHandler("start", start)],

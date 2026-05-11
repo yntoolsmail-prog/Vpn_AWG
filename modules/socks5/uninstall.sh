@@ -43,11 +43,13 @@ if [[ -n "$_active_ip" ]]; then
     log "Снимаю iptables правила для клиента ${_active_ip}..."
     _chain="SOCKS5_$(echo "$_active_ip" | tr '.' '_')"
 
-    # DNS редиректы
-    iptables -t nat -D PREROUTING -s "$_active_ip" -p udp --dport 53 \
-        -j DNAT --to-destination 127.0.0.1:5300 2>/dev/null || true
-    iptables -t nat -D PREROUTING -s "$_active_ip" -p tcp --dport 53 \
-        -j DNAT --to-destination 127.0.0.1:5300 2>/dev/null || true
+    # DNS редиректы (очищаем оба возможных порта для идемпотентности)
+    for _dns_port in 5399 5300; do
+        iptables -t nat -D PREROUTING -s "$_active_ip" -p udp --dport 53 \
+            -j DNAT --to-destination "127.0.0.1:${_dns_port}" 2>/dev/null || true
+        iptables -t nat -D PREROUTING -s "$_active_ip" -p tcp --dport 53 \
+            -j DNAT --to-destination "127.0.0.1:${_dns_port}" 2>/dev/null || true
+    done
 
     # TCP REDIRECT через цепочку
     iptables -t nat -D PREROUTING -s "$_active_ip" -p tcp -j "$_chain" 2>/dev/null || true
@@ -57,13 +59,27 @@ if [[ -n "$_active_ip" ]]; then
     iptables -t nat -X "$_chain" 2>/dev/null || true
 
     # FORWARD: блокировка UDP
-    iptables -D FORWARD -s "$_active_ip" -p udp ! --dport 53 -j DROP 2>/dev/null || true
+    iptables -t filter -D FORWARD -s "$_active_ip" -p udp ! --dport 53 -j REJECT 2>/dev/null || true
+    # FORWARD: блокировка DNS-over-TLS
+    iptables -t filter -D FORWARD -s "$_active_ip" -p tcp --dport 853 -j REJECT 2>/dev/null || true
 
     # Сохраняем
     iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
     log "iptables правила сняты."
 else
     info "Активного клиента нет — iptables не трогаем."
+fi
+
+# ── Очистка глобальной цепочки REDSOCKS (если осталась от старых версий) ──────
+if iptables -t nat -L REDSOCKS 2>/dev/null | grep -q "REDIRECT"; then
+    log "Удаляю глобальную цепочку REDSOCKS..."
+    # Убираем вызов из OUTPUT и PREROUTING (если там есть)
+    iptables -t nat -D OUTPUT    -j REDSOCKS 2>/dev/null || true
+    iptables -t nat -D PREROUTING -j REDSOCKS 2>/dev/null || true
+    iptables -t nat -F REDSOCKS 2>/dev/null || true
+    iptables -t nat -X REDSOCKS 2>/dev/null || true
+    iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+    log "Глобальная цепочка REDSOCKS удалена."
 fi
 
 # ── Остановка и удаление redsocks2 ───────────────────────────────────────────
