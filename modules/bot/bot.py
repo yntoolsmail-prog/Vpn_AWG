@@ -2470,39 +2470,45 @@ async def do_ssh_getkey(query):
             caption="Приватный SSH-ключ администратора"
         )
 
+    w_dir = f"\"$env:USERPROFILE\\.ssh\""
+    w_key = f"\"$env:USERPROFILE\\.ssh\\awg_admin_key\""
+    w_dl  = f"\"$env:USERPROFILE\\Downloads\\awg_admin_key\""
     instructions = (
-        "🔑 *Приватный SSH-ключ — файл выше*\n\n"
-        "Это ваш пропуск на сервер. Не пересылайте его никому.\n\n"
+        "Файл выше — ваш пропуск на сервер. Кто имеет этот файл, тот имеет root-доступ. Не пересылайте.\n\n"
 
-        "━━━ *Способ 1: через Telegram (проще)* ━━━\n"
-        "Сохраните файл `awg_admin_key` из сообщения выше на устройство.\n\n"
+        "*Что такое папка .ssh и куда класть файл*\n"
+        "SSH-программы ищут ключи в специальной папке:\n"
+        f"Windows: `C:\\Users\\ВашеИмя\\.ssh\\` (скрытая, создайте командой ниже)\n"
+        f"macOS/Linux: `~/.ssh/` — это `/home/вашеимя/.ssh/`\n\n"
 
-        "*Windows* — нужна папка `.ssh` (`C:\\Users\\ВашеИмя\\.ssh\\`).\n"
-        "В PowerShell выполните:\n"
-        "`New-Item -ItemType Directory -Force \"$env:USERPROFILE\\.ssh\"`\n"
-        "`Move-Item \"$env:USERPROFILE\\Downloads\\awg_admin_key\" \"$env:USERPROFILE\\.ssh\\awg_admin_key\"`\n"
-        "Если Telegram сохранил файл в другое место — укажите правильный путь.\n\n"
+        "*Рекомендуемый способ — скачать через терминал (SCP)*\n"
+        "SCP копирует файл прямо с сервера без посредников.\n"
+        "Для этого нужен пароль от сервера — убедитесь, что вход по паролю включён\n"
+        "(в этом меню кнопка «Вход по паролю»).\n\n"
 
-        "*Linux / macOS*:\n"
-        "`mkdir -p ~/.ssh`\n"
+        "Windows — откройте PowerShell и выполните три команды:\n"
+        f"`New-Item -ItemType Directory -Force {w_dir}`\n"
+        f"`scp -P {ssh_port_raw} root@{server_ip}:/root/.ssh/awg_admin_key {w_key}`\n"
+        f"`ssh -p {ssh_port_raw} -i {w_key} root@{server_ip}`\n\n"
+
+        f"Linux / macOS / Termux — одной строкой:\n"
+        f"`mkdir -p ~/.ssh && scp -P {ssh_port_raw} root@{server_ip}:/root/.ssh/awg_admin_key ~/.ssh/awg_admin_key && chmod 600 ~/.ssh/awg_admin_key`\n"
+        f"Затем проверьте: `ssh -p {ssh_port_raw} -i ~/.ssh/awg_admin_key root@{server_ip}`\n\n"
+
+        "*Альтернатива — переместить файл из Telegram*\n"
+        "Сохраните файл `awg_admin_key` через Telegram на устройство, затем:\n\n"
+
+        "Windows PowerShell:\n"
+        f"`New-Item -ItemType Directory -Force {w_dir}`\n"
+        f"`Move-Item {w_dl} {w_key}`\n"
+        "(если Telegram сохранил файл не в Downloads — поправьте путь)\n\n"
+
+        "Linux / macOS:\n"
         "`mv ~/Downloads/awg_admin_key ~/.ssh/awg_admin_key && chmod 600 ~/.ssh/awg_admin_key`\n\n"
 
-        "━━━ *Способ 2: через терминал (надёжнее)* ━━━\n"
-        "Откройте новый терминал на своём устройстве и выполните\n"
-        "(требуется включённый вход по паролю на сервере):\n\n"
-
-        f"*Windows PowerShell:*\n"
-        f"`New-Item -ItemType Directory -Force \"$env:USERPROFILE\\.ssh\"`\n"
-        f"`scp -P {ssh_port_raw} root@{server_ip}:/root/.ssh/awg_admin_key \"$env:USERPROFILE\\.ssh\\awg_admin_key\"`\n\n"
-
-        f"*Linux / macOS / Termux:*\n"
-        f"`mkdir -p ~/.ssh && scp -P {ssh_port_raw} root@{server_ip}:/root/.ssh/awg_admin_key ~/.ssh/awg_admin_key && chmod 600 ~/.ssh/awg_admin_key`\n\n"
-
-        "━━━ *Подключение после установки* ━━━\n"
-        f"*Windows:* `ssh -p {ssh_port_raw} -i \"$env:USERPROFILE\\.ssh\\awg_admin_key\" root@{server_ip}`\n"
-        f"*Linux/macOS:* `ssh -p {ssh_port_raw} -i ~/.ssh/awg_admin_key root@{server_ip}`\n\n"
-
-        "Если вход по ключу сработал — вернитесь в меню и отключите вход по паролю."
+        "*После успешного входа по ключу*\n"
+        "Вернитесь в меню SSH и отключите вход по паролю.\n"
+        "Второе устройство: сначала включите пароль, скачайте ключ, затем отключите снова."
     )
     await query.message.reply_text(instructions, parse_mode="Markdown")
 
