@@ -2463,27 +2463,48 @@ async def do_ssh_getkey(query):
         capture_output=True, text=True
     ).stdout.strip() or "22"
 
-    instructions = (
-        "🔑 *Приватный SSH-ключ*\n\n"
-        "⚠️ Не пересылайте этот файл — кто имеет его, имеет root-доступ к серверу.\n\n"
-        "Файл отправлен выше. Сохраните его в папку `.ssh` и подключайтесь:\n\n"
-        "*Windows (PowerShell) — вместо скачивания через Telegram лучше SCP:*\n"
-        f"`New-Item -ItemType Directory -Force \"$env:USERPROFILE\\.ssh\"`\n"
-        f"`scp -P {ssh_port_raw} root@{server_ip}:/root/.ssh/awg_admin_key \"$env:USERPROFILE\\.ssh\\awg_admin_key\"`\n"
-        f"`ssh -p {ssh_port_raw} -i \"$env:USERPROFILE\\.ssh\\awg_admin_key\" root@{server_ip}`\n\n"
-        "*Linux / macOS / Termux:*\n"
-        f"`mkdir -p ~/.ssh && chmod 700 ~/.ssh`\n"
-        f"`mv ~/Downloads/awg_admin_key ~/.ssh/awg_admin_key && chmod 600 ~/.ssh/awg_admin_key`\n"
-        f"`ssh -p {ssh_port_raw} -i ~/.ssh/awg_admin_key root@{server_ip}`\n\n"
-        "*iOS (Termius):* Settings → Keychain → + → Import Key → выбрать файл awg\\_admin\\_key"
-    )
-    await query.message.reply_text(instructions, parse_mode="Markdown")
     with open(key_path, "rb") as f:
         await query.message.reply_document(
             document=f,
             filename="awg_admin_key",
             caption="Приватный SSH-ключ администратора"
         )
+
+    instructions = (
+        "🔑 *Приватный SSH-ключ — файл выше*\n\n"
+        "Это ваш пропуск на сервер. Не пересылайте его никому.\n\n"
+
+        "━━━ *Способ 1: через Telegram (проще)* ━━━\n"
+        "Сохраните файл `awg_admin_key` из сообщения выше на устройство.\n\n"
+
+        "*Windows* — нужна папка `.ssh` (`C:\\Users\\ВашеИмя\\.ssh\\`).\n"
+        "В PowerShell выполните:\n"
+        "`New-Item -ItemType Directory -Force \"$env:USERPROFILE\\.ssh\"`\n"
+        "`Move-Item \"$env:USERPROFILE\\Downloads\\awg_admin_key\" \"$env:USERPROFILE\\.ssh\\awg_admin_key\"`\n"
+        "Если Telegram сохранил файл в другое место — укажите правильный путь.\n\n"
+
+        "*Linux / macOS*:\n"
+        "`mkdir -p ~/.ssh`\n"
+        "`mv ~/Downloads/awg_admin_key ~/.ssh/awg_admin_key && chmod 600 ~/.ssh/awg_admin_key`\n\n"
+
+        "━━━ *Способ 2: через терминал (надёжнее)* ━━━\n"
+        "Откройте новый терминал на своём устройстве и выполните\n"
+        "(требуется включённый вход по паролю на сервере):\n\n"
+
+        f"*Windows PowerShell:*\n"
+        f"`New-Item -ItemType Directory -Force \"$env:USERPROFILE\\.ssh\"`\n"
+        f"`scp -P {ssh_port_raw} root@{server_ip}:/root/.ssh/awg_admin_key \"$env:USERPROFILE\\.ssh\\awg_admin_key\"`\n\n"
+
+        f"*Linux / macOS / Termux:*\n"
+        f"`mkdir -p ~/.ssh && scp -P {ssh_port_raw} root@{server_ip}:/root/.ssh/awg_admin_key ~/.ssh/awg_admin_key && chmod 600 ~/.ssh/awg_admin_key`\n\n"
+
+        "━━━ *Подключение после установки* ━━━\n"
+        f"*Windows:* `ssh -p {ssh_port_raw} -i \"$env:USERPROFILE\\.ssh\\awg_admin_key\" root@{server_ip}`\n"
+        f"*Linux/macOS:* `ssh -p {ssh_port_raw} -i ~/.ssh/awg_admin_key root@{server_ip}`\n\n"
+
+        "Если вход по ключу сработал — вернитесь в меню и отключите вход по паролю."
+    )
+    await query.message.reply_text(instructions, parse_mode="Markdown")
 
 
 async def do_ssh_toggle_pass(query):

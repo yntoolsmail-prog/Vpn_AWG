@@ -640,29 +640,52 @@ manage_ssh() {
                     SSH_PORT="${SSH_PORT:-22}"
                     SRV_IP=$(grep "^SERVER_IP=" /etc/amnezia/amneziawg/server.env 2>/dev/null | cut -d= -f2)
                     [[ -z "$SRV_IP" ]] && SRV_IP=$(curl -4 -s --max-time 5 ifconfig.me 2>/dev/null || echo "IP_СЕРВЕРА")
-                    echo -e "  ${BOLD}Выполните на СВОЁМ устройстве (не на сервере):${NC}"
+
+                    echo -e "  ${BOLD}Как скачать ключ на устройство${NC}"
                     echo ""
-                    echo -e "  ${CYAN}Windows PowerShell:${NC}"
-                    # printf %s не интерпретирует \a → путь с \awg_admin_key выводится буквально
-                    local _W0 _W1 _W2 _W3
-                    _W0="New-Item -ItemType Directory -Force \"\$env:USERPROFILE\\.ssh\" | Out-Null"
-                    _W1="scp -P ${SSH_PORT} root@${SRV_IP}:/root/.ssh/awg_admin_key \"\$env:USERPROFILE\\.ssh\\awg_admin_key\""
-                    _W2="icacls \"\$env:USERPROFILE\\.ssh\\awg_admin_key\" /inheritance:r /grant \"\${env:USERNAME}:(F)\""
-                    _W3="ssh -p ${SSH_PORT} -i \"\$env:USERPROFILE\\.ssh\\awg_admin_key\" root@${SRV_IP}"
-                    printf "  ${YELLOW}%s${NC}\n" "$_W0"
+                    echo -e "  Откройте ${BOLD}новое${NC} окно терминала на своём устройстве (не закрывая это)."
+                    echo -e "  Скопируйте и выполните команды ниже — они спросят пароль от сервера"
+                    echo -e "  и скачают ключ прямо в нужную папку."
+                    echo ""
+                    echo -e "  ${BOLD}Папка для ключа:${NC}"
+                    echo -e "  Windows:     C:\\Users\\ВашеИмя\\.ssh\\  (скрытая, создаётся командой ниже)"
+                    echo -e "  Linux/macOS: ~/.ssh/  (то же что /home/вашеимя/.ssh/)"
+                    echo ""
+
+                    echo -e "  ── ${CYAN}Windows — PowerShell${NC} ─────────────────────────"
+                    # printf %s: аргумент %s не проходит через escape-интерпретацию,
+                    # поэтому \awg_admin_key не превращается в BEL + wg_admin_key
+                    local _W0 _W1 _W2 _W3 _W4
+                    _W0="# Шаг 1: создать папку .ssh (если нет)"
+                    _W1="New-Item -ItemType Directory -Force \"\$env:USERPROFILE\\.ssh\" | Out-Null"
+                    _W2="# Шаг 2: скачать ключ (введите пароль сервера когда спросит)"
+                    _W3="scp -P ${SSH_PORT} root@${SRV_IP}:/root/.ssh/awg_admin_key \"\$env:USERPROFILE\\.ssh\\awg_admin_key\""
+                    _W4="# Шаг 3: проверить подключение по ключу (пароль вводить НЕ нужно)"
+                    local _W5="ssh -p ${SSH_PORT} -i \"\$env:USERPROFILE\\.ssh\\awg_admin_key\" root@${SRV_IP}"
+                    printf "  ${BOLD}%s${NC}\n" "$_W0"
                     printf "  ${YELLOW}%s${NC}\n" "$_W1"
-                    printf "  ${YELLOW}%s${NC}\n" "$_W2"
+                    printf "  ${BOLD}%s${NC}\n" "$_W2"
                     printf "  ${YELLOW}%s${NC}\n" "$_W3"
+                    printf "  ${BOLD}%s${NC}\n" "$_W4"
+                    printf "  ${YELLOW}%s${NC}\n" "$_W5"
                     echo ""
-                    echo -e "  ${CYAN}Linux / macOS / Termux:${NC}"
+
+                    echo -e "  ── ${CYAN}Linux / macOS / Termux${NC} ──────────────────────"
+                    echo -e "  ${BOLD}# Шаг 1: создать папку и скачать ключ за одну команду${NC}"
                     echo -e "  ${YELLOW}mkdir -p ~/.ssh && scp -P ${SSH_PORT} root@${SRV_IP}:/root/.ssh/awg_admin_key ~/.ssh/awg_admin_key && chmod 600 ~/.ssh/awg_admin_key${NC}"
+                    echo -e "  ${BOLD}# Шаг 2: проверить подключение (без пароля)${NC}"
                     echo -e "  ${YELLOW}ssh -p ${SSH_PORT} -i ~/.ssh/awg_admin_key root@${SRV_IP}${NC}"
                     echo ""
-                    echo -e "  ${BOLD}Второе устройство (если пароль уже отключён):${NC}"
-                    echo -e "  Включите пароль временно через бот → Техобслуживание → SSH-доступ,"
-                    echo -e "  скачайте ключ, затем снова отключите пароль."
+
+                    echo -e "  ${BOLD}Что делать после:${NC}"
+                    echo -e "  Если вошли по ключу успешно — вернитесь в это меню и выберите"
+                    echo -e "  пункт 4 «Отключить вход по паролю». После этого пароль не потребуется."
                     echo ""
-                    echo -e "  ${RED}Ключ даёт root-доступ к серверу. Храните надёжно.${NC}"
+                    echo -e "  ${BOLD}Второе устройство (если пароль уже отключён):${NC}"
+                    echo -e "  Бот → Техобслуживание → SSH-доступ → Включить пароль временно,"
+                    echo -e "  скачайте ключ на новое устройство, затем снова отключите пароль."
+                    echo ""
+                    echo -e "  ${RED}⚠  Ключ = root-доступ к серверу. Не отправляйте его никому.${NC}"
                 fi
                 press_enter
                 ;;
