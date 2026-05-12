@@ -238,6 +238,47 @@ def _get_clients_geo(port: str) -> tuple[list[dict], list[dict]]:
     return ext, awg
 
 
+def _get_24h_clients_geo(snapshots: list) -> tuple[list[dict], list[dict]]:
+    """Уникальные IP за последние 24ч из снапшотов (с геолокацией)."""
+    cutoff = int(time.time()) - 86400
+    ext_counts: dict[str, int] = {}
+    awg_counts: dict[str, int] = {}
+    for snap in snapshots:
+        if snap["t"] < cutoff:
+            continue
+        for ip in snap.get("ips", []):
+            if ip.startswith("10."):
+                awg_counts[ip] = awg_counts.get(ip, 0) + 1
+            else:
+                ext_counts[ip] = ext_counts.get(ip, 0) + 1
+
+    geo: dict[str, tuple[str, str]] = {}
+    if ext_counts:
+        try:
+            payload = json.dumps([{"query": ip} for ip in list(ext_counts.keys())[:100]])
+            raw = subprocess.check_output(
+                ["curl", "-sf", "--max-time", "8", "-X", "POST",
+                 "http://ip-api.com/batch?fields=query,country,countryCode",
+                 "-H", "Content-Type: application/json", "-d", payload],
+                text=True, stderr=subprocess.DEVNULL
+            )
+            for entry in json.loads(raw):
+                q = entry.get("query", "")
+                geo[q] = (entry.get("country", "Unknown"), entry.get("countryCode", ""))
+        except Exception:
+            pass
+
+    ext = [
+        {"ip": ip, "count": cnt,
+         "country": geo.get(ip, ("Unknown", ""))[0],
+         "cc":      geo.get(ip, ("Unknown", ""))[1]}
+        for ip, cnt in sorted(ext_counts.items(), key=lambda x: -x[1])
+    ]
+    awg = [{"ip": ip, "count": cnt}
+           for ip, cnt in sorted(awg_counts.items(), key=lambda x: -x[1])]
+    return ext, awg
+
+
 def _ensure_counters(port: str) -> None:
     """Добавляет iptables правила-счётчики для порта MTProxy если их нет."""
     rules = [
@@ -328,8 +369,22 @@ def _record_snapshot(port: str) -> dict:
     if conns > data.get("peak_conns", 0):
         data["peak_conns"] = conns
 
+    # Capture current client IPs for 24h history (no geo — done at display time)
+    try:
+        ss_out = subprocess.check_output(["ss", "-tn"], text=True, stderr=subprocess.DEVNULL)
+        snap_ips = []
+        for _line in ss_out.splitlines():
+            if f":{port}" in _line:
+                _parts = _line.split()
+                if len(_parts) >= 5:
+                    _ip = _parts[4].rsplit(":", 1)[0].strip("[]")
+                    if _ip and not _ip.startswith("127."):
+                        snap_ips.append(_ip)
+    except Exception:
+        snap_ips = []
+
     data.setdefault("snapshots", []).append(
-        {"t": now, "ti": total_in, "to": total_out, "c": conns}
+        {"t": now, "ti": total_in, "to": total_out, "c": conns, "ips": snap_ips}
     )
     # Храним максимум 72 часа
     cutoff = now - 72 * 3600
@@ -701,7 +756,7 @@ async def _show_mtp_help(query):
     )
 
 
-async def _show_mtp_stats(query):
+async def _show_mtp_stats(query, view: str = "now"):
     port = _mtp_get_port()
     await query.edit_message_text("⏳ Считаю трафик...")
 
@@ -741,24 +796,30 @@ async def _show_mtp_stats(query):
             max_spike = delta
     spike_str = f"`{_fmt_bytes(max_spike)}`" if max_spike > 0 else "_нет данных_"
 
-    # Клиенты с гео — primary
-    ext_clients, awg_clients = _get_clients_geo(port)
+    # Клиенты — primary (режим: сейчас или за 24ч)
+    if view == "24h":
+        ext_clients, awg_clients = _get_24h_clients_geo(snaps)
+        clients_header = "за 24ч"
+    else:
+        ext_clients, awg_clients = _get_clients_geo(port)
+        clients_header = "сейчас"
+
     clients_section = ""
     if ext_clients:
         clients_lines = ""
         for c in ext_clients[:15]:
             flag = _cc_to_flag(c["cc"]) if c["cc"] else "🌐"
             clients_lines += f"\n{flag} `{c['ip']}` — {c['count']} соед. _{c['country']}_"
-        clients_section += f"\n\n*Внешние клиенты (primary):*{clients_lines}"
+        clients_section += f"\n\n*Внешние клиенты ({clients_header}):*{clients_lines}"
         if len(ext_clients) > 15:
             clients_section += f"\n_...и ещё {len(ext_clients) - 15} IP_"
     if awg_clients:
         awg_lines = ""
         for c in awg_clients:
             awg_lines += f"\n🔒 `{c['ip']}` — {c['count']} соед. _AWG VPN_"
-        clients_section += f"\n\n*Ваши AWG-клиенты (primary):*{awg_lines}"
+        clients_section += f"\n\n*Ваши AWG-клиенты:*{awg_lines}"
 
-    # Статистика со slave
+    # Статистика со slave (только онлайн — ssh не хранит историю)
     slaves = _get_slaves()
     for slave in slaves:
         sname = f"{slave.get('emoji', '🖥')} {slave.get('name', 'Slave')}".strip()
@@ -820,10 +881,18 @@ async def _show_mtp_stats(query):
         f"{clients_section}\n\n"
         "_Трафик считается с первого открытия статистики_"
     )
+    if view == "24h":
+        toggle_btn = InlineKeyboardButton("⏱ Сейчас",  callback_data="proxy_mtp_stats")
+        refresh_cb = "proxy_mtp_stats_24h"
+    else:
+        toggle_btn = InlineKeyboardButton("📅 За 24ч", callback_data="proxy_mtp_stats_24h")
+        refresh_cb = "proxy_mtp_stats"
+
     await query.edit_message_text(
         text,
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔄 Обновить", callback_data="proxy_mtp_stats")],
+            [toggle_btn,
+             InlineKeyboardButton("🔄 Обновить", callback_data=refresh_cb)],
             [InlineKeyboardButton("◀️ Назад",    callback_data="proxy_mtp_menu")],
         ]),
         parse_mode="Markdown"
@@ -916,7 +985,10 @@ async def _mtp_callback(update, context):
         await _show_mtp_admin(query)
 
     elif data == "proxy_mtp_stats":
-        await _show_mtp_stats(query)
+        await _show_mtp_stats(query, view="now")
+
+    elif data == "proxy_mtp_stats_24h":
+        await _show_mtp_stats(query, view="24h")
 
     elif data == "proxy_mtp_help":
         await _show_mtp_help(query)
@@ -932,6 +1004,15 @@ async def _mtp_callback(update, context):
 
 # ── Интерфейс модуля ──────────────────────────────────────────────────────────
 
+async def _snapshot_job(context) -> None:
+    """JobQueue: собирает snapshot каждые 5 минут для накопления статистики."""
+    if _mtp_installed():
+        try:
+            _record_snapshot(_mtp_get_port())
+        except Exception:
+            pass
+
+
 def get_user_menu_buttons(user_id: int) -> list:
     return [[InlineKeyboardButton("📡 Прокси Telegram", callback_data="proxy_mtp_menu")]]
 
@@ -945,3 +1026,5 @@ def register_handlers(app) -> None:
         CallbackQueryHandler(_mtp_callback, pattern=r"^proxy_mtp"),
         group=-1
     )
+    if getattr(app, "job_queue", None) is not None:
+        app.job_queue.run_repeating(_snapshot_job, interval=300, first=60)
