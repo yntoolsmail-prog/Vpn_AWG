@@ -1778,6 +1778,13 @@ def ssh_sync_mtproxy_secret(server: dict, secret: str, port: str) -> tuple[bool,
             f"{extra} --aes-pwd {_sec_file} {_conf_file} -M 1"
         )
 
+        # Читаем старый порт со slave чтобы обновить ufw
+        _, out_old, _ = client.exec_command(
+            "grep '^MTP_PORT=' /etc/proxy-bot/proxy_bot.env 2>/dev/null | cut -d= -f2 || true",
+            timeout=5
+        )
+        old_port = out_old.read().decode().strip()
+
         cmds = [
             "mkdir -p /etc/proxy-bot",
             # Обновляем proxy_bot.env
@@ -1787,12 +1794,23 @@ def ssh_sync_mtproxy_secret(server: dict, secret: str, port: str) -> tuple[bool,
             f"grep -q '^MTP_PORT=' /etc/proxy-bot/proxy_bot.env 2>/dev/null "
             f"&& sed -i 's|^MTP_PORT=.*|MTP_PORT={port}|' /etc/proxy-bot/proxy_bot.env "
             f"|| echo 'MTP_PORT={port}' >> /etc/proxy-bot/proxy_bot.env",
-            # Обновляем ExecStart в systemd service (секрет зашит туда напрямую)
+            # Обновляем ExecStart в systemd service
             f"sed -i 's|^ExecStart=.*mtproto-proxy.*|ExecStart={exec_start}|'"
             f" /etc/systemd/system/mtproxy.service",
             "systemctl daemon-reload",
             "systemctl restart mtproxy 2>/dev/null || true",
         ]
+        # Обновляем ufw если порт изменился
+        if old_port and old_port != port:
+            cmds += [
+                f"command -v ufw &>/dev/null && ufw allow {port}/tcp comment 'MTProxy' 2>/dev/null || true",
+                f"command -v ufw &>/dev/null && ufw delete allow {old_port}/tcp 2>/dev/null || true",
+            ]
+        elif not old_port:
+            cmds.append(
+                f"command -v ufw &>/dev/null && ufw allow {port}/tcp comment 'MTProxy' 2>/dev/null || true"
+            )
+
         for cmd in cmds:
             _, stdout, stderr = client.exec_command(cmd, timeout=15)
             stdout.read(); stderr.read()
