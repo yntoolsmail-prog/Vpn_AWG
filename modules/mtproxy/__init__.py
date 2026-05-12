@@ -12,10 +12,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import secrets
 import subprocess
+import time
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CallbackQueryHandler
@@ -29,6 +31,9 @@ MTP_BIN      = f"{MTP_DIR}/objs/bin/mtproto-proxy"
 MTP_SECRET_F = f"{MTP_DIR}/proxy-secret"
 MTP_MULTI_F  = f"{MTP_DIR}/proxy-multi.conf"
 MTP_SERVICE  = "mtproxy"
+MTP_STATS_F  = "/etc/proxy-bot/mtp_stats.json"
+_IPT_CMT_IN  = "mtp_count_in"
+_IPT_CMT_OUT = "mtp_count_out"
 
 
 # ── Конфиг ────────────────────────────────────────────────────────────────────
@@ -157,6 +162,146 @@ def _svc_status() -> dict:
 def _status_line(running: bool, uptime: str) -> str:
     icon = "🟢 Работает" if running else "🔴 Остановлен"
     return f"{icon}{f' ({uptime})' if uptime else ''}"
+
+
+# ── Статистика ────────────────────────────────────────────────────────────────
+
+def _fmt_bytes(n: int) -> str:
+    for unit in ("Б", "КБ", "МБ", "ГБ", "ТБ"):
+        if n < 1024:
+            return f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n:.1f} ТБ"
+
+
+def _ensure_counters(port: str) -> None:
+    """Добавляет iptables правила-счётчики для порта MTProxy если их нет."""
+    rules = [
+        ("INPUT",  f"--dport {port}", _IPT_CMT_IN),
+        ("OUTPUT", f"--sport {port}", _IPT_CMT_OUT),
+    ]
+    for chain, flag, comment in rules:
+        r = subprocess.run(
+            ["iptables", "-C", chain, "-p", "tcp"] + flag.split() +
+            ["-m", "comment", "--comment", comment],
+            capture_output=True
+        )
+        if r.returncode != 0:
+            subprocess.run(
+                ["iptables", "-I", chain, "1", "-p", "tcp"] + flag.split() +
+                ["-m", "comment", "--comment", comment],
+                capture_output=True
+            )
+
+
+def _read_ipt_bytes(chain: str, comment: str) -> int:
+    try:
+        out = subprocess.check_output(
+            ["iptables", "-nvxL", chain], text=True, stderr=subprocess.DEVNULL
+        )
+        for line in out.splitlines():
+            if comment in line:
+                parts = line.split()
+                if len(parts) >= 2:
+                    return int(parts[1])
+    except Exception:
+        pass
+    return 0
+
+
+def _get_current_conns(port: str) -> int:
+    try:
+        out = subprocess.check_output(["ss", "-tn"], text=True, stderr=subprocess.DEVNULL)
+        return sum(1 for line in out.splitlines() if f":{port}" in line)
+    except Exception:
+        return 0
+
+
+def _load_mtp_stats() -> dict:
+    try:
+        with open(MTP_STATS_F) as f:
+            return json.load(f)
+    except Exception:
+        return {
+            "snapshots": [],
+            "peak_conns": 0,
+            "acc_in": 0,
+            "acc_out": 0,
+            "last_raw_in": 0,
+            "last_raw_out": 0,
+        }
+
+
+def _save_mtp_stats(data: dict) -> None:
+    os.makedirs(os.path.dirname(MTP_STATS_F), exist_ok=True)
+    with open(MTP_STATS_F, "w") as f:
+        json.dump(data, f)
+    os.chmod(MTP_STATS_F, 0o600)
+
+
+def _record_snapshot(port: str) -> dict:
+    """Снимает snapshot трафика, возвращает текущую сводку."""
+    _ensure_counters(port)
+    data = _load_mtp_stats()
+
+    raw_in  = _read_ipt_bytes("INPUT",  _IPT_CMT_IN)
+    raw_out = _read_ipt_bytes("OUTPUT", _IPT_CMT_OUT)
+    conns   = _get_current_conns(port)
+    now     = int(time.time())
+
+    # Если счётчики были сброшены (перезагрузка / пересоздание правил)
+    if raw_in < data.get("last_raw_in", 0):
+        data["acc_in"] = data.get("acc_in", 0) + data.get("last_raw_in", 0)
+    if raw_out < data.get("last_raw_out", 0):
+        data["acc_out"] = data.get("acc_out", 0) + data.get("last_raw_out", 0)
+
+    data["last_raw_in"]  = raw_in
+    data["last_raw_out"] = raw_out
+
+    total_in  = data.get("acc_in", 0) + raw_in
+    total_out = data.get("acc_out", 0) + raw_out
+
+    if conns > data.get("peak_conns", 0):
+        data["peak_conns"] = conns
+
+    data.setdefault("snapshots", []).append(
+        {"t": now, "ti": total_in, "to": total_out, "c": conns}
+    )
+    # Храним максимум 72 часа
+    cutoff = now - 72 * 3600
+    data["snapshots"] = [s for s in data["snapshots"] if s["t"] > cutoff]
+
+    _save_mtp_stats(data)
+    return {
+        "conns":     conns,
+        "peak":      data["peak_conns"],
+        "total_in":  total_in,
+        "total_out": total_out,
+        "snapshots": data["snapshots"],
+    }
+
+
+def _period_traffic(snapshots: list, seconds: int) -> tuple[int, int]:
+    """Трафик (in, out) за последние seconds секунд."""
+    if len(snapshots) < 2:
+        return 0, 0
+    cutoff  = int(time.time()) - seconds
+    recent  = [s for s in snapshots if s["t"] >= cutoff]
+    if not recent:
+        return 0, 0
+    oldest = recent[0]
+    newest = snapshots[-1]
+    return (
+        max(0, newest["ti"] - oldest["ti"]),
+        max(0, newest["to"] - oldest["to"]),
+    )
+
+
+def _peak_conns_period(snapshots: list, seconds: int) -> int:
+    """Пиковое количество подключений за период."""
+    cutoff = int(time.time()) - seconds
+    vals = [s["c"] for s in snapshots if s["t"] >= cutoff]
+    return max(vals) if vals else 0
 
 
 def _mtp_update_tg_configs() -> tuple[bool, str]:
@@ -401,9 +546,13 @@ async def _show_mtp_admin(query):
         if st["running"] else
         InlineKeyboardButton("▶️ Запустить",  callback_data="proxy_mtp_start")
     )
+    # Быстрая сводка подключений для заголовка
+    conns = _get_current_conns(port)
+    conns_str = f"  |  👥 {conns} клиент{'ов' if conns not in (1, 21) else ''}" if conns else ""
+
     await query.edit_message_text(
         f"📡 *MTProxy*\n\n"
-        f"Статус: {_status_line(st['running'], st['uptime'])}\n"
+        f"Статус: {_status_line(st['running'], st['uptime'])}{conns_str}\n"
         f"Порт: `{port}`  |  🔑 {mode}\n\n"
         f"*Ссылки по серверам:*{links_text}\n"
         f"_Telegram → Настройки → Данные → Тип соединения_",
@@ -412,6 +561,7 @@ async def _show_mtp_admin(query):
              InlineKeyboardButton("🔄 Рестарт",             callback_data="proxy_mtp_restart")],
             [InlineKeyboardButton("🔑 Сменить секрет",      callback_data="proxy_mtp_secret_ask")],
             *sync_row,
+            [InlineKeyboardButton("📊 Статистика",          callback_data="proxy_mtp_stats")],
             [InlineKeyboardButton("📥 Обновить конфиги TG", callback_data="proxy_mtp_update_cfg")],
             [InlineKeyboardButton("📖 Инструкция",          callback_data="proxy_mtp_help")],
             [InlineKeyboardButton("🔄 Обновить",            callback_data="proxy_mtp_menu")],
@@ -484,6 +634,61 @@ async def _show_mtp_help(query):
             [InlineKeyboardButton("◀️ Назад", callback_data="proxy_mtp_menu")]
         ]),
         parse_mode="Markdown"
+    )
+
+
+async def _show_mtp_stats(query):
+    port = _mtp_get_port()
+    await query.edit_message_text("⏳ Считаю трафик...", parse_mode="Markdown")
+
+    snap  = _record_snapshot(port)
+    conns = snap["conns"]
+    peak  = snap["peak"]
+    snaps = snap["snapshots"]
+
+    in_1h,  out_1h  = _period_traffic(snaps, 3600)
+    in_24h, out_24h = _period_traffic(snaps, 86400)
+    in_72h, out_72h = _period_traffic(snaps, 72 * 3600)
+    in_tot  = snap["total_in"]
+    out_tot = snap["total_out"]
+
+    peak_1h  = _peak_conns_period(snaps, 3600)
+    peak_24h = _peak_conns_period(snaps, 86400)
+
+    # Средний трафик на клиента в моменте (за последний час)
+    if conns and (in_1h + out_1h) > 0:
+        avg_str = f"`{_fmt_bytes((in_1h + out_1h) // conns)}/клиент` за 1ч"
+    else:
+        avg_str = "нет данных за 1ч"
+
+    # Максимальный всплеск — ищем промежуток с наибольшим приростом
+    max_spike = 0
+    for i in range(1, len(snaps)):
+        delta = (snaps[i]["ti"] + snaps[i]["to"]) - (snaps[i-1]["ti"] + snaps[i-1]["to"])
+        if delta > max_spike:
+            max_spike = delta
+    spike_str = f"`{_fmt_bytes(max_spike)}`" if max_spike > 0 else "нет данных"
+
+    text = (
+        "📊 *Статистика MTProxy*\n\n"
+        f"👥 *Подключений сейчас:* `{conns}`\n"
+        f"📈 *Пик за 1ч / 24ч / всё время:* `{peak_1h}` / `{peak_24h}` / `{peak}`\n\n"
+        "📦 *Трафик (↓вх / ↑исх):*\n"
+        f"• За 1 час:   `{_fmt_bytes(in_1h)} ↓` / `{_fmt_bytes(out_1h)} ↑`\n"
+        f"• За 24 ч:    `{_fmt_bytes(in_24h)} ↓` / `{_fmt_bytes(out_24h)} ↑`\n"
+        f"• За 72 ч:    `{_fmt_bytes(in_72h)} ↓` / `{_fmt_bytes(out_72h)} ↑`\n"
+        f"• Всего\\*:   `{_fmt_bytes(in_tot)} ↓` / `{_fmt_bytes(out_tot)} ↑`\n\n"
+        f"⚡ *Среднее:* {avg_str}\n"
+        f"🌊 *Макс. всплеск (за интервал):* {spike_str}\n\n"
+        f"_\\* С момента первого открытия статистики_"
+    )
+    await query.edit_message_text(
+        text,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 Обновить", callback_data="proxy_mtp_stats")],
+            [InlineKeyboardButton("◀️ Назад",    callback_data="proxy_mtp_menu")],
+        ]),
+        parse_mode="MarkdownV2"
     )
 
 
@@ -571,6 +776,9 @@ async def _mtp_callback(update, context):
             result = f"✅ Синхронизировано на {len(slaves)} slave"
         await query.answer(result, show_alert=True)
         await _show_mtp_admin(query)
+
+    elif data == "proxy_mtp_stats":
+        await _show_mtp_stats(query)
 
     elif data == "proxy_mtp_help":
         await _show_mtp_help(query)
