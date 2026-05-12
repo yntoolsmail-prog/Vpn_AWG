@@ -2396,6 +2396,14 @@ async def confirm_restore(update: Update, context: ContextTypes.DEFAULT_TYPE):
         os.remove(tmp_path)
         return ConversationHandler.END
 
+    # 3b. Если в бэкапе есть proxy_bot.env — переносим в /etc/proxy-bot/
+    _extracted_mtp = f"/etc/amnezia/amneziawg/proxy_bot.env"
+    if os.path.exists(_extracted_mtp):
+        import shutil as _sh
+        os.makedirs("/etc/proxy-bot", exist_ok=True)
+        _sh.move(_extracted_mtp, "/etc/proxy-bot/proxy_bot.env")
+        os.chmod("/etc/proxy-bot/proxy_bot.env", 0o600)
+
     os.remove(tmp_path)
     context.user_data.pop("restore_path", None)
 

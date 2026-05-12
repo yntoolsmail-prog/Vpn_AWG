@@ -174,6 +174,59 @@ def _fmt_bytes(n: int) -> str:
     return f"{n:.1f} ТБ"
 
 
+def _cc_to_flag(cc: str) -> str:
+    """Код страны → флаг эмодзи (ISO 3166-1 alpha-2)."""
+    try:
+        return "".join(chr(0x1F1E0 + ord(c) - ord("A")) for c in cc.upper())
+    except Exception:
+        return "🌐"
+
+
+def _get_clients_geo(port: str) -> list[dict]:
+    """Возвращает список {ip, count, country, cc} для текущих подключений."""
+    try:
+        out = subprocess.check_output(["ss", "-tn"], text=True, stderr=subprocess.DEVNULL)
+    except Exception:
+        return []
+
+    counts: dict[str, int] = {}
+    for line in out.splitlines():
+        if f":{port}" in line:
+            parts = line.split()
+            if len(parts) >= 5:
+                remote = parts[4]
+                ip = remote.rsplit(":", 1)[0].strip("[]")
+                if ip and not ip.startswith("10."):
+                    counts[ip] = counts.get(ip, 0) + 1
+
+    if not counts:
+        return []
+
+    # Batch geo-lookup через ip-api.com (до 100 IP за запрос, бесплатно)
+    ips = list(counts.keys())
+    geo: dict[str, tuple[str, str]] = {}
+    try:
+        import json as _json
+        payload = _json.dumps([{"query": ip} for ip in ips[:100]])
+        raw = subprocess.check_output(
+            ["curl", "-sf", "--max-time", "8", "-X", "POST",
+             "http://ip-api.com/batch?fields=query,country,countryCode",
+             "-H", "Content-Type: application/json", "-d", payload],
+            text=True, stderr=subprocess.DEVNULL
+        )
+        for entry in _json.loads(raw):
+            q  = entry.get("query", "")
+            geo[q] = (entry.get("country", "Unknown"), entry.get("countryCode", ""))
+    except Exception:
+        pass
+
+    result = []
+    for ip, cnt in sorted(counts.items(), key=lambda x: -x[1]):
+        country, cc = geo.get(ip, ("Unknown", ""))
+        result.append({"ip": ip, "count": cnt, "country": country, "cc": cc})
+    return result
+
+
 def _ensure_counters(port: str) -> None:
     """Добавляет iptables правила-счётчики для порта MTProxy если их нет."""
     rules = [
@@ -677,6 +730,19 @@ async def _show_mtp_stats(query):
             max_spike = delta
     spike_str = f"`{_fmt_bytes(max_spike)}`" if max_spike > 0 else "_нет данных_"
 
+    # Клиенты с гео (выполняется параллельно с остальным)
+    clients = _get_clients_geo(port)
+    if clients:
+        clients_lines = ""
+        for c in clients[:15]:          # не более 15 строк чтобы не раздувать
+            flag = _cc_to_flag(c["cc"]) if c["cc"] else "🌐"
+            clients_lines += f"\n{flag} `{c['ip']}` — {c['count']} соед. _{c['country']}_"
+        clients_section = f"\n\n*Подключённые клиенты:*{clients_lines}"
+        if len(clients) > 15:
+            clients_section += f"\n_...и ещё {len(clients) - 15} IP_"
+    else:
+        clients_section = "\n\n_Нет активных подключений_"
+
     text = (
         "📊 *Статистика MTProxy*\n\n"
         f"👥 *Подключений сейчас:* `{conns}`\n"
@@ -687,7 +753,8 @@ async def _show_mtp_stats(query):
         f"• 72 ч:    `{_fmt_bytes(in_72h)}` / `{_fmt_bytes(out_72h)}`\n"
         f"• Всего:   `{_fmt_bytes(in_tot)}` / `{_fmt_bytes(out_tot)}`\n\n"
         f"⚡ *Среднее:* {avg_str}\n"
-        f"🌊 *Макс. всплеск:* {spike_str}\n\n"
+        f"🌊 *Макс. всплеск:* {spike_str}"
+        f"{clients_section}\n\n"
         "_Трафик считается с первого открытия статистики_"
     )
     await query.edit_message_text(

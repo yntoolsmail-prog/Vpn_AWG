@@ -1226,6 +1226,10 @@ def create_backup(prefix: str = "awg_backup") -> str:
         # Module config
         if os.path.exists("/root/modules.conf"):
             tar.add("/root/modules.conf", arcname="modules.conf")
+        # MTProxy config (secret, port) — нужен для сохранения ссылки при переезде
+        _mtp_conf = "/etc/proxy-bot/proxy_bot.env"
+        if os.path.exists(_mtp_conf):
+            tar.add(_mtp_conf, arcname="proxy_bot.env")
     return backup_path
 
 # ── Техобслуживание ─────────────────────────────────────────────────────────────
@@ -1792,6 +1796,22 @@ def ssh_sync_mtproxy_secret(server: dict, secret: str, port: str) -> tuple[bool,
         for cmd in cmds:
             _, stdout, stderr = client.exec_command(cmd, timeout=15)
             stdout.read(); stderr.read()
+
+        # Исправляем MTP_SERVER: получаем реальный публичный IP slave отдельной командой
+        _, out_ip, _ = client.exec_command(
+            "curl -4 -sf --max-time 5 https://api.ipify.org 2>/dev/null "
+            "|| curl -4 -sf --max-time 5 https://ifconfig.me 2>/dev/null",
+            timeout=10
+        )
+        slave_pub_ip = out_ip.read().decode().strip()
+        if slave_pub_ip:
+            fix_server_cmd = (
+                f"grep -q '^MTP_SERVER=' /etc/proxy-bot/proxy_bot.env 2>/dev/null "
+                f"&& sed -i 's|^MTP_SERVER=.*|MTP_SERVER={slave_pub_ip}|' /etc/proxy-bot/proxy_bot.env "
+                f"|| echo 'MTP_SERVER={slave_pub_ip}' >> /etc/proxy-bot/proxy_bot.env"
+            )
+            _, _, _ = client.exec_command(fix_server_cmd, timeout=10)
+
         return True, "✅ MTProxy синхронизирован"
     except Exception as e:
         return False, f"❌ {e}"
