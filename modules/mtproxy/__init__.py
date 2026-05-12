@@ -639,9 +639,19 @@ async def _show_mtp_help(query):
 
 async def _show_mtp_stats(query):
     port = _mtp_get_port()
-    await query.edit_message_text("⏳ Считаю трафик...", parse_mode="Markdown")
+    await query.edit_message_text("⏳ Считаю трафик...")
 
-    snap  = _record_snapshot(port)
+    try:
+        snap  = _record_snapshot(port)
+    except Exception as e:
+        await query.edit_message_text(
+            f"❌ Ошибка сбора статистики: {e}",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("◀️ Назад", callback_data="proxy_mtp_menu")]
+            ])
+        )
+        return
+
     conns = snap["conns"]
     peak  = snap["peak"]
     snaps = snap["snapshots"]
@@ -655,32 +665,30 @@ async def _show_mtp_stats(query):
     peak_1h  = _peak_conns_period(snaps, 3600)
     peak_24h = _peak_conns_period(snaps, 86400)
 
-    # Средний трафик на клиента в моменте (за последний час)
     if conns and (in_1h + out_1h) > 0:
         avg_str = f"`{_fmt_bytes((in_1h + out_1h) // conns)}/клиент` за 1ч"
     else:
-        avg_str = "нет данных за 1ч"
+        avg_str = "_нет данных за 1ч_"
 
-    # Максимальный всплеск — ищем промежуток с наибольшим приростом
     max_spike = 0
     for i in range(1, len(snaps)):
         delta = (snaps[i]["ti"] + snaps[i]["to"]) - (snaps[i-1]["ti"] + snaps[i-1]["to"])
         if delta > max_spike:
             max_spike = delta
-    spike_str = f"`{_fmt_bytes(max_spike)}`" if max_spike > 0 else "нет данных"
+    spike_str = f"`{_fmt_bytes(max_spike)}`" if max_spike > 0 else "_нет данных_"
 
     text = (
         "📊 *Статистика MTProxy*\n\n"
         f"👥 *Подключений сейчас:* `{conns}`\n"
-        f"📈 *Пик за 1ч / 24ч / всё время:* `{peak_1h}` / `{peak_24h}` / `{peak}`\n\n"
-        "📦 *Трафик (↓вх / ↑исх):*\n"
-        f"• За 1 час:   `{_fmt_bytes(in_1h)} ↓` / `{_fmt_bytes(out_1h)} ↑`\n"
-        f"• За 24 ч:    `{_fmt_bytes(in_24h)} ↓` / `{_fmt_bytes(out_24h)} ↑`\n"
-        f"• За 72 ч:    `{_fmt_bytes(in_72h)} ↓` / `{_fmt_bytes(out_72h)} ↑`\n"
-        f"• Всего\\*:   `{_fmt_bytes(in_tot)} ↓` / `{_fmt_bytes(out_tot)} ↑`\n\n"
+        f"📈 *Пик (1ч / 24ч / всё время):* `{peak_1h}` / `{peak_24h}` / `{peak}`\n\n"
+        "*Трафик (вх / исх):*\n"
+        f"• 1 час:   `{_fmt_bytes(in_1h)}` / `{_fmt_bytes(out_1h)}`\n"
+        f"• 24 ч:    `{_fmt_bytes(in_24h)}` / `{_fmt_bytes(out_24h)}`\n"
+        f"• 72 ч:    `{_fmt_bytes(in_72h)}` / `{_fmt_bytes(out_72h)}`\n"
+        f"• Всего:   `{_fmt_bytes(in_tot)}` / `{_fmt_bytes(out_tot)}`\n\n"
         f"⚡ *Среднее:* {avg_str}\n"
-        f"🌊 *Макс. всплеск (за интервал):* {spike_str}\n\n"
-        f"_\\* С момента первого открытия статистики_"
+        f"🌊 *Макс. всплеск:* {spike_str}\n\n"
+        "_Трафик считается с первого открытия статистики_"
     )
     await query.edit_message_text(
         text,
@@ -688,7 +696,7 @@ async def _show_mtp_stats(query):
             [InlineKeyboardButton("🔄 Обновить", callback_data="proxy_mtp_stats")],
             [InlineKeyboardButton("◀️ Назад",    callback_data="proxy_mtp_menu")],
         ]),
-        parse_mode="MarkdownV2"
+        parse_mode="Markdown"
     )
 
 
