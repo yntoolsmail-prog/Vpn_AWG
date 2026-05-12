@@ -1754,17 +1754,39 @@ def ssh_sync_mtproxy_secret(server: dict, secret: str, port: str) -> tuple[bool,
         if stdout.read().decode().strip() != "OK":
             return False, "MTProxy не установлен"
 
+        # Вычисляем clean-секрет и FakeTLS флаг для ExecStart
+        if secret.startswith("ee"):
+            clean = secret[2:34]
+            faketls = "-D www.google.com"
+        elif secret.startswith("dd"):
+            clean = secret[2:]
+            faketls = ""
+        else:
+            clean = secret
+            faketls = ""
+        extra = f" {faketls}" if faketls else ""
+
+        _mtp_bin   = "/opt/mtproxy/objs/bin/mtproto-proxy"
+        _sec_file  = "/opt/mtproxy/proxy-secret"
+        _conf_file = "/opt/mtproxy/proxy-multi.conf"
+        exec_start = (
+            f"{_mtp_bin} -u nobody -p 8888 -H {port} -S {clean}"
+            f"{extra} --aes-pwd {_sec_file} {_conf_file} -M 1"
+        )
+
         cmds = [
             "mkdir -p /etc/proxy-bot",
-            # Обновляем или добавляем MTP_SECRET
+            # Обновляем proxy_bot.env
             f"grep -q '^MTP_SECRET=' /etc/proxy-bot/proxy_bot.env 2>/dev/null "
             f"&& sed -i 's|^MTP_SECRET=.*|MTP_SECRET={secret}|' /etc/proxy-bot/proxy_bot.env "
             f"|| echo 'MTP_SECRET={secret}' >> /etc/proxy-bot/proxy_bot.env",
-            # Обновляем или добавляем MTP_PORT
             f"grep -q '^MTP_PORT=' /etc/proxy-bot/proxy_bot.env 2>/dev/null "
             f"&& sed -i 's|^MTP_PORT=.*|MTP_PORT={port}|' /etc/proxy-bot/proxy_bot.env "
             f"|| echo 'MTP_PORT={port}' >> /etc/proxy-bot/proxy_bot.env",
-            # Перезапускаем сервис
+            # Обновляем ExecStart в systemd service (секрет зашит туда напрямую)
+            f"sed -i 's|^ExecStart=.*mtproto-proxy.*|ExecStart={exec_start}|'"
+            f" /etc/systemd/system/mtproxy.service",
+            "systemctl daemon-reload",
             "systemctl restart mtproxy 2>/dev/null || true",
         ]
         for cmd in cmds:
