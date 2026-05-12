@@ -196,7 +196,7 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStartPre=/bin/sh -c 'curl -sf https://core.telegram.org/getProxySecret -o ${MTP_DIR}/proxy-secret; curl -sf https://core.telegram.org/getProxyConfig -o ${MTP_DIR}/proxy-multi.conf'
+ExecStartPre=-/bin/sh -c 'curl -sf --max-time 10 https://core.telegram.org/getProxySecret -o ${MTP_DIR}/proxy-secret; curl -sf --max-time 10 https://core.telegram.org/getProxyConfig -o ${MTP_DIR}/proxy-multi.conf'
 ExecStart=${MTP_BIN} -u nobody -p 8888 -H ${MTP_PORT} -S ${MTP_CLEAN} ${FAKETLS_FLAG} --aes-pwd ${MTP_DIR}/proxy-secret ${MTP_DIR}/proxy-multi.conf -M 1
 Restart=on-failure
 RestartSec=10
