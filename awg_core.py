@@ -1797,10 +1797,6 @@ def ssh_sync_mtproxy_secret(server: dict, secret: str, port: str) -> tuple[bool,
             # Обновляем ExecStart в systemd service
             f"sed -i 's|^ExecStart=.*mtproto-proxy.*|ExecStart={exec_start}|'"
             f" /etc/systemd/system/mtproxy.service",
-            # Делаем ExecStartPre необязательным (префикс -): сервис запускается
-            # даже если core.telegram.org недоступен (серверы в РФ и т.п.)
-            "sed -i 's|^ExecStartPre=/bin/sh|ExecStartPre=-/bin/sh|'"
-            " /etc/systemd/system/mtproxy.service",
             "systemctl daemon-reload",
             "systemctl restart mtproxy 2>/dev/null || true",
         ]
