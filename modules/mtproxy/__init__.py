@@ -175,56 +175,67 @@ def _fmt_bytes(n: int) -> str:
 
 
 def _cc_to_flag(cc: str) -> str:
-    """Код страны → флаг эмодзи (ISO 3166-1 alpha-2)."""
+    """Код страны → флаг эмодзи (ISO 3166-1 alpha-2).
+    Regional Indicator Symbols начинаются с U+1F1E6 ('A'), не U+1F1E0."""
     try:
-        return "".join(chr(0x1F1E0 + ord(c) - ord("A")) for c in cc.upper())
+        return "".join(chr(0x1F1E6 + ord(c) - ord("A")) for c in cc.upper())
     except Exception:
         return "🌐"
 
 
-def _get_clients_geo(port: str) -> list[dict]:
-    """Возвращает список {ip, count, country, cc} для текущих подключений."""
+def _get_clients_geo(port: str) -> tuple[list[dict], list[dict]]:
+    """Возвращает (external_clients, awg_clients).
+    external_clients: [{ip, count, country, cc}] — публичные IP с гео.
+    awg_clients:      [{ip, count}]              — внутренние AWG (10.x.x.x)."""
     try:
         out = subprocess.check_output(["ss", "-tn"], text=True, stderr=subprocess.DEVNULL)
     except Exception:
-        return []
+        return [], []
 
-    counts: dict[str, int] = {}
+    ext_counts: dict[str, int] = {}
+    awg_counts: dict[str, int] = {}
     for line in out.splitlines():
         if f":{port}" in line:
             parts = line.split()
             if len(parts) >= 5:
                 remote = parts[4]
                 ip = remote.rsplit(":", 1)[0].strip("[]")
-                if ip and not ip.startswith("10."):
-                    counts[ip] = counts.get(ip, 0) + 1
+                if not ip:
+                    continue
+                if ip.startswith("10."):
+                    awg_counts[ip] = awg_counts.get(ip, 0) + 1
+                else:
+                    ext_counts[ip] = ext_counts.get(ip, 0) + 1
 
-    if not counts:
-        return []
-
-    # Batch geo-lookup через ip-api.com (до 100 IP за запрос, бесплатно)
-    ips = list(counts.keys())
+    # Batch geo-lookup для внешних IP
     geo: dict[str, tuple[str, str]] = {}
-    try:
-        import json as _json
-        payload = _json.dumps([{"query": ip} for ip in ips[:100]])
-        raw = subprocess.check_output(
-            ["curl", "-sf", "--max-time", "8", "-X", "POST",
-             "http://ip-api.com/batch?fields=query,country,countryCode",
-             "-H", "Content-Type: application/json", "-d", payload],
-            text=True, stderr=subprocess.DEVNULL
-        )
-        for entry in _json.loads(raw):
-            q  = entry.get("query", "")
-            geo[q] = (entry.get("country", "Unknown"), entry.get("countryCode", ""))
-    except Exception:
-        pass
+    if ext_counts:
+        try:
+            import json as _json
+            payload = _json.dumps([{"query": ip} for ip in list(ext_counts.keys())[:100]])
+            raw = subprocess.check_output(
+                ["curl", "-sf", "--max-time", "8", "-X", "POST",
+                 "http://ip-api.com/batch?fields=query,country,countryCode",
+                 "-H", "Content-Type: application/json", "-d", payload],
+                text=True, stderr=subprocess.DEVNULL
+            )
+            for entry in _json.loads(raw):
+                q = entry.get("query", "")
+                geo[q] = (entry.get("country", "Unknown"), entry.get("countryCode", ""))
+        except Exception:
+            pass
 
-    result = []
-    for ip, cnt in sorted(counts.items(), key=lambda x: -x[1]):
-        country, cc = geo.get(ip, ("Unknown", ""))
-        result.append({"ip": ip, "count": cnt, "country": country, "cc": cc})
-    return result
+    ext = [
+        {"ip": ip, "count": cnt,
+         "country": geo.get(ip, ("Unknown", ""))[0],
+         "cc":      geo.get(ip, ("Unknown", ""))[1]}
+        for ip, cnt in sorted(ext_counts.items(), key=lambda x: -x[1])
+    ]
+    awg = [
+        {"ip": ip, "count": cnt}
+        for ip, cnt in sorted(awg_counts.items(), key=lambda x: -x[1])
+    ]
+    return ext, awg
 
 
 def _ensure_counters(port: str) -> None:
@@ -730,17 +741,69 @@ async def _show_mtp_stats(query):
             max_spike = delta
     spike_str = f"`{_fmt_bytes(max_spike)}`" if max_spike > 0 else "_нет данных_"
 
-    # Клиенты с гео (выполняется параллельно с остальным)
-    clients = _get_clients_geo(port)
-    if clients:
+    # Клиенты с гео — primary
+    ext_clients, awg_clients = _get_clients_geo(port)
+    clients_section = ""
+    if ext_clients:
         clients_lines = ""
-        for c in clients[:15]:          # не более 15 строк чтобы не раздувать
+        for c in ext_clients[:15]:
             flag = _cc_to_flag(c["cc"]) if c["cc"] else "🌐"
             clients_lines += f"\n{flag} `{c['ip']}` — {c['count']} соед. _{c['country']}_"
-        clients_section = f"\n\n*Подключённые клиенты:*{clients_lines}"
-        if len(clients) > 15:
-            clients_section += f"\n_...и ещё {len(clients) - 15} IP_"
-    else:
+        clients_section += f"\n\n*Внешние клиенты (primary):*{clients_lines}"
+        if len(ext_clients) > 15:
+            clients_section += f"\n_...и ещё {len(ext_clients) - 15} IP_"
+    if awg_clients:
+        awg_lines = ""
+        for c in awg_clients:
+            awg_lines += f"\n🔒 `{c['ip']}` — {c['count']} соед. _AWG VPN_"
+        clients_section += f"\n\n*Ваши AWG-клиенты (primary):*{awg_lines}"
+
+    # Статистика со slave
+    slaves = _get_slaves()
+    for slave in slaves:
+        sname = f"{slave.get('emoji', '🖥')} {slave.get('name', 'Slave')}".strip()
+        try:
+            from awg_core import ssh_get_slave_mtp_stats
+            sl = ssh_get_slave_mtp_stats(slave, port)
+            if sl["error"]:
+                clients_section += f"\n\n*{sname}:* _Ошибка: {sl['error']}_"
+            elif sl["conns"] == 0 and not sl["ext_ips"] and not sl["awg_ips"]:
+                clients_section += f"\n\n*{sname}:* _Нет подключений_"
+            else:
+                sl_lines = ""
+                # Geo-lookup для внешних IP slave
+                sl_geo: dict[str, tuple[str, str]] = {}
+                if sl["ext_ips"]:
+                    try:
+                        payload = json.dumps([{"query": ip} for ip in sl["ext_ips"][:100]])
+                        raw = subprocess.check_output(
+                            ["curl", "-sf", "--max-time", "8", "-X", "POST",
+                             "http://ip-api.com/batch?fields=query,country,countryCode",
+                             "-H", "Content-Type: application/json", "-d", payload],
+                            text=True, stderr=subprocess.DEVNULL
+                        )
+                        for entry in json.loads(raw):
+                            q = entry.get("query", "")
+                            sl_geo[q] = (entry.get("country", "Unknown"), entry.get("countryCode", ""))
+                    except Exception:
+                        pass
+                shown_ext: dict[str, int] = {}
+                for ip in sl["ext_ips"]:
+                    shown_ext[ip] = shown_ext.get(ip, 0) + 1
+                for ip, cnt in sorted(shown_ext.items(), key=lambda x: -x[1])[:15]:
+                    country, cc = sl_geo.get(ip, ("Unknown", ""))
+                    flag = _cc_to_flag(cc) if cc else "🌐"
+                    sl_lines += f"\n{flag} `{ip}` — {cnt} соед. _{country}_"
+                shown_awg: dict[str, int] = {}
+                for ip in sl["awg_ips"]:
+                    shown_awg[ip] = shown_awg.get(ip, 0) + 1
+                for ip, cnt in sorted(shown_awg.items(), key=lambda x: -x[1]):
+                    sl_lines += f"\n🔒 `{ip}` — {cnt} соед. _AWG VPN_"
+                clients_section += f"\n\n*Клиенты {sname}:*{sl_lines}"
+        except Exception as e:
+            clients_section += f"\n\n*{sname}:* _Ошибка: {e}_"
+
+    if not clients_section:
         clients_section = "\n\n_Нет активных подключений_"
 
     text = (

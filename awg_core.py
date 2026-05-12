@@ -1838,6 +1838,43 @@ def ssh_check_mtproxy_installed(server: dict) -> bool:
         return False
 
 
+def ssh_get_slave_mtp_stats(server: dict, port: str) -> dict:
+    """Собирает статистику MTProxy со slave по SSH.
+    Возвращает {'conns': int, 'ext_ips': list[str], 'awg_ips': list[str], 'error': str|None}."""
+    if not PARAMIKO_AVAILABLE:
+        return {"conns": 0, "ext_ips": [], "awg_ips": [], "error": "paramiko недоступен"}
+    ssh = server.get("ssh", {})
+    try:
+        client = _ssh_connect(ssh, timeout=8)
+        try:
+            cmd = f"ss -tn 2>/dev/null | grep ':{port} ' || true"
+            _, stdout, _ = client.exec_command(cmd, timeout=8)
+            lines = stdout.read().decode().splitlines()
+            ext_ips: list[str] = []
+            awg_ips: list[str] = []
+            for line in lines:
+                parts = line.split()
+                if len(parts) >= 5:
+                    remote = parts[4]
+                    ip = remote.rsplit(":", 1)[0].strip("[]")
+                    if not ip:
+                        continue
+                    if ip.startswith("10."):
+                        awg_ips.append(ip)
+                    else:
+                        ext_ips.append(ip)
+            return {
+                "conns":   len(ext_ips) + len(awg_ips),
+                "ext_ips": ext_ips,
+                "awg_ips": awg_ips,
+                "error":   None,
+            }
+        finally:
+            client.close()
+    except Exception as e:
+        return {"conns": 0, "ext_ips": [], "awg_ips": [], "error": str(e)}
+
+
 # ── SSH-управление SOCKS5 на slave ───────────────────────────────────────────
 
 _SOCKS5_PRIVATE_NETS = [
