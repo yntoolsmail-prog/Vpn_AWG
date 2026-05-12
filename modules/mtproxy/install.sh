@@ -121,14 +121,14 @@ fi
 # ── Порт ──────────────────────────────────────────────────────────────────────
 echo ""
 
-# Определяем занятость порта 443 — часто занят nginx/TMA
-_PORT_443_OWNER=$(ss -tlnp 2>/dev/null | awk '/:443 /{match($0,/users:\(\("([^"]+)/,a); if(a[1]) print a[1]}' | head -1 || true)
-if [[ -n "$_PORT_443_OWNER" ]]; then
-    warn "Порт 443 занят процессом: ${_PORT_443_OWNER}"
-    warn "Стандартная альтернатива для MTProxy — порт 8443."
-    _DEFAULT_PORT=8443
+# Определяем занятость порта 2087
+_PORT_2087_OWNER=$(ss -tlnp 2>/dev/null | awk '/:2087 /{match($0,/users:\(\("([^"]+)/,a); if(a[1]) print a[1]}' | head -1 || true)
+if [[ -n "$_PORT_2087_OWNER" ]]; then
+    warn "Порт 2087 занят процессом: ${_PORT_2087_OWNER}"
+    warn "Выберите другой порт (например 2083 или 2053)."
+    _DEFAULT_PORT=2083
 else
-    _DEFAULT_PORT=443
+    _DEFAULT_PORT=2087
 fi
 
 while true; do
