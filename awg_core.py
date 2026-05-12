@@ -2035,6 +2035,11 @@ def ssh_apply_socks5_on_slave(
         ]
         for net in _SOCKS5_PRIVATE_NETS:
             apply_cmds.append(f"iptables -t nat -A {chain} -d {net} -j RETURN")
+        # Исключения: публичные IP всех серверов инфраструктуры (мейн + все слейвы)
+        for srv in load_servers():
+            srv_ip = srv.get("ssh", {}).get("ip", "")
+            if srv_ip:
+                apply_cmds.append(f"iptables -t nat -A {chain} -d {srv_ip} -j RETURN")
         # Определяем внешний интерфейс на slave для блокировки прямого доступа к redsocks2
         _, stdout_iface, _ = client.exec_command(
             "ip route get 8.8.8.8 | grep -o 'dev [^ ]*' | cut -d' ' -f2", timeout=5
