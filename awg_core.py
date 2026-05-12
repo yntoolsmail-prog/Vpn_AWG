@@ -1840,39 +1840,68 @@ def ssh_check_mtproxy_installed(server: dict) -> bool:
 
 def ssh_get_slave_mtp_stats(server: dict, port: str) -> dict:
     """Собирает статистику MTProxy со slave по SSH.
-    Возвращает {'conns': int, 'ext_ips': list[str], 'awg_ips': list[str], 'error': str|None}."""
+    Возвращает {'conns', 'bytes_in', 'bytes_out', 'ext_ips', 'awg_ips', 'error'}."""
     if not PARAMIKO_AVAILABLE:
-        return {"conns": 0, "ext_ips": [], "awg_ips": [], "error": "paramiko недоступен"}
+        return {"conns": 0, "bytes_in": 0, "bytes_out": 0,
+                "ext_ips": [], "awg_ips": [], "error": "paramiko недоступен"}
     ssh = server.get("ssh", {})
     try:
-        client = _ssh_connect(ssh, timeout=8)
+        client = _ssh_connect(ssh, timeout=10)
         try:
-            cmd = f"ss -tn 2>/dev/null | grep ':{port} ' || true"
-            _, stdout, _ = client.exec_command(cmd, timeout=8)
-            lines = stdout.read().decode().splitlines()
-            ext_ips: list[str] = []
-            awg_ips: list[str] = []
-            for line in lines:
-                parts = line.split()
-                if len(parts) >= 5:
-                    remote = parts[4]
-                    ip = remote.rsplit(":", 1)[0].strip("[]")
-                    if not ip:
-                        continue
-                    if ip.startswith("10."):
-                        awg_ips.append(ip)
-                    else:
-                        ext_ips.append(ip)
-            return {
-                "conns":   len(ext_ips) + len(awg_ips),
-                "ext_ips": ext_ips,
-                "awg_ips": awg_ips,
-                "error":   None,
-            }
+            # Создаём счётчики если нет, читаем байты, получаем ss
+            cmd = (
+                f"iptables -C INPUT -p tcp --dport {port} -m comment --comment mtp_count_in"
+                f" 2>/dev/null || iptables -I INPUT 1 -p tcp --dport {port}"
+                f" -m comment --comment mtp_count_in; "
+                f"iptables -C OUTPUT -p tcp --sport {port} -m comment --comment mtp_count_out"
+                f" 2>/dev/null || iptables -I OUTPUT 1 -p tcp --sport {port}"
+                f" -m comment --comment mtp_count_out; "
+                f"echo __IN__; "
+                f"iptables -nvxL INPUT 2>/dev/null | awk '/mtp_count_in/{{print $2}}' || echo 0; "
+                f"echo __OUT__; "
+                f"iptables -nvxL OUTPUT 2>/dev/null | awk '/mtp_count_out/{{print $2}}' || echo 0; "
+                f"echo __SS__; "
+                f"ss -tn 2>/dev/null | grep ':{port} ' || true"
+            )
+            _, stdout, _ = client.exec_command(cmd, timeout=12)
+            raw = stdout.read().decode()
         finally:
             client.close()
+
+        # Парсим секции
+        bytes_in = bytes_out = 0
+        ext_ips: list[str] = []
+        awg_ips: list[str] = []
+        section = "pre"
+        for line in raw.splitlines():
+            if line == "__IN__":
+                section = "in"
+            elif line == "__OUT__":
+                section = "out"
+            elif line == "__SS__":
+                section = "ss"
+            elif section == "in" and line.strip().isdigit():
+                bytes_in = int(line.strip())
+            elif section == "out" and line.strip().isdigit():
+                bytes_out = int(line.strip())
+            elif section == "ss":
+                parts = line.split()
+                if len(parts) >= 5:
+                    ip = parts[4].rsplit(":", 1)[0].strip("[]")
+                    if ip:
+                        (awg_ips if ip.startswith("10.") else ext_ips).append(ip)
+
+        return {
+            "conns":     len(ext_ips) + len(awg_ips),
+            "bytes_in":  bytes_in,
+            "bytes_out": bytes_out,
+            "ext_ips":   ext_ips,
+            "awg_ips":   awg_ips,
+            "error":     None,
+        }
     except Exception as e:
-        return {"conns": 0, "ext_ips": [], "awg_ips": [], "error": str(e)}
+        return {"conns": 0, "bytes_in": 0, "bytes_out": 0,
+                "ext_ips": [], "awg_ips": [], "error": str(e)}
 
 
 # ── SSH-управление SOCKS5 на slave ───────────────────────────────────────────

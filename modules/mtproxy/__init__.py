@@ -882,17 +882,135 @@ async def _show_mtp_stats(query, view: str = "now"):
         "_Трафик считается с первого открытия статистики_"
     )
     if view == "24h":
-        toggle_btn = InlineKeyboardButton("⏱ Сейчас",  callback_data="proxy_mtp_stats")
+        time_btn   = InlineKeyboardButton("⏱ Сейчас",  callback_data="proxy_mtp_stats")
         refresh_cb = "proxy_mtp_stats_24h"
     else:
-        toggle_btn = InlineKeyboardButton("📅 За 24ч", callback_data="proxy_mtp_stats_24h")
+        time_btn   = InlineKeyboardButton("📅 За 24ч", callback_data="proxy_mtp_stats_24h")
         refresh_cb = "proxy_mtp_stats"
+
+    server_row = _build_server_toggle(slaves, "primary")
+    kb_rows = []
+    if len(server_row) > 1:
+        kb_rows.append(server_row)
+    kb_rows.append([time_btn, InlineKeyboardButton("🔄 Обновить", callback_data=refresh_cb)])
+    kb_rows.append([InlineKeyboardButton("◀️ Назад", callback_data="proxy_mtp_menu")])
 
     await query.edit_message_text(
         text,
+        reply_markup=InlineKeyboardMarkup(kb_rows),
+        parse_mode="Markdown"
+    )
+
+
+def _build_server_toggle(slaves: list, current: str) -> list:
+    """Строка кнопок-переключателей primary / slave0 / slave1 ..."""
+    row = []
+    label_p = "✅ Primary" if current == "primary" else "🖥 Primary"
+    row.append(InlineKeyboardButton(label_p, callback_data="proxy_mtp_stats"))
+    for i, s in enumerate(slaves):
+        name  = s.get("name", f"Slave {i}")
+        label = f"✅ {name}" if current == f"slave_{i}" else f"🖥 {name}"
+        row.append(InlineKeyboardButton(label, callback_data=f"proxy_mtp_stats_slave_{i}"))
+    return row
+
+
+async def _show_mtp_stats_slave(query, slave_idx: int, view: str = "now"):
+    port   = _mtp_get_port()
+    slaves = _get_slaves()
+    if slave_idx >= len(slaves):
+        await query.answer("❌ Slave не найден", show_alert=True)
+        return
+
+    slave = slaves[slave_idx]
+    sname = f"{slave.get('emoji', '🖥')} {slave.get('name', 'Slave')}".strip()
+    await query.edit_message_text(f"⏳ Получаю данные с {sname}...")
+
+    try:
+        from awg_core import ssh_get_slave_mtp_stats
+        sl = ssh_get_slave_mtp_stats(slave, port)
+    except Exception as e:
+        await query.edit_message_text(
+            f"❌ SSH ошибка: {e}",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("◀️ Назад", callback_data="proxy_mtp_stats")]
+            ])
+        )
+        return
+
+    if sl["error"]:
+        await query.edit_message_text(
+            f"❌ Ошибка: {sl['error']}",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("◀️ Назад", callback_data="proxy_mtp_stats")]
+            ])
+        )
+        return
+
+    conns = sl["conns"]
+    byt_in, byt_out = sl["bytes_in"], sl["bytes_out"]
+
+    # Клиенты
+    if view == "24h":
+        # Для slave истории нет — показываем только онлайн с пометкой
+        clients_header = "сейчас (история на slave не хранится)"
+    else:
+        clients_header = "сейчас"
+
+    ext_geo: dict[str, tuple[str, str]] = {}
+    shown_ext: dict[str, int] = {}
+    for ip in sl["ext_ips"]:
+        shown_ext[ip] = shown_ext.get(ip, 0) + 1
+    if shown_ext:
+        try:
+            payload = json.dumps([{"query": ip} for ip in list(shown_ext.keys())[:100]])
+            raw = subprocess.check_output(
+                ["curl", "-sf", "--max-time", "8", "-X", "POST",
+                 "http://ip-api.com/batch?fields=query,country,countryCode",
+                 "-H", "Content-Type: application/json", "-d", payload],
+                text=True, stderr=subprocess.DEVNULL
+            )
+            for entry in json.loads(raw):
+                q = entry.get("query", "")
+                ext_geo[q] = (entry.get("country", "Unknown"), entry.get("countryCode", ""))
+        except Exception:
+            pass
+
+    clients_section = ""
+    if shown_ext:
+        lines = ""
+        for ip, cnt in sorted(shown_ext.items(), key=lambda x: -x[1])[:15]:
+            country, cc = ext_geo.get(ip, ("Unknown", ""))
+            flag = _cc_to_flag(cc) if cc else "🌐"
+            lines += f"\n{flag} `{ip}` — {cnt} соед. _{country}_"
+        clients_section += f"\n\n*Внешние клиенты ({clients_header}):*{lines}"
+    shown_awg: dict[str, int] = {}
+    for ip in sl["awg_ips"]:
+        shown_awg[ip] = shown_awg.get(ip, 0) + 1
+    if shown_awg:
+        lines = ""
+        for ip, cnt in sorted(shown_awg.items(), key=lambda x: -x[1]):
+            lines += f"\n🔒 `{ip}` — {cnt} соед. _AWG VPN_"
+        clients_section += f"\n\n*Ваши AWG-клиенты:*{lines}"
+    if not clients_section:
+        clients_section = "\n\n_Нет активных подключений_"
+
+    text = (
+        f"📊 *Статистика MTProxy — {sname}*\n\n"
+        f"👥 *Подключений сейчас:* `{conns}`\n\n"
+        f"*Трафик (вх / исх):*\n"
+        f"• Всего: `{_fmt_bytes(byt_in)}` / `{_fmt_bytes(byt_out)}`\n"
+        f"_с момента последней перезагрузки или пересоздания правил_"
+        f"{clients_section}\n\n"
+        "_Полная история трафика доступна только на primary_"
+    )
+
+    server_row = _build_server_toggle(slaves, f"slave_{slave_idx}")
+    refresh_cb = f"proxy_mtp_stats_slave_{slave_idx}"
+    await query.edit_message_text(
+        text,
         reply_markup=InlineKeyboardMarkup([
-            [toggle_btn,
-             InlineKeyboardButton("🔄 Обновить", callback_data=refresh_cb)],
+            server_row,
+            [InlineKeyboardButton("🔄 Обновить", callback_data=refresh_cb)],
             [InlineKeyboardButton("◀️ Назад",    callback_data="proxy_mtp_menu")],
         ]),
         parse_mode="Markdown"
@@ -989,6 +1107,13 @@ async def _mtp_callback(update, context):
 
     elif data == "proxy_mtp_stats_24h":
         await _show_mtp_stats(query, view="24h")
+
+    elif data.startswith("proxy_mtp_stats_slave_"):
+        try:
+            idx = int(data.replace("proxy_mtp_stats_slave_", ""))
+        except ValueError:
+            return
+        await _show_mtp_stats_slave(query, idx)
 
     elif data == "proxy_mtp_help":
         await _show_mtp_help(query)
