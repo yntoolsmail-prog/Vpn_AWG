@@ -463,7 +463,7 @@ def _write_mtp_service(port: str, secret: str):
             f"After=network-online.target\nWants=network-online.target\n\n"
             f"[Service]\n"
             f"ExecStart={MTP_BIN} -u nobody -p 8888 -H {port} -S {clean}"
-            f"{extra} --direct --aes-pwd /dev/null\n"
+            f"{extra} --direct\n"
             f"Restart=on-failure\nRestartSec=10\n"
             f"StandardOutput=journal\nStandardError=journal\n\n"
             f"[Install]\nWantedBy=multi-user.target\n"

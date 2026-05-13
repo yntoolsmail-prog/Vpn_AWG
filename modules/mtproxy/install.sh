@@ -195,7 +195,7 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=${MTP_BIN} -u nobody -p 8888 -H ${MTP_PORT} -S ${MTP_CLEAN}${_extra} --direct --aes-pwd /dev/null
+ExecStart=${MTP_BIN} -u nobody -p 8888 -H ${MTP_PORT} -S ${MTP_CLEAN}${_extra} --direct
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal

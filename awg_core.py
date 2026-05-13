@@ -1771,7 +1771,7 @@ def ssh_sync_mtproxy_secret(server: dict, secret: str, port: str) -> tuple[bool,
         _mtp_bin   = "/opt/mtproxy/teleproxy"
         exec_start = (
             f"{_mtp_bin} -u nobody -p 8888 -H {port} -S {clean}"
-            f"{extra} --direct --aes-pwd /dev/null"
+            f"{extra} --direct"
         )
 
         # Читаем старый порт со slave чтобы обновить ufw
