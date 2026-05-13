@@ -1752,30 +1752,26 @@ def ssh_sync_mtproxy_secret(server: dict, secret: str, port: str) -> tuple[bool,
         client = _ssh_connect(ssh)
         # Проверяем наличие MTProxy
         _, stdout, _ = client.exec_command(
-            "test -f /opt/mtproxy/objs/bin/mtproto-proxy && echo OK || echo NO",
+            "test -f /opt/mtproxy/teleproxy && echo OK || echo NO",
             timeout=5
         )
         if stdout.read().decode().strip() != "OK":
             return False, "MTProxy не установлен"
 
-        # Вычисляем clean-секрет и FakeTLS флаг для ExecStart
         if secret.startswith("ee"):
             clean = secret[2:34]
-            faketls = "-D www.google.com"
+            extra = " -D www.google.com"
         elif secret.startswith("dd"):
             clean = secret[2:]
-            faketls = ""
+            extra = " -R"
         else:
             clean = secret
-            faketls = ""
-        extra = f" {faketls}" if faketls else ""
+            extra = ""
 
-        _mtp_bin   = "/opt/mtproxy/objs/bin/mtproto-proxy"
-        _sec_file  = "/opt/mtproxy/proxy-secret"
-        _conf_file = "/opt/mtproxy/proxy-multi.conf"
+        _mtp_bin   = "/opt/mtproxy/teleproxy"
         exec_start = (
             f"{_mtp_bin} -u nobody -p 8888 -H {port} -S {clean}"
-            f"{extra} --aes-pwd {_sec_file} {_conf_file} -M 1"
+            f"{extra} --direct --aes-pwd /dev/null"
         )
 
         # Читаем старый порт со slave чтобы обновить ufw
@@ -1795,7 +1791,7 @@ def ssh_sync_mtproxy_secret(server: dict, secret: str, port: str) -> tuple[bool,
             f"&& sed -i 's|^MTP_PORT=.*|MTP_PORT={port}|' /etc/proxy-bot/proxy_bot.env "
             f"|| echo 'MTP_PORT={port}' >> /etc/proxy-bot/proxy_bot.env",
             # Обновляем ExecStart в systemd service
-            f"sed -i 's|^ExecStart=.*mtproto-proxy.*|ExecStart={exec_start}|'"
+            f"sed -i 's|^ExecStart=.*|ExecStart={exec_start}|'"
             f" /etc/systemd/system/mtproxy.service",
             "systemctl daemon-reload",
             "systemctl restart mtproxy 2>/dev/null || true",
@@ -1846,7 +1842,7 @@ def ssh_check_mtproxy_installed(server: dict) -> bool:
         client = _ssh_connect(ssh, timeout=8)
         try:
             _, stdout, _ = client.exec_command(
-                "test -f /opt/mtproxy/objs/bin/mtproto-proxy && echo OK || echo NO",
+                "test -f /opt/mtproxy/teleproxy && echo OK || echo NO",
                 timeout=5
             )
             return stdout.read().decode().strip() == "OK"

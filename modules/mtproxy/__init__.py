@@ -27,9 +27,7 @@ logger = logging.getLogger(__name__)
 # ── Пути и константы ───────────────────────────────────────────────────────────
 PROXY_CONF   = "/etc/proxy-bot/proxy_bot.env"
 MTP_DIR      = "/opt/mtproxy"
-MTP_BIN      = f"{MTP_DIR}/objs/bin/mtproto-proxy"
-MTP_SECRET_F = f"{MTP_DIR}/proxy-secret"
-MTP_MULTI_F  = f"{MTP_DIR}/proxy-multi.conf"
+MTP_BIN      = f"{MTP_DIR}/teleproxy"
 MTP_SERVICE  = "mtproxy"
 MTP_STATS_F  = "/etc/proxy-bot/mtp_stats.json"
 _IPT_CMT_IN  = "mtp_count_in"
@@ -107,13 +105,35 @@ def _mtp_build_link(secret: str, port: str, ip: str) -> str:
 
 
 def _mtp_generate_secret(mode: str = "ee") -> str:
-    raw = secrets.token_hex(16)
     if mode == "ee":
-        domain_hex = "www.google.com".encode().hex()
-        return f"ee{raw}{domain_hex}"
+        try:
+            out = subprocess.check_output(
+                [MTP_BIN, "generate-secret", "www.google.com"],
+                text=True, stderr=subprocess.DEVNULL
+            )
+            full_secret = out.splitlines()[0].strip()
+            if full_secret.startswith("ee"):
+                return full_secret
+        except Exception:
+            pass
+        raw = secrets.token_hex(16)
+        return f"ee{raw}{'www.google.com'.encode().hex()}"
     elif mode == "dd":
-        return f"dd{raw}"
-    return raw
+        try:
+            raw = subprocess.check_output(
+                [MTP_BIN, "generate-secret"],
+                text=True, stderr=subprocess.DEVNULL
+            ).strip()
+            return f"dd{raw}"
+        except Exception:
+            return f"dd{secrets.token_hex(16)}"
+    try:
+        return subprocess.check_output(
+            [MTP_BIN, "generate-secret"],
+            text=True, stderr=subprocess.DEVNULL
+        ).strip()
+    except Exception:
+        return secrets.token_hex(16)
 
 
 def _svc_action(action: str, ok_msg: str) -> tuple[bool, str]:
@@ -424,46 +444,26 @@ def _peak_conns_period(snapshots: list, seconds: int) -> int:
 
 
 def _mtp_update_tg_configs() -> tuple[bool, str]:
-    try:
-        r1 = subprocess.run(
-            ["curl", "-sf", "--max-time", "15",
-             "https://core.telegram.org/getProxySecret", "-o", MTP_SECRET_F],
-            capture_output=True, timeout=20
-        )
-        r2 = subprocess.run(
-            ["curl", "-sf", "--max-time", "15",
-             "https://core.telegram.org/getProxyConfig", "-o", MTP_MULTI_F],
-            capture_output=True, timeout=20
-        )
-        if r1.returncode == 0 and r2.returncode == 0:
-            return True, "✅ Конфиги Telegram обновлены"
-        return False, "❌ Не удалось скачать конфиги"
-    except Exception as e:
-        return False, f"❌ {e}"
+    return _svc_action("restart", "✅ MTProxy перезапущен")
 
 
 def _write_mtp_service(port: str, secret: str):
-    stored = secret
-    if stored.startswith("ee"):
-        clean = stored[2:34]
-        faketls_flag = "-D www.google.com"
-    elif stored.startswith("dd"):
-        clean = stored[2:]
-        faketls_flag = ""
+    if secret.startswith("ee"):
+        clean = secret[2:34]
+        extra = " -D www.google.com"
+    elif secret.startswith("dd"):
+        clean = secret[2:]
+        extra = " -R"
     else:
-        clean = stored
-        faketls_flag = ""
-    extra = f" {faketls_flag}" if faketls_flag else ""
+        clean = secret
+        extra = ""
     with open(f"/etc/systemd/system/{MTP_SERVICE}.service", "w") as f:
         f.write(
-            f"[Unit]\nDescription=MTProxy for Telegram\n"
+            f"[Unit]\nDescription=MTProxy for Telegram (teleproxy)\n"
             f"After=network-online.target\nWants=network-online.target\n\n"
             f"[Service]\n"
-            f"ExecStartPre=/bin/sh -c 'curl -sf https://core.telegram.org/getProxySecret"
-            f" -o {MTP_SECRET_F}; curl -sf https://core.telegram.org/getProxyConfig"
-            f" -o {MTP_MULTI_F}'\n"
             f"ExecStart={MTP_BIN} -u nobody -p 8888 -H {port} -S {clean}"
-            f"{extra} --aes-pwd {MTP_SECRET_F} {MTP_MULTI_F} -M 1\n"
+            f"{extra} --direct --aes-pwd /dev/null\n"
             f"Restart=on-failure\nRestartSec=10\n"
             f"StandardOutput=journal\nStandardError=journal\n\n"
             f"[Install]\nWantedBy=multi-user.target\n"
@@ -681,7 +681,7 @@ async def _show_mtp_admin(query):
             [InlineKeyboardButton("🔑 Сменить секрет",      callback_data="proxy_mtp_secret_ask")],
             *sync_row,
             [InlineKeyboardButton("📊 Статистика",          callback_data="proxy_mtp_stats")],
-            [InlineKeyboardButton("📥 Обновить конфиги TG", callback_data="proxy_mtp_update_cfg")],
+            [InlineKeyboardButton("🔄 Принудительный рестарт", callback_data="proxy_mtp_update_cfg")],
             [InlineKeyboardButton("📖 Инструкция",          callback_data="proxy_mtp_help")],
             [InlineKeyboardButton("🔄 Обновить",            callback_data="proxy_mtp_menu")],
             [InlineKeyboardButton("◀️ В меню",              callback_data="back")],
@@ -743,8 +743,8 @@ async def _show_mtp_help(query):
         "Все подключённые пользователи отвалятся — нужно разослать новую ссылку.\n\n"
         "*🔄 Синхронизировать секрет → N slave*\n"
         "Принудительная синхронизация текущего секрета на slave без его смены.\n\n"
-        "*📥 Обновить конфиги TG*\n"
-        "Скачивает свежие конфиги с серверов Telegram.\n\n"
+        "*🔄 Принудительный рестарт*\n"
+        "Принудительно перезапускает сервис MTProxy.\n\n"
         "*Как подключиться:*\n"
         "• Android/iOS: Настройки → Данные → Тип соединения → Прокси\n"
         "• ПК: Настройки → Продвинутые настройки → Тип соединения\n"
@@ -1119,10 +1119,8 @@ async def _mtp_callback(update, context):
         await _show_mtp_help(query)
 
     elif data == "proxy_mtp_update_cfg":
-        await query.edit_message_text("⏳ Загружаю конфиги Telegram...")
+        await query.edit_message_text("⏳ Перезапускаю MTProxy...")
         ok, msg = _mtp_update_tg_configs()
-        if ok:
-            _svc_action("restart", "")
         await query.answer(msg, show_alert=True)
         await _show_mtp_admin(query)
 
