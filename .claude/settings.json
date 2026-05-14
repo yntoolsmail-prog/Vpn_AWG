@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd /home/user/Vpn_AWG && ALL=\"$(git diff --name-only HEAD~1 HEAD 2>/dev/null)\n$(git diff --name-only 2>/dev/null)\n$(git diff --cached --name-only 2>/dev/null)\n$(git ls-files --others --exclude-standard 2>/dev/null)\"; PY_SH=$(echo \"$ALL\" | grep -E '\\.(py|sh)$' | grep -v '^$' | head -1); CLAUDE=$(echo \"$ALL\" | grep -F 'CLAUDE.md' | head -1); if [ -n \"$PY_SH\" ] && [ -z \"$CLAUDE\" ]; then echo '{\"systemMessage\": \"\\u26a0\\ufe0f  Структура проекта изменилась — обнови CLAUDE.md если добавлены/удалены/переименованы файлы\"}'; fi"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -19,25 +19,35 @@ Vpn_AWG/
 ├── modules/
 │   ├── modules.conf     # Включение/отключение модулей (bot=enabled, ...)
 │   ├── bot/
-│   │   └── bot.py       # Telegram-бот (PTB). Единственный обязательный модуль
+│   │   ├── bot.py       # Точка входа бота: setup, start, main_menu, button_handler, main()
+│   │   ├── strings.py   # Все статичные UI-строки и кнопочные константы
+│   │   └── handlers/    # Логика по функциональным группам
+│   │       ├── common.py       # Хелперы: back_kb, _md, sites_keyboard, WAITING_* константы
+│   │       ├── bandwidth.py    # Мониторинг трафика, статистика, пики
+│   │       ├── clients.py      # Устройства: конфиги, QR, удаление, сплит-туннелинг
+│   │       ├── maintenance.py  # Техобслуживание, SSH, бэкап/восстановление, часовой пояс
+│   │       ├── servers.py      # Slave-серверы, DNS, синхронизация
+│   │       ├── sites.py        # Исключения сайтов (split tunneling)
+│   │       ├── updates.py      # Обновления репозитория, проверка IP
+│   │       ├── users.py        # Управление пользователями (approve/kick)
+│   │       └── help.py         # Экраны справки
 │   ├── tma/
 │   │   ├── tma_server.py # Flask HTTP API для веб-панели (TMA)
 │   │   └── install.sh    # Установщик TMA-модуля
 │   ├── mtproxy/
-│   │   └── __init__.py  # Управление MTProxy для Telegram
+│   │   ├── __init__.py  # Управление MTProxy для Telegram
+│   │   └── strings.py   # UI-строки MTProxy
 │   ├── socks5/
-│   │   └── __init__.py  # Управление SOCKS5-прокси
+│   │   ├── __init__.py  # Управление SOCKS5-прокси
+│   │   └── strings.py   # UI-строки SOCKS5
 │   └── slave_servers/
 │       └── slave_servers.py # Синхронизация с дополнительными серверами по SSH
 │
 ├── setup.sh             # Интерактивный установщик системы
 ├── vpn.sh               # TUI управления (меню, диагностика, бэкапы)
 └── lib/                 # Вспомогательные shell-файлы (подключаются через source)
-    ├── colors.sh        # Цветовые константы (R, G, C, B, NC)
-    ├── utils.sh         # Функции log/ok/warn/err
-    ├── ssh_setup.sh     # SSH-блок из setup.sh
-    ├── modules_setup.sh # Блок управления модулями из setup.sh
-    └── diagnostics.sh   # Диагностика из vpn.sh
+    ├── colors.sh        # Цветовые константы (RED, GREEN, CYAN, BOLD, NC)
+    └── utils.sh         # Функции log/ok/warn/err/info
 ```
 
 ---
