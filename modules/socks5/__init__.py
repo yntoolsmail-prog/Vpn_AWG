@@ -225,6 +225,18 @@ def _apply_iptables_for_client(client_ip: str, socks5_host_ip: str) -> tuple[boo
                 "iptables", "-t", "nat", "-A", chain,
                 "-d", net, "-j", "RETURN"
             ], check=True, capture_output=True)
+        # Исключения: публичные IP всех серверов инфраструктуры (мейн + все слейвы)
+        try:
+            from awg_core import load_servers
+            for srv in load_servers():
+                srv_ip = srv.get("ssh", {}).get("ip", "")
+                if srv_ip:
+                    subprocess.run([
+                        "iptables", "-t", "nat", "-A", chain,
+                        "-d", srv_ip, "-j", "RETURN"
+                    ], capture_output=True)
+        except Exception:
+            pass
         # Весь TCP → redsocks2
         subprocess.run([
             "iptables", "-t", "nat", "-A", chain,

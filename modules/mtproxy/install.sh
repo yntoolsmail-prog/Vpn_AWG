@@ -17,7 +17,7 @@ info() { echo -e "${CYAN}[i]${NC} $1"; }
 [[ $EUID -ne 0 ]] && err "Запускать от root"
 
 MTP_DIR="/opt/mtproxy"
-MTP_BIN="$MTP_DIR/objs/bin/mtproto-proxy"
+MTP_BIN="$MTP_DIR/teleproxy"
 CONF_DIR="/etc/proxy-bot"
 CONF_FILE="$CONF_DIR/proxy_bot.env"
 
@@ -31,29 +31,22 @@ echo -e "${NC}"
 # ── Зависимости ───────────────────────────────────────────────────────────────
 log "Установка зависимостей..."
 apt-get -o DPkg::Lock::Timeout=120 update -qq
-apt-get -o DPkg::Lock::Timeout=120 install -y -qq git build-essential libssl-dev zlib1g-dev xxd curl
+apt-get -o DPkg::Lock::Timeout=120 install -y -qq curl
 
-# ── Сборка MTProxy ────────────────────────────────────────────────────────────
+# ── Скачивание teleproxy ──────────────────────────────────────────────────────
+mkdir -p "$MTP_DIR"
 if [[ -f "$MTP_BIN" ]]; then
-    warn "MTProxy уже собран: $MTP_BIN"
+    warn "teleproxy уже установлен: $MTP_BIN"
 else
-    log "Клонирование MTProxy (GetPageSpeed fork)..."
-    rm -rf "$MTP_DIR"
-    git clone --depth=1 https://github.com/GetPageSpeed/MTProxy "$MTP_DIR" \
-        || err "Не удалось скачать MTProxy."
-    log "Сборка (~1-2 минуты)..."
-    cd "$MTP_DIR" && make -j"$(nproc)" > /dev/null
-    cd /root
-    [[ -f "$MTP_BIN" ]] || err "Сборка не удалась — проверьте: journalctl -u awg-bot"
-    log "MTProxy собран: $MTP_BIN"
+    log "Скачиваю teleproxy (статический бинарник)..."
+    curl -L --max-time 120 \
+        "https://github.com/teleproxy/teleproxy/releases/latest/download/teleproxy-linux-amd64" \
+        -o "$MTP_BIN" \
+        || err "Не удалось скачать teleproxy."
+    chmod +x "$MTP_BIN"
+    [[ -f "$MTP_BIN" ]] || err "Бинарник не скачан."
+    log "teleproxy скачан: $MTP_BIN"
 fi
-
-# ── Конфиги Telegram ──────────────────────────────────────────────────────────
-log "Загрузка конфигов Telegram..."
-curl -sf --max-time 15 https://core.telegram.org/getProxySecret \
-    -o "$MTP_DIR/proxy-secret" || err "Не удалось скачать proxy-secret."
-curl -sf --max-time 15 https://core.telegram.org/getProxyConfig \
-    -o "$MTP_DIR/proxy-multi.conf" || err "Не удалось скачать proxy-multi.conf."
 
 # ── Конфиг-директория ─────────────────────────────────────────────────────────
 mkdir -p "$CONF_DIR"
@@ -121,14 +114,14 @@ fi
 # ── Порт ──────────────────────────────────────────────────────────────────────
 echo ""
 
-# Определяем занятость порта 443 — часто занят nginx/TMA
-_PORT_443_OWNER=$(ss -tlnp 2>/dev/null | awk '/:443 /{match($0,/users:\(\("([^"]+)/,a); if(a[1]) print a[1]}' | head -1 || true)
-if [[ -n "$_PORT_443_OWNER" ]]; then
-    warn "Порт 443 занят процессом: ${_PORT_443_OWNER}"
-    warn "Стандартная альтернатива для MTProxy — порт 8443."
-    _DEFAULT_PORT=8443
+# Определяем занятость порта 2087
+_PORT_2087_OWNER=$(ss -tlnp 2>/dev/null | awk '/:2087 /{match($0,/users:\(\("([^"]+)/,a); if(a[1]) print a[1]}' | head -1 || true)
+if [[ -n "$_PORT_2087_OWNER" ]]; then
+    warn "Порт 2087 занят процессом: ${_PORT_2087_OWNER}"
+    warn "Выберите другой порт (например 2083 или 2053)."
+    _DEFAULT_PORT=2083
 else
-    _DEFAULT_PORT=443
+    _DEFAULT_PORT=2087
 fi
 
 while true; do
@@ -159,24 +152,29 @@ while true; do
     warn "Введите 1, 2 или 3."
 done
 
-RAW_SECRET=$(head -c 16 /dev/urandom | xxd -ps)
 case "$ST" in
     1)
-        DOMAIN_HEX=$(echo -n "www.google.com" | xxd -ps)
-        MTP_SECRET="ee${RAW_SECRET}${DOMAIN_HEX}"
-        MTP_CLEAN="${RAW_SECRET}"
+        _gen=$("$MTP_BIN" generate-secret www.google.com 2>/dev/null) \
+            || err "teleproxy generate-secret не удалось."
+        MTP_SECRET=$(echo "$_gen" | head -1 | tr -d '[:space:]')
+        MTP_CLEAN=$(echo "$_gen" | awk '/Secret for -S:/{print $NF}')
+        [[ -z "$MTP_CLEAN" ]] && MTP_CLEAN="${MTP_SECRET:2:32}"
         FAKETLS_FLAG="-D www.google.com"
         SECRET_MODE="EE (TLS 1.3)"
         ;;
     2)
-        MTP_SECRET="dd${RAW_SECRET}"
-        MTP_CLEAN="${RAW_SECRET}"
-        FAKETLS_FLAG=""
-        SECRET_MODE="fake-TLS (DD)"
+        _raw=$("$MTP_BIN" generate-secret 2>/dev/null | tr -d '[:space:]') \
+            || err "teleproxy generate-secret не удалось."
+        MTP_SECRET="dd${_raw}"
+        MTP_CLEAN="${_raw}"
+        FAKETLS_FLAG="-R"
+        SECRET_MODE="random-padding (DD)"
         ;;
     3)
-        MTP_SECRET="${RAW_SECRET}"
-        MTP_CLEAN="${RAW_SECRET}"
+        _raw=$("$MTP_BIN" generate-secret 2>/dev/null | tr -d '[:space:]') \
+            || err "teleproxy generate-secret не удалось."
+        MTP_SECRET="${_raw}"
+        MTP_CLEAN="${_raw}"
         FAKETLS_FLAG=""
         SECRET_MODE="plain"
         ;;
@@ -189,15 +187,15 @@ _set_conf "MTP_PORT"   "$MTP_PORT"
 _set_conf "MTP_SECRET" "$MTP_SECRET"
 
 # ── systemd сервис ────────────────────────────────────────────────────────────
+_extra="${FAKETLS_FLAG:+ ${FAKETLS_FLAG}}"
 cat > /etc/systemd/system/mtproxy.service << EOF
 [Unit]
-Description=MTProxy for Telegram
+Description=MTProxy for Telegram (teleproxy)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStartPre=/bin/sh -c 'curl -sf https://core.telegram.org/getProxySecret -o ${MTP_DIR}/proxy-secret; curl -sf https://core.telegram.org/getProxyConfig -o ${MTP_DIR}/proxy-multi.conf'
-ExecStart=${MTP_BIN} -u nobody -p 8888 -H ${MTP_PORT} -S ${MTP_CLEAN} ${FAKETLS_FLAG} --aes-pwd ${MTP_DIR}/proxy-secret ${MTP_DIR}/proxy-multi.conf -M 1
+ExecStart=${MTP_BIN} -u nobody -p 8888 -H ${MTP_PORT} -S ${MTP_CLEAN}${_extra} --direct
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal

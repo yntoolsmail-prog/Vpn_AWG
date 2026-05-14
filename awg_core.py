@@ -1226,6 +1226,10 @@ def create_backup(prefix: str = "awg_backup") -> str:
         # Module config
         if os.path.exists("/root/modules.conf"):
             tar.add("/root/modules.conf", arcname="modules.conf")
+        # MTProxy config (secret, port) — нужен для сохранения ссылки при переезде
+        _mtp_conf = "/etc/proxy-bot/proxy_bot.env"
+        if os.path.exists(_mtp_conf):
+            tar.add(_mtp_conf, arcname="proxy_bot.env")
     return backup_path
 
 # ── Техобслуживание ─────────────────────────────────────────────────────────────
@@ -1748,28 +1752,80 @@ def ssh_sync_mtproxy_secret(server: dict, secret: str, port: str) -> tuple[bool,
         client = _ssh_connect(ssh)
         # Проверяем наличие MTProxy
         _, stdout, _ = client.exec_command(
-            "test -f /opt/mtproxy/objs/bin/mtproto-proxy && echo OK || echo NO",
+            "test -f /opt/mtproxy/teleproxy && echo OK || echo NO",
             timeout=5
         )
         if stdout.read().decode().strip() != "OK":
             return False, "MTProxy не установлен"
 
+        if secret.startswith("ee"):
+            clean = secret[2:34]
+            extra = " -D www.google.com"
+        elif secret.startswith("dd"):
+            clean = secret[2:]
+            extra = " -R"
+        else:
+            clean = secret
+            extra = ""
+
+        _mtp_bin   = "/opt/mtproxy/teleproxy"
+        exec_start = (
+            f"{_mtp_bin} -u nobody -p 8888 -H {port} -S {clean}"
+            f"{extra} --direct"
+        )
+
+        # Читаем старый порт со slave чтобы обновить ufw
+        _, out_old, _ = client.exec_command(
+            "grep '^MTP_PORT=' /etc/proxy-bot/proxy_bot.env 2>/dev/null | cut -d= -f2 || true",
+            timeout=5
+        )
+        old_port = out_old.read().decode().strip()
+
         cmds = [
             "mkdir -p /etc/proxy-bot",
-            # Обновляем или добавляем MTP_SECRET
+            # Обновляем proxy_bot.env
             f"grep -q '^MTP_SECRET=' /etc/proxy-bot/proxy_bot.env 2>/dev/null "
             f"&& sed -i 's|^MTP_SECRET=.*|MTP_SECRET={secret}|' /etc/proxy-bot/proxy_bot.env "
             f"|| echo 'MTP_SECRET={secret}' >> /etc/proxy-bot/proxy_bot.env",
-            # Обновляем или добавляем MTP_PORT
             f"grep -q '^MTP_PORT=' /etc/proxy-bot/proxy_bot.env 2>/dev/null "
             f"&& sed -i 's|^MTP_PORT=.*|MTP_PORT={port}|' /etc/proxy-bot/proxy_bot.env "
             f"|| echo 'MTP_PORT={port}' >> /etc/proxy-bot/proxy_bot.env",
-            # Перезапускаем сервис
+            # Обновляем ExecStart в systemd service
+            f"sed -i 's|^ExecStart=.*|ExecStart={exec_start}|'"
+            f" /etc/systemd/system/mtproxy.service",
+            "systemctl daemon-reload",
             "systemctl restart mtproxy 2>/dev/null || true",
         ]
+        # Обновляем ufw если порт изменился
+        if old_port and old_port != port:
+            cmds += [
+                f"command -v ufw &>/dev/null && ufw allow {port}/tcp comment 'MTProxy' 2>/dev/null || true",
+                f"command -v ufw &>/dev/null && ufw delete allow {old_port}/tcp 2>/dev/null || true",
+            ]
+        elif not old_port:
+            cmds.append(
+                f"command -v ufw &>/dev/null && ufw allow {port}/tcp comment 'MTProxy' 2>/dev/null || true"
+            )
+
         for cmd in cmds:
             _, stdout, stderr = client.exec_command(cmd, timeout=15)
             stdout.read(); stderr.read()
+
+        # Исправляем MTP_SERVER: получаем реальный публичный IP slave отдельной командой
+        _, out_ip, _ = client.exec_command(
+            "curl -4 -sf --max-time 5 https://api.ipify.org 2>/dev/null "
+            "|| curl -4 -sf --max-time 5 https://ifconfig.me 2>/dev/null",
+            timeout=10
+        )
+        slave_pub_ip = out_ip.read().decode().strip()
+        if slave_pub_ip:
+            fix_server_cmd = (
+                f"grep -q '^MTP_SERVER=' /etc/proxy-bot/proxy_bot.env 2>/dev/null "
+                f"&& sed -i 's|^MTP_SERVER=.*|MTP_SERVER={slave_pub_ip}|' /etc/proxy-bot/proxy_bot.env "
+                f"|| echo 'MTP_SERVER={slave_pub_ip}' >> /etc/proxy-bot/proxy_bot.env"
+            )
+            _, _, _ = client.exec_command(fix_server_cmd, timeout=10)
+
         return True, "✅ MTProxy синхронизирован"
     except Exception as e:
         return False, f"❌ {e}"
@@ -1786,7 +1842,7 @@ def ssh_check_mtproxy_installed(server: dict) -> bool:
         client = _ssh_connect(ssh, timeout=8)
         try:
             _, stdout, _ = client.exec_command(
-                "test -f /opt/mtproxy/objs/bin/mtproto-proxy && echo OK || echo NO",
+                "test -f /opt/mtproxy/teleproxy && echo OK || echo NO",
                 timeout=5
             )
             return stdout.read().decode().strip() == "OK"
@@ -1794,6 +1850,72 @@ def ssh_check_mtproxy_installed(server: dict) -> bool:
             client.close()
     except Exception:
         return False
+
+
+def ssh_get_slave_mtp_stats(server: dict, port: str) -> dict:
+    """Собирает статистику MTProxy со slave по SSH.
+    Возвращает {'conns', 'bytes_in', 'bytes_out', 'ext_ips', 'awg_ips', 'error'}."""
+    if not PARAMIKO_AVAILABLE:
+        return {"conns": 0, "bytes_in": 0, "bytes_out": 0,
+                "ext_ips": [], "awg_ips": [], "error": "paramiko недоступен"}
+    ssh = server.get("ssh", {})
+    try:
+        client = _ssh_connect(ssh, timeout=10)
+        try:
+            # Создаём счётчики если нет, читаем байты, получаем ss
+            cmd = (
+                f"iptables -C INPUT -p tcp --dport {port} -m comment --comment mtp_count_in"
+                f" 2>/dev/null || iptables -I INPUT 1 -p tcp --dport {port}"
+                f" -m comment --comment mtp_count_in; "
+                f"iptables -C OUTPUT -p tcp --sport {port} -m comment --comment mtp_count_out"
+                f" 2>/dev/null || iptables -I OUTPUT 1 -p tcp --sport {port}"
+                f" -m comment --comment mtp_count_out; "
+                f"echo __IN__; "
+                f"iptables -nvxL INPUT 2>/dev/null | awk '/mtp_count_in/{{print $2}}' || echo 0; "
+                f"echo __OUT__; "
+                f"iptables -nvxL OUTPUT 2>/dev/null | awk '/mtp_count_out/{{print $2}}' || echo 0; "
+                f"echo __SS__; "
+                f"ss -tn 2>/dev/null | grep ':{port} ' || true"
+            )
+            _, stdout, _ = client.exec_command(cmd, timeout=12)
+            raw = stdout.read().decode()
+        finally:
+            client.close()
+
+        # Парсим секции
+        bytes_in = bytes_out = 0
+        ext_ips: list[str] = []
+        awg_ips: list[str] = []
+        section = "pre"
+        for line in raw.splitlines():
+            if line == "__IN__":
+                section = "in"
+            elif line == "__OUT__":
+                section = "out"
+            elif line == "__SS__":
+                section = "ss"
+            elif section == "in" and line.strip().isdigit():
+                bytes_in = int(line.strip())
+            elif section == "out" and line.strip().isdigit():
+                bytes_out = int(line.strip())
+            elif section == "ss":
+                parts = line.split()
+                if len(parts) >= 5:
+                    ip = parts[4].rsplit(":", 1)[0].strip("[]")
+                    if ip:
+                        (awg_ips if ip.startswith("10.") else ext_ips).append(ip)
+
+        return {
+            "conns":     len(ext_ips) + len(awg_ips),
+            "bytes_in":  bytes_in,
+            "bytes_out": bytes_out,
+            "ext_ips":   ext_ips,
+            "awg_ips":   awg_ips,
+            "error":     None,
+        }
+    except Exception as e:
+        return {"conns": 0, "bytes_in": 0, "bytes_out": 0,
+                "ext_ips": [], "awg_ips": [], "error": str(e)}
 
 
 # ── SSH-управление SOCKS5 на slave ───────────────────────────────────────────
@@ -1909,6 +2031,11 @@ def ssh_apply_socks5_on_slave(
         ]
         for net in _SOCKS5_PRIVATE_NETS:
             apply_cmds.append(f"iptables -t nat -A {chain} -d {net} -j RETURN")
+        # Исключения: публичные IP всех серверов инфраструктуры (мейн + все слейвы)
+        for srv in load_servers():
+            srv_ip = srv.get("ssh", {}).get("ip", "")
+            if srv_ip:
+                apply_cmds.append(f"iptables -t nat -A {chain} -d {srv_ip} -j RETURN")
         # Определяем внешний интерфейс на slave для блокировки прямого доступа к redsocks2
         _, stdout_iface, _ = client.exec_command(
             "ip route get 8.8.8.8 | grep -o 'dev [^ ]*' | cut -d' ' -f2", timeout=5
