@@ -43,6 +43,11 @@ from sites_data import (
     SITES, CATEGORIES, DEFAULT_SELECTED, ALL_SELECTABLE,
 )
 from module_loader import load_modules
+from strings import (
+    BTN_BACK, BTN_BACK_MENU, BTN_BACK_CARD, BTN_BACK_MAINT,
+    BTN_CANCEL, BTN_DONE, BTN_REFRESH, BTN_MY_DEVICES,
+    HELP_MAIN, HELP_DNS,
+)
 _modules = load_modules()
 
 # ── Первый запуск: создаём bot.env если не существует ─────────────────────────
@@ -157,8 +162,8 @@ def sites_keyboard(selected: set, device_name: str, expanded: set | None = None,
     rows.append([InlineKeyboardButton("➕ Добавить свой сайт", callback_data="sites_add_custom")])
 
     rows.append([
-        InlineKeyboardButton("✅ Готово",   callback_data="sites_done"),
-        InlineKeyboardButton("❌ Отмена",  callback_data=f"device_{device_name}"),
+        InlineKeyboardButton(BTN_DONE,   callback_data="sites_done"),
+        InlineKeyboardButton(BTN_CANCEL,  callback_data=f"device_{device_name}"),
     ])
     return InlineKeyboardMarkup(rows)
 
@@ -360,7 +365,7 @@ async def show_bandwidth(query, period_days: int = 0):
         [InlineKeyboardButton("🗑 Сбросить пики", callback_data="bw_reset_ask")],
         [InlineKeyboardButton("🔄 Обновить",      callback_data=f"bw_period_{period_days}")],
         [InlineKeyboardButton("◀️ Статус",        callback_data="status")],
-        [InlineKeyboardButton("◀️ В меню",        callback_data="back")],
+        [InlineKeyboardButton(BTN_BACK_MENU,        callback_data="back")],
     ])
     await query.edit_message_text("\n".join(lines), reply_markup=kb)
 
@@ -371,7 +376,7 @@ async def show_bw_days(query, page: int = 0):
         await query.edit_message_text(
             "📊 Данных по дням пока нет.",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("◀️ Назад", callback_data="bandwidth")
+                InlineKeyboardButton(BTN_BACK, callback_data="bandwidth")
             ]])
         )
         return
@@ -401,7 +406,7 @@ async def show_bw_days(query, page: int = 0):
 
     kb = InlineKeyboardMarkup([
         nav,
-        [InlineKeyboardButton("◀️ Назад", callback_data="bandwidth")],
+        [InlineKeyboardButton(BTN_BACK, callback_data="bandwidth")],
     ])
     await query.edit_message_text("\n".join(lines), reply_markup=kb)
 
@@ -409,7 +414,7 @@ async def show_bw_reset_ask(query):
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🗑 Сбросить только пики",    callback_data="bw_reset_confirm")],
         [InlineKeyboardButton("💣 Сбросить всё (с нуля)",  callback_data="bw_reset_all_confirm")],
-        [InlineKeyboardButton("❌ Отмена",                  callback_data="bandwidth")],
+        [InlineKeyboardButton(BTN_CANCEL,                  callback_data="bandwidth")],
     ])
     await query.edit_message_text(
         "🗑 Сброс данных трафика\n\n"
@@ -463,7 +468,7 @@ async def do_backup(query):
         await query.edit_message_text(f"❌ Ошибка при создании бэкапа: {e}", reply_markup=back_kb())
 
 def back_kb(target="back"):
-    return InlineKeyboardMarkup([[InlineKeyboardButton("◀️ В меню", callback_data=target)]])
+    return InlineKeyboardMarkup([[InlineKeyboardButton(BTN_BACK_MENU, callback_data=target)]])
 
 # ══════════════════════════════════════════════════════════════════════════════
 # РЕГИСТРАЦИЯ
@@ -642,7 +647,7 @@ async def main_menu(msg, user_id: int, edit=False):
         srv_label = f"🖥 Серверы ({len(servers)})"
         kb = [
             [InlineKeyboardButton("🧲 Добавить устройство",  callback_data="add")],
-            [InlineKeyboardButton("📋 Мои устройства",       callback_data="my_devices")],
+            [InlineKeyboardButton(BTN_MY_DEVICES,       callback_data="my_devices")],
             [InlineKeyboardButton("🌍 Все клиенты",          callback_data="all_clients")],
             [InlineKeyboardButton(pending_label,             callback_data="manage_users")],
             [InlineKeyboardButton(srv_label,                 callback_data="servers")],
@@ -680,7 +685,7 @@ async def main_menu(msg, user_id: int, edit=False):
         kb = []
         if tma_btn:
             kb.append([tma_btn])
-        kb.append([InlineKeyboardButton("📋 Мои устройства",      callback_data="my_devices")])
+        kb.append([InlineKeyboardButton(BTN_MY_DEVICES,      callback_data="my_devices")])
         kb.append([InlineKeyboardButton("🧲 Добавить устройство",  callback_data="add")])
         kb.append([InlineKeyboardButton("📊 Статус сервера",       callback_data="status")])
         kb.append([InlineKeyboardButton("📖 Инструкция",           callback_data="help")])
@@ -866,13 +871,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not real_ip:
             await query.edit_message_text(
                 "❌ Не удалось определить внешний IP.\nПроверьте интернет-соединение сервера.",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data="maintenance")]])
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(BTN_BACK, callback_data="maintenance")]])
             )
             return
         if real_ip == SERVER_IP:
             await query.edit_message_text(
                 f"✅ IP актуален: `{SERVER_IP}`\nОбновление не требуется.",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data="maintenance")]]),
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(BTN_BACK, callback_data="maintenance")]]),
                 parse_mode="Markdown"
             )
             return
@@ -881,7 +886,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ep_note = f"\n⚠️ SERVER_ENDPOINT тоже будет обновлён на `{real_ip}`."
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ Обновить", callback_data=f"update_ip_{real_ip}")],
-            [InlineKeyboardButton("❌ Отмена",   callback_data="maintenance")],
+            [InlineKeyboardButton(BTN_CANCEL,   callback_data="maintenance")],
         ])
         await query.edit_message_text(
             f"🔄 Обновление IP сервера\n\n"
@@ -1006,7 +1011,7 @@ async def show_my_devices(query, user_id: int):
     if not clients:
         kb = [
             [InlineKeyboardButton("➕ Добавить первое устройство", callback_data="add")],
-            [InlineKeyboardButton("◀️ В меню", callback_data="back")],
+            [InlineKeyboardButton(BTN_BACK_MENU, callback_data="back")],
         ]
         await query.edit_message_text(
             "📱 У вас пока нет устройств.\nДобавьте первое!",
@@ -1025,7 +1030,7 @@ async def show_my_devices(query, user_id: int):
 
     kb = [[InlineKeyboardButton(f"📋 {device_short_name(name)}",
            callback_data=f"device_{name}")] for name in clients]
-    kb.append([InlineKeyboardButton("◀️ В меню", callback_data="back")])
+    kb.append([InlineKeyboardButton(BTN_BACK_MENU, callback_data="back")])
     await query.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(kb))
 
 async def show_device(query, name: str, user_id: int):
@@ -1062,7 +1067,7 @@ async def show_device(query, name: str, user_id: int):
         [InlineKeyboardButton("📤 Поделиться кодом (AmneziaVPN)", callback_data=f"share_{name}")],
         [InlineKeyboardButton(excl_label,                      callback_data=f"sites_{name}")],
         [InlineKeyboardButton("🗑 Удалить",                    callback_data=f"del_{name}")],
-        [InlineKeyboardButton("◀️ Назад",                      callback_data=back_target)],
+        [InlineKeyboardButton(BTN_BACK,                      callback_data=back_target)],
     ]
     await query.edit_message_text(info, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
@@ -1088,7 +1093,7 @@ async def show_all_clients(query):
         lines.append(f"• {name} | {hs} | ↓{dl} ↑{ul}")
 
     kb = [[InlineKeyboardButton(f"📋 {name}", callback_data=f"device_{name}")] for name in clients]
-    kb.append([InlineKeyboardButton("◀️ В меню", callback_data="back")])
+    kb.append([InlineKeyboardButton(BTN_BACK_MENU, callback_data="back")])
     await query.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(kb))
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1122,7 +1127,7 @@ async def show_manage_users(query):
     for uid, info in users["approved"].items():
         kb.append([InlineKeyboardButton(f"🚫 Удалить {info['name']}", callback_data=f"kick_user_{uid}")])
 
-    kb.append([InlineKeyboardButton("◀️ В меню", callback_data="back")])
+    kb.append([InlineKeyboardButton(BTN_BACK_MENU, callback_data="back")])
     await query.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(kb))
 
 async def do_kick_user(query, target_id: int):
@@ -1134,7 +1139,7 @@ async def do_kick_user(query, target_id: int):
     count = len(get_user_clients(target_id))
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Да, удалить всё", callback_data=f"confirm_kick_{target_id}")],
-        [InlineKeyboardButton("❌ Отмена", callback_data="manage_users")],
+        [InlineKeyboardButton(BTN_CANCEL, callback_data="manage_users")],
     ])
     await query.edit_message_text(
         f"🚫 Удаление пользователя *{info['name']}*\n\n"
@@ -1180,7 +1185,7 @@ def _server_kb(name: str, action: str) -> InlineKeyboardMarkup:
     for i, srv in enumerate(servers):
         label = f"{srv.get('emoji', '🖥')} {srv.get('name', f'Сервер {i+1}')}"
         rows.append([InlineKeyboardButton(label, callback_data=f"{action}_srv_{i}_{name}")])
-    rows.append([InlineKeyboardButton("◀️ Назад", callback_data=f"device_{name}")])
+    rows.append([InlineKeyboardButton(BTN_BACK, callback_data=f"device_{name}")])
     return InlineKeyboardMarkup(rows)
 
 def _server_eps_kb(name: str, action: str, srv_idx: int) -> InlineKeyboardMarkup:
@@ -1193,7 +1198,7 @@ def _server_eps_kb(name: str, action: str, srv_idx: int) -> InlineKeyboardMarkup
             rows.append([InlineKeyboardButton(
                 ep["value"], callback_data=f"{action}_s{srv_idx}_e{ei}_{name}"
             )])
-    rows.append([InlineKeyboardButton("◀️ Назад", callback_data=f"{action}_{name}")])
+    rows.append([InlineKeyboardButton(BTN_BACK, callback_data=f"{action}_{name}")])
     return InlineKeyboardMarkup(rows)
 
 def _action_icon(action: str) -> str:
@@ -1239,7 +1244,7 @@ async def _show_ep_select(query, name: str, user_id: int, action: str):
             f"{type_icon} {emoji} {ep_val}  ({sname})",
             callback_data=f"{action}_s{si}_e{ei}_{name}"
         )])
-    rows.append([InlineKeyboardButton("◀️ Назад", callback_data=f"device_{name}")])
+    rows.append([InlineKeyboardButton(BTN_BACK, callback_data=f"device_{name}")])
 
     await query.edit_message_text(
         f"{icon} *{_action_label(action)}* — {short}\n\n"
@@ -1541,7 +1546,7 @@ async def do_delete(query, name: str, user_id: int):
     short = device_short_name(name)
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Да, удалить", callback_data=f"confirm_del_{name}")],
-        [InlineKeyboardButton("❌ Отмена",      callback_data=f"device_{name}")],
+        [InlineKeyboardButton(BTN_CANCEL,      callback_data=f"device_{name}")],
     ])
     await query.edit_message_text(
         f"🗑 Удалить устройство *{short}*?\n\nЭто действие необратимо.",
@@ -1586,7 +1591,7 @@ async def show_servers_list(query):
         rows.append([InlineKeyboardButton("➕ Добавить сервер", callback_data="srv_add")])
     rows.append([InlineKeyboardButton("🔍 Проверить DNS", callback_data="srv_checkdns"),
                  InlineKeyboardButton("🗑 Удалить домен", callback_data="srv_deldomain_list")])
-    rows.append([InlineKeyboardButton("◀️ Назад", callback_data="back")])
+    rows.append([InlineKeyboardButton(BTN_BACK, callback_data="back")])
     await query.edit_message_text(
         "\n".join(lines),
         reply_markup=InlineKeyboardMarkup(rows),
@@ -1614,7 +1619,7 @@ async def srv_deldomain_list(query):
     if not rows:
         await query.answer("Нет доменов для удаления.", show_alert=True)
         return
-    rows.append([InlineKeyboardButton("◀️ Назад", callback_data="servers")])
+    rows.append([InlineKeyboardButton(BTN_BACK, callback_data="servers")])
     await query.edit_message_text(
         "🗑 *Удалить домен из системы*\n\nВыберите домен:",
         reply_markup=InlineKeyboardMarkup(rows),
@@ -1633,7 +1638,7 @@ async def srv_deldomain_confirm(query, domain: str):
             break
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🗑 Да, удалить", callback_data=f"srv_deldomain_ok_{domain}")],
-        [InlineKeyboardButton("◀️ Назад",        callback_data="srv_deldomain_list")],
+        [InlineKeyboardButton(BTN_BACK,        callback_data="srv_deldomain_list")],
     ])
     owner_note = f"\nСейчас привязан к: *{owner}*" if owner else ""
     await query.edit_message_text(
@@ -1720,7 +1725,7 @@ async def show_server_card(query, srv_idx: int):
         rows.append([InlineKeyboardButton(sync_icon, callback_data=f"srv_sync_{srv_idx}")])
         rows.append([InlineKeyboardButton("🗑 Удалить сервер", callback_data=f"srv_del_{srv_idx}")])
 
-    rows.append([InlineKeyboardButton("◀️ Назад", callback_data="servers")])
+    rows.append([InlineKeyboardButton(BTN_BACK, callback_data="servers")])
     await query.edit_message_text(
         text,
         reply_markup=InlineKeyboardMarkup(rows),
@@ -1846,7 +1851,7 @@ async def srv_del_confirm(query, srv_idx: int):
     name  = srv.get("name", f"Сервер {srv_idx+1}")
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🗑 Да, удалить", callback_data=f"srv_del_ok_{srv_idx}")],
-        [InlineKeyboardButton("◀️ Назад",        callback_data=f"srv_card_{srv_idx}")],
+        [InlineKeyboardButton(BTN_BACK,        callback_data=f"srv_card_{srv_idx}")],
     ])
     await query.edit_message_text(
         f"Удалить сервер *{emoji} {name}*?",
@@ -1925,7 +1930,7 @@ async def srv_sync_now(query, srv_idx: int):
             f"✅ *{emoji} {name}* синхронизирован с primary.\n\nВсе клиенты скопированы, AWG перезапущен.",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("◀️ Карточка", callback_data=f"srv_card_{srv_idx}")
+                InlineKeyboardButton(BTN_BACK_CARD, callback_data=f"srv_card_{srv_idx}")
             ]])
         )
     except Exception as e:
@@ -1933,7 +1938,7 @@ async def srv_sync_now(query, srv_idx: int):
             f"❌ Ошибка синхронизации *{emoji} {name}*:\n`{e}`",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("◀️ Карточка", callback_data=f"srv_card_{srv_idx}")
+                InlineKeyboardButton(BTN_BACK_CARD, callback_data=f"srv_card_{srv_idx}")
             ]])
         )
 
@@ -1989,7 +1994,7 @@ async def srv_rename_emoji(update, context: ContextTypes.DEFAULT_TYPE):
         f"✅ Сервер переименован: *{srv['emoji']} {srv['name']}*",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("◀️ Карточка", callback_data=f"srv_card_{srv_idx}")
+            InlineKeyboardButton(BTN_BACK_CARD, callback_data=f"srv_card_{srv_idx}")
         ]])
     )
     return ConversationHandler.END
@@ -2093,7 +2098,7 @@ async def srv_adddomain_pick(update, context: ContextTypes.DEFAULT_TYPE):
         f"✅ `{domain}` привязан к *{srv.get('name', '')}*\n{dns_note}{transfer_note}",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("◀️ Карточка", callback_data=f"srv_card_{srv_idx}")
+            InlineKeyboardButton(BTN_BACK_CARD, callback_data=f"srv_card_{srv_idx}")
         ]])
     )
     return ConversationHandler.END
@@ -2128,7 +2133,7 @@ async def srv_adddomain_receive(update, context: ContextTypes.DEFAULT_TYPE):
             f"⚠️ Домен `{domain}` уже есть у этого сервера.",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("◀️ Карточка", callback_data=f"srv_card_{srv_idx}")
+                InlineKeyboardButton(BTN_BACK_CARD, callback_data=f"srv_card_{srv_idx}")
             ]])
         )
         return ConversationHandler.END
@@ -2164,7 +2169,7 @@ async def srv_adddomain_receive(update, context: ContextTypes.DEFAULT_TYPE):
         f"✅ Домен `{domain}` привязан к *{srv.get('name', '')}*\n{dns_note}{transfer_note}",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("◀️ Карточка", callback_data=f"srv_card_{srv_idx}")
+            InlineKeyboardButton(BTN_BACK_CARD, callback_data=f"srv_card_{srv_idx}")
         ]])
     )
     return ConversationHandler.END
@@ -2202,7 +2207,7 @@ async def show_status(query):
     if is_admin:
         kb_rows.append([InlineKeyboardButton("⚡ Перезапустить AWG",  callback_data="restart_awg")])
         kb_rows.append([InlineKeyboardButton("📈 Трафик / пики",      callback_data="bandwidth")])
-    kb_rows.append([InlineKeyboardButton("◀️ В меню", callback_data="back")])
+    kb_rows.append([InlineKeyboardButton(BTN_BACK_MENU, callback_data="back")])
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb_rows))
 
 async def do_diagnostics(query):
@@ -2252,7 +2257,7 @@ async def do_diagnostics(query):
 
     text = "🔍 Диагностика конфигов\n\n" + "\n".join(report)
     await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup([
-        [InlineKeyboardButton("◀️ Техобслуживание", callback_data="maintenance")]
+        [InlineKeyboardButton(BTN_BACK_MAINT, callback_data="maintenance")]
     ]))
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2264,7 +2269,7 @@ async def start_restore(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("❌ Отмена", callback_data="restore_cancel")],
+        [InlineKeyboardButton(BTN_CANCEL, callback_data="restore_cancel")],
     ])
     await query.edit_message_text(
         "📥 Восстановление из бэкапа\n\n"
@@ -2339,7 +2344,7 @@ async def receive_restore_file(update: Update, context: ContextTypes.DEFAULT_TYP
 
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Подтвердить восстановление", callback_data="restore_confirm")],
-        [InlineKeyboardButton("❌ Отмена",                     callback_data="restore_cancel")],
+        [InlineKeyboardButton(BTN_CANCEL,                     callback_data="restore_cancel")],
     ])
     await update.message.reply_text(
         f"📦 Содержимое бэкапа:\n\n"
@@ -2453,7 +2458,7 @@ async def show_ssh_admin(query):
         [InlineKeyboardButton("📥 Скачать приватный ключ", callback_data="ssh_getkey")],
         [InlineKeyboardButton(f"{pw_icon} {pw_btn}",       callback_data="ssh_toggle_pass")],
         [InlineKeyboardButton("🔄 Пересоздать ключ",       callback_data="ssh_regen_ask")],
-        [InlineKeyboardButton("◀️ Техобслуживание",        callback_data="maintenance")],
+        [InlineKeyboardButton(BTN_BACK_MAINT,        callback_data="maintenance")],
     ])
     await query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
 
@@ -2543,7 +2548,7 @@ async def do_ssh_regen_ask(query):
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ Да, пересоздать", callback_data="ssh_regen_do")],
-            [InlineKeyboardButton("❌ Отмена",          callback_data="ssh_admin")],
+            [InlineKeyboardButton(BTN_CANCEL,          callback_data="ssh_admin")],
         ])
     )
 
@@ -2604,7 +2609,7 @@ async def show_maintenance(query):
         [InlineKeyboardButton("♻️ Обновить IP исключений",        callback_data="refresh_subnets")],
         [InlineKeyboardButton("🔑 SSH-доступ",                     callback_data="ssh_admin")],
         [InlineKeyboardButton("✅ Отмечено — всё ок",            callback_data="maint_done")],
-        [InlineKeyboardButton("◀️ В меню",                       callback_data="back")],
+        [InlineKeyboardButton(BTN_BACK_MENU,                       callback_data="back")],
     ])
     await query.edit_message_text(text + ip_status, reply_markup=kb)
 
@@ -2637,7 +2642,7 @@ async def show_maint_tz(query):
         f"{mark_sys}🖥 Как у сервера ({sys_tz})", callback_data=f"set_tz_{sys_tz}"
     )])
     kb_rows.append([InlineKeyboardButton("⌨️ Ввести вручную", callback_data="set_tz_manual")])
-    kb_rows.append([InlineKeyboardButton("◀️ Назад", callback_data="maintenance")])
+    kb_rows.append([InlineKeyboardButton(BTN_BACK, callback_data="maintenance")])
     await query.edit_message_text(
         f"🕐 Часовой пояс\n\n"
         f"Текущий бота: *{TZ}*\n"
@@ -2654,7 +2659,7 @@ async def ask_tz_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("❌ Отмена", callback_data="maint_tz")],
+        [InlineKeyboardButton(BTN_CANCEL, callback_data="maint_tz")],
     ])
     await query.edit_message_text(
         "⌨️ *Ввод часового пояса вручную*\n\n"
@@ -2722,7 +2727,7 @@ async def do_set_tz(query, tz: str):
         await query.edit_message_text(
             f"❌ Ошибка: {e}",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("◀️ Назад", callback_data="maintenance")
+                InlineKeyboardButton(BTN_BACK, callback_data="maintenance")
             ]])
         )
 
@@ -2750,7 +2755,7 @@ async def do_maint_ptb(query):
         f"Скорее всего потребуется небольшая правка bot.py."
     )
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("◀️ Назад", callback_data="maintenance")],
+        [InlineKeyboardButton(BTN_BACK, callback_data="maintenance")],
     ])
     await query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
 
@@ -2773,7 +2778,7 @@ async def do_refresh_subnets(query, context):
         "Опрашиваются все домены из базы и исключений пользователей.\n"
         "Обычно занимает 15–60 секунд.",
         reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("◀️ Техобслуживание", callback_data="maintenance")
+            InlineKeyboardButton(BTN_BACK_MAINT, callback_data="maintenance")
         ]])
     )
     chat_id = query.message.chat_id
@@ -2793,7 +2798,7 @@ async def do_refresh_subnets(query, context):
             bot.edit_message_text(
                 chat_id=chat_id, message_id=msg_id, text=text,
                 reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("◀️ Техобслуживание", callback_data="maintenance")
+                    InlineKeyboardButton(BTN_BACK_MAINT, callback_data="maintenance")
                 ]])
             ),
             loop
@@ -2826,85 +2831,16 @@ async def maintenance_reminder(context: ContextTypes.DEFAULT_TYPE):
 async def show_help(query):
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🌐 DNS — почему это важно", callback_data="help_dns")],
-        [InlineKeyboardButton("◀️ В меню", callback_data="back")],
+        [InlineKeyboardButton(BTN_BACK_MENU, callback_data="back")],
     ])
-    lines = [
-        "📖 *Инструкция*\n",
-        "▶️ *ОТКРЫТЬ VPN* 🔑 — веб-панель управления прямо в Telegram.",
-        "🧲 *Добавить устройство* — создать VPN-профиль.",
-        "📋 *Мои устройства* — ваши профили и настройки.",
-        "📊 *Статус сервера* — онлайн и нагрузка сервера.\n",
-        "━━━━━━━━━━━━",
-        "⚠️ *Важно — один гаджет = один профиль!*",
-        "Не используйте один конфиг на нескольких устройствах —"
-        " подключение будет нестабильным. Создайте отдельный профиль для каждого.\n",
-        "📱 *Два приложения на выбор:*",
-        "• *AmneziaVPN* — раздельное туннелирование, для телефонов и планшетов.",
-        "  Только нужные сайты идут через VPN, остальные — напрямую.",
-        "• *AmneziaWG* — лёгкий клиент, для ПК и телевизоров.",
-        "  Весь трафик через VPN или с настраиваемыми исключениями.\n",
-        "━━━━━━━━━━━━",
-        "📲 *Подключение через AmneziaVPN:*",
-        "1. Установите *AmneziaVPN* (Android, iOS, Mac — Play Market / App Store)",
-        "2. 📋 Мои устройства → карточка → *📤 Поделиться кодом*",
-        "3. Ссылка скопируется в буфер обмена",
-        "4. В AmneziaVPN: + → вставьте ссылку → *Добавить*",
-        "5. Включите VPN — готово!\n",
-        "━━━━━━━━━━━━",
-        "💻 *Подключение через AmneziaWG:*",
-        "1. Установите *AmneziaWG* (Android, iOS, Windows, Mac — amnezia.org)",
-        "2. 📋 Мои устройства → карточка → *📄 .conf* или *📱 QR-код*",
-        "3. В AmneziaWG: + → «Добавить из файла» или «Сканировать QR»",
-        "4. Включите тоннель — готово!\n",
-        "━━━━━━━━━━━━",
-        "🌐 *DNS — важно для стабильной работы*",
-        "Нажмите кнопку ниже чтобы узнать почему нужно настроить DNS на устройстве.",
-    ]
-    text = "\n".join(lines).replace("\n\n\n", "\n\n")
-    await query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
+    await query.edit_message_text(HELP_MAIN, reply_markup=kb, parse_mode="Markdown")
 
 
 async def show_help_dns(query):
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("◀️ Назад к инструкции", callback_data="help")],
     ])
-    text = (
-        "🌐 *DNS — почему это важно*\n\n"
-        "Если VPN вдруг перестал подключаться после того как всё работало — "
-        "скорее всего сменился IP-адрес сервера, а ваш роутер или провайдер "
-        "ещё не узнал об этом.\n\n"
-        "*Почему так происходит?*\n"
-        "Когда меняется IP в настройках домена, это изменение расходится по интернету "
-        "постепенно. На мобильном интернете это занимает *2–5 минут*. "
-        "На Wi-Fi через некоторых провайдеров — *до 3–4 часов*, потому что роутер "
-        "кэширует старый адрес и игнорирует настройки DNS даже если вы выставили 1.1.1.1.\n\n"
-        "Это не проблема только нашего VPN — так работает интернет в целом. "
-        "Любые изменения в домене (сайт, почта, сервисы) будут доходить медленно "
-        "если на устройстве стоит медленный DNS провайдера.\n\n"
-        "✅ *Решение — поставить быстрый DNS на каждое устройство:*\n"
-        "Основной: `1.1.1.1` (Cloudflare)\n"
-        "Резервный: `1.0.0.1`\n\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n"
-        "📱 *Android:*\n"
-        "Настройки → Wi-Fi → удержать сеть → Изменить → "
-        "Дополнительно → DNS 1: `1.1.1.1` DNS 2: `1.0.0.1`\n"
-        "Или: Настройки → Подключения → Другие настройки → "
-        "Частный DNS → ввести `one.one.one.one`\n\n"
-        "💻 *Windows:*\n"
-        "Панель управления → Центр управления сетями → "
-        "Изменение параметров адаптера → ПКМ на Wi-Fi → Свойства → "
-        "IP версии 4 → Свойства → вручную: `1.1.1.1` и `1.0.0.1`\n\n"
-        "🍎 *iPhone / iPad:*\n"
-        "Настройки → Wi-Fi → (i) рядом с сетью → "
-        "Настроить DNS → Вручную → удалить старые → добавить `1.1.1.1` и `1.0.0.1`\n\n"
-        "🖥 *macOS:*\n"
-        "Системные настройки → Сеть → Wi-Fi → Дополнительно → "
-        "DNS → `+` → `1.1.1.1` и `1.0.0.1`\n\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n"
-        "После настройки DNS изменения IP-адресов будут доходить до вас "
-        "за *2–5 минут* вместо нескольких часов."
-    )
-    await query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
+    await query.edit_message_text(HELP_DNS, reply_markup=kb, parse_mode="Markdown")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ИСКЛЮЧЕНИЯ САЙТОВ (split tunneling)
@@ -3069,7 +3005,7 @@ async def sites_add_custom_start(update: Update, context: ContextTypes.DEFAULT_T
         "Домен будет исключён из VPN-туннеля.\n"
         "Или нажмите Отмена.",
         reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("❌ Отмена", callback_data=f"sites_{name}")
+            InlineKeyboardButton(BTN_CANCEL, callback_data=f"sites_{name}")
         ]]),
         parse_mode="Markdown",
     )
@@ -3153,7 +3089,7 @@ async def add_device_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
 
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("❌ Отмена", callback_data="add_cancel")]
+        [InlineKeyboardButton(BTN_CANCEL, callback_data="add_cancel")]
     ])
     await query.edit_message_text(
         f"🧲 Добавление устройства\n\n"
@@ -3230,7 +3166,7 @@ async def receive_device_name(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("📋 Перейти к устройству", callback_data=f"device_{full_name}")],
-        [InlineKeyboardButton("◀️ В меню", callback_data="back")],
+        [InlineKeyboardButton(BTN_BACK_MENU, callback_data="back")],
     ])
     await update.message.reply_text(
         f"✅ Устройство *{device_raw}* создано!\n\n"
@@ -3512,7 +3448,7 @@ async def post_init(application) -> None:
     """Регистрирует команды бота в Telegram (кнопка «Меню»)."""
     commands = [
         BotCommand("start",  "🏠 Главная"),
-        BotCommand("cancel", "❌ Отмена"),
+        BotCommand("cancel", BTN_CANCEL),
     ]
     await application.bot.set_my_commands(commands)
     logger.info("Команды бота зарегистрированы: /start /cancel")

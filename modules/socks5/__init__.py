@@ -27,6 +27,7 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
+from .strings import BTN_BACK_MENU
 
 logger = logging.getLogger(__name__)
 
@@ -336,7 +337,7 @@ async def _show_socks5_menu(query):
             "`bash <(curl -s https://raw.githubusercontent.com/"
             "yntoolsmail-prog/Vpn_AWG/main/New/awg-socks5-installer-v3.sh)`",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("◀️ В меню", callback_data="back")]
+                [InlineKeyboardButton(BTN_BACK_MENU, callback_data="back")]
             ]),
             parse_mode="Markdown"
         )
@@ -388,7 +389,7 @@ async def _show_socks5_menu(query):
     kb.append([InlineKeyboardButton("⚙️ Настроить SOCKS5", callback_data="socks5_setup")])
     if active_client:
         kb.append([InlineKeyboardButton("❌ Отключить SOCKS5", callback_data="socks5_disable")])
-    kb.append([InlineKeyboardButton("◀️ В меню", callback_data="back")])
+    kb.append([InlineKeyboardButton(BTN_BACK_MENU, callback_data="back")])
 
     await query.edit_message_text(
         header,
