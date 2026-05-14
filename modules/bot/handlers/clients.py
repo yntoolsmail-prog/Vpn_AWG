@@ -70,7 +70,6 @@ async def show_device(query, name: str, user_id: int):
         f"📍 Endpoint: {ep}\n"
         f"📶 Трафик: ↓{dl} ↑{ul}"
     )
-    # Статус исключений
     saved = load_client_excl(name)
     excl_count = len(saved.get("sites", [])) if saved else 0
     excl_label = f"🌐 Исключения сайтов [{excl_count}]" if excl_count else "🌐 Исключения сайтов [нет]"
@@ -145,7 +144,6 @@ async def _show_ep_select(query, name: str, user_id: int, action: str):
     short = device_short_name(name)
     icon  = _action_icon(action)
 
-    # Собираем все эндпоинты всех серверов
     all_eps = []
     for si, srv in enumerate(servers):
         for ei, ep in enumerate(srv.get("endpoints", [])):
@@ -587,7 +585,6 @@ async def receive_device_name(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return ConversationHandler.END
 
-    # Синхронизируем нового клиента со всеми slave-серверами
     from handlers.servers import _sync_peer_to_all_slaves
     sync_errors = await _sync_peer_to_all_slaves(
         full_name, keys["pub"], keys["psk"], keys["ip"]

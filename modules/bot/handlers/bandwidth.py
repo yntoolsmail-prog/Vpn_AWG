@@ -199,7 +199,6 @@ async def show_bandwidth(query, period_days: int = 0):
     else:
         lines.append("\n📊 Гистограмма: данных пока нет, накапливается...")
 
-    # Кнопки периода — подсвечиваем активный
     def p(label, days):
         mark = "✅ " if days == period_days else ""
         return InlineKeyboardButton(f"{mark}{label}", callback_data=f"bw_period_{days}")

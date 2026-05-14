@@ -156,7 +156,6 @@ async def show_server_card(query, srv_idx: int):
     ]
 
     if not is_pri:
-        # Добавляем блок синхронизации для slave
         loop = asyncio.get_event_loop()
         slave_peers = await loop.run_in_executor(None, _ssh_get_slave_peer_count, srv)
         try:
@@ -324,7 +323,6 @@ async def srv_del_ok(query, srv_idx: int):
     name  = srv.get("name", "Сервер")
     emoji = srv.get("emoji", "🖥")
 
-    # Останавливаем AWG на slave по SSH
     stop_note = ""
     if _PARAMIKO_AVAILABLE:
         ssh = srv.get("ssh", {})
@@ -463,7 +461,6 @@ async def srv_adddomain_start(update, context: ContextTypes.DEFAULT_TYPE):
     srv_idx = int(query.data.split("_")[-1])
     context.user_data["srv_domain"] = {"srv_idx": srv_idx}
 
-    # Собираем все эндпоинты из других серверов для быстрого выбора
     servers = load_servers()
     all_eps = []
     for si, srv in enumerate(servers):

@@ -1047,7 +1047,6 @@ def collect_stats_full() -> dict:
     cpu_count  = sys["cpu_count"]
     cpu_pct    = sys["cpu_pct"]
 
-    # Текущая скорость из последней записи пиков
     last_bw = peak.get("last", {})
 
     # Суммарный трафик клиентов из awg dump (накопительно с перезагрузки):
@@ -1461,7 +1460,6 @@ def ssh_toggle_password_auth_all(enable: bool) -> dict:
     val = "yes" if enable else "no"
     results: dict = {"primary": False, "slaves": {}}
 
-    # Primary — локально
     try:
         _sp.run(
             ["bash", "-c",
@@ -1484,7 +1482,6 @@ def ssh_toggle_password_auth_all(enable: bool) -> dict:
     except Exception:
         pass
 
-    # Slaves
     if not PARAMIKO_AVAILABLE:
         return results
     for srv in load_servers():
@@ -1547,7 +1544,6 @@ def ssh_regen_admin_key() -> bool:
                 except Exception as _e:
                     slave_errors.append(f"{name}: {_e}")
 
-        # Обновляем локальный authorized_keys
         auth = "/root/.ssh/authorized_keys"
         if os.path.exists(auth):
             with open(auth) as f:
@@ -1557,7 +1553,6 @@ def ssh_regen_admin_key() -> bool:
         with open(auth, "a") as f:
             f.write(new_pub + "\n")
 
-        # Заменяем ключ
         os.replace(temp, ADMIN_KEY_PATH)
         os.replace(temp + ".pub", ADMIN_KEY_PATH + ".pub")
         return True, slave_errors
@@ -1640,7 +1635,6 @@ def ssh_clone_awg_to_slave(server: dict) -> None:
 
         new_conf = "\n".join(new_conf_lines) + "\n"
 
-        # Пишем новый конфиг на slave
         transport = client.get_transport()
         chan = transport.open_session()
         chan.exec_command("cat > /etc/amnezia/amneziawg/awg0.conf")
@@ -1685,7 +1679,6 @@ def ssh_sync_peer_to_slave(server: dict, name: str, pub: str, psk: str, ip: str)
             timeout=10
         )
         stdout.read(); stderr.read()
-        # Добавляем в работающий интерфейс
         transport = client.get_transport()
         chan = transport.open_session()
         chan.exec_command(
@@ -1750,7 +1743,6 @@ def ssh_sync_mtproxy_secret(server: dict, secret: str, port: str) -> tuple[bool,
     ssh = server.get("ssh", {})
     try:
         client = _ssh_connect(ssh)
-        # Проверяем наличие MTProxy
         _, stdout, _ = client.exec_command(
             "test -f /opt/mtproxy/teleproxy && echo OK || echo NO",
             timeout=5
@@ -1783,20 +1775,17 @@ def ssh_sync_mtproxy_secret(server: dict, secret: str, port: str) -> tuple[bool,
 
         cmds = [
             "mkdir -p /etc/proxy-bot",
-            # Обновляем proxy_bot.env
             f"grep -q '^MTP_SECRET=' /etc/proxy-bot/proxy_bot.env 2>/dev/null "
             f"&& sed -i 's|^MTP_SECRET=.*|MTP_SECRET={secret}|' /etc/proxy-bot/proxy_bot.env "
             f"|| echo 'MTP_SECRET={secret}' >> /etc/proxy-bot/proxy_bot.env",
             f"grep -q '^MTP_PORT=' /etc/proxy-bot/proxy_bot.env 2>/dev/null "
             f"&& sed -i 's|^MTP_PORT=.*|MTP_PORT={port}|' /etc/proxy-bot/proxy_bot.env "
             f"|| echo 'MTP_PORT={port}' >> /etc/proxy-bot/proxy_bot.env",
-            # Обновляем ExecStart в systemd service
             f"sed -i 's|^ExecStart=.*|ExecStart={exec_start}|'"
             f" /etc/systemd/system/mtproxy.service",
             "systemctl daemon-reload",
             "systemctl restart mtproxy 2>/dev/null || true",
         ]
-        # Обновляем ufw если порт изменился
         if old_port and old_port != port:
             cmds += [
                 f"command -v ufw &>/dev/null && ufw allow {port}/tcp comment 'MTProxy' 2>/dev/null || true",
@@ -1882,7 +1871,6 @@ def ssh_get_slave_mtp_stats(server: dict, port: str) -> dict:
         finally:
             client.close()
 
-        # Парсим секции
         bytes_in = bytes_out = 0
         ext_ips: list[str] = []
         awg_ips: list[str] = []
@@ -1951,7 +1939,6 @@ def ssh_apply_socks5_on_slave(
         if stdout.read().decode().strip() != "OK":
             return False, "redsocks2 не установлен"
 
-        # Пишем redsocks2.conf
         auth_lines = ""
         if socks5_user:
             auth_lines = f'    login = "{socks5_user}";\n    password = "{socks5_pass}";\n'

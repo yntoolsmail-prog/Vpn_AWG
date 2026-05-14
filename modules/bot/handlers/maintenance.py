@@ -153,12 +153,10 @@ async def receive_restore_file(update: Update, context: ContextTypes.DEFAULT_TYP
 
     await update.message.reply_text("⏳ Проверяю бэкап...")
 
-    # Скачиваем во временный файл
     tmp_path = f"/tmp/restore_{int(time.time())}.tar.gz"
     tg_file  = await doc.get_file()
     await tg_file.download_to_drive(tmp_path)
 
-    # Проверяем содержимое архива
     try:
         with tarfile.open(tmp_path, "r:gz") as tar:
             names = tar.getnames()
@@ -167,7 +165,6 @@ async def receive_restore_file(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text(f"❌ Не удалось открыть архив: {e}")
         return ConversationHandler.END
 
-    # Ищем ключевые файлы
     has_conf    = any(n.endswith(".conf") and "awg" in n for n in names)
     has_env     = "server.env" in names
     has_clients = any(n.startswith("clients/") for n in names)
@@ -182,7 +179,6 @@ async def receive_restore_file(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return ConversationHandler.END
 
-    # Сохраняем путь к файлу в user_data
     context.user_data["restore_path"] = tmp_path
 
     kb = InlineKeyboardMarkup([
@@ -217,7 +213,6 @@ async def confirm_restore(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.edit_message_text("⏳ Создаю бэкап текущего состояния...")
 
-    # Автобэкап перед восстановлением
     try:
         auto_backup = create_backup(prefix="pre_restore")
     except Exception as e:
@@ -235,7 +230,6 @@ async def confirm_restore(update: Update, context: ContextTypes.DEFAULT_TYPE):
         shutil.rmtree(CLIENTS_DIR)
     os.makedirs(CLIENTS_DIR)
 
-    # 3. Распаковываем бэкап
     try:
         with tarfile.open(tmp_path, "r:gz") as tar:
             tar.extractall("/etc/amnezia/amneziawg/")
@@ -420,7 +414,6 @@ async def show_maintenance(query):
     ubuntu    = get_ubuntu_version()
     kernel    = get_kernel_version()
 
-    # Текущий часовой пояс
     try:
         tz_sys = subprocess.check_output(["cat", "/etc/timezone"], text=True).strip()
     except:
@@ -435,7 +428,6 @@ async def show_maintenance(query):
         f"🕐 Часовой пояс: {tz_sys} (бот: {TZ})\n\n"
         f"Рекомендуется проводить раз в 6 месяцев."
     )
-    # Проверяем актуальность IP для отображения в меню
     real_ip = get_real_server_ip()
     ip_status = ""
     if real_ip and real_ip != SERVER_IP:
@@ -530,7 +522,6 @@ async def receive_tz_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
         return WAITING_TZ_INPUT
-    # Применяем
     try:
         env_lines = open(ENV_FILE).readlines()
         new_lines = [l for l in env_lines if not l.startswith("TIMEZONE=")]
@@ -551,15 +542,12 @@ async def receive_tz_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def do_set_tz(query, tz: str):
     """Применяет новый часовой пояс — пишет в server.env и перезапускает бота"""
     try:
-        # Проверяем что пояс существует
         subprocess.check_output(["timedatectl", "list-timezones"], text=True)
-        # Пишем в server.env
         env_lines = open(ENV_FILE).readlines()
         new_lines = [l for l in env_lines if not l.startswith("TIMEZONE=")]
         new_lines.append(f"TIMEZONE={tz}\n")
         with open(ENV_FILE, "w") as f:
             f.writelines(new_lines)
-        # Устанавливаем системный часовой пояс тоже
         subprocess.run(["timedatectl", "set-timezone", tz], check=True)
         await query.edit_message_text(
             f"✅ Часовой пояс изменён на *{tz}*\n\nБот перезапустится через 3 секунды...",
