@@ -150,11 +150,17 @@ _delete_module() {
 
 # Интерактивное меню выбора модулей
 _modules_menu() {
-    local _repo_conf
-    _repo_conf=$(curl -fsSL "${REPO_RAW}/modules.conf" 2>/dev/null) || {
-        warn "Не удалось загрузить список модулей из репозитория."
-        return
-    }
+    local _repo_conf _offline=0
+    _repo_conf=$(curl -fsSL --max-time 10 "${REPO_RAW}/modules.conf" 2>/dev/null) || true
+
+    if [[ -z "$_repo_conf" ]]; then
+        warn "GitHub недоступен — использую локальный список модулей."
+        _repo_conf=$(cat /root/modules.conf 2>/dev/null) || {
+            warn "Не удалось прочитать /root/modules.conf."
+            return
+        }
+        _offline=1
+    fi
 
     local -a _avail=()
     declare -A _repo_desc=()
@@ -186,7 +192,7 @@ _modules_menu() {
     fi
 
     if [[ ${#_avail[@]} -eq 0 ]]; then
-        warn "Дополнительных модулей в репозитории не найдено."
+        warn "Дополнительных модулей не найдено."
         return
     fi
 
@@ -213,7 +219,9 @@ _modules_menu() {
         echo ""
         echo -e "  ${BOLD}Базовые (всегда активны):${NC}"
         echo -e "  ${GREEN}[✓]${NC} bot  — Telegram бот"
-        echo -e "  ${GREEN}[✓]${NC} tma  — Веб-панель"
+        echo ""
+        [[ "$_offline" -eq 1 ]] && \
+            echo -e "  ${YELLOW}[!] Офлайн-режим — установка новых модулей недоступна${NC}"
         echo ""
         echo -e "  ${BOLD}Дополнительные:${NC}"
         echo ""
@@ -252,6 +260,20 @@ _modules_menu() {
             0) return ;;
             a|A)
                 echo ""
+                if [[ "$_offline" -eq 1 ]]; then
+                    # Проверяем: есть ли попытка включить модуль который не установлен
+                    local _has_new_enable=0
+                    for _n in "${_avail[@]}"; do
+                        if [[ "${_new_state[$_n]}" == "on" && "${_cur_state[$_n]:-off}" != "on" ]]; then
+                            _has_new_enable=1; break
+                        fi
+                    done
+                    if [[ "$_has_new_enable" -eq 1 ]]; then
+                        warn "Офлайн-режим: установка новых модулей требует доступа к интернету."
+                        read -p "  Нажмите Enter..." _dummy
+                        continue
+                    fi
+                fi
                 _apply_modules _new_state _avail
                 # Обновляем _cur_state после применения
                 while IFS='=' read -r _n _s; do
