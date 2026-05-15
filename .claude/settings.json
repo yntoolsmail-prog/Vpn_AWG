@@ -1,5 +1,16 @@
 {
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd /home/user/Vpn_AWG && INPUT=$(cat); echo \"$INPUT\" | grep -qE 'git (commit|push)' || exit 0; STAGED_PY_SH=$(git diff --cached --name-only 2>/dev/null | grep -E '\\.(py|sh)$' | grep -v '^$' | head -1); STAGED_CLAUDE=$(git diff --cached --name-only 2>/dev/null | grep -F 'CLAUDE.md' | head -1); if [ -n \"$STAGED_PY_SH\" ] && [ -z \"$STAGED_CLAUDE\" ]; then echo '{\"decision\": \"block\", \"reason\": \"CLAUDE.md не обновлён — в коммите есть .py/.sh файлы но нет изменений в CLAUDE.md. Обнови CLAUDE.md и добавь его в коммит.\"}'; fi"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
