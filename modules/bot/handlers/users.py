@@ -1,7 +1,6 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from awg_core import ADMIN_ID, get_user_clients, get_user_display, load_users, save_users, remove_client_from_awg
-from strings import BTN_BACK, BTN_CANCEL, BTN_BACK_MENU
-from .common import back_kb
+from .common import back_kb, BTN_BACK, BTN_CANCEL, BTN_BACK_MENU
 
 
 async def show_manage_users(query):

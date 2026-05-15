@@ -8,8 +8,7 @@ from awg_core import (
     get_bw_top, get_log_days, get_vnstat_monthly,
     load_bw_peak, read_iface_bytes, save_bw_peak, get_host_iface,
 )
-from strings import BTN_BACK, BTN_BACK_MENU, BTN_CANCEL
-from .common import back_kb
+from .common import back_kb, BTN_BACK, BTN_BACK_MENU, BTN_CANCEL
 
 
 async def bw_monitor_job(context: ContextTypes.DEFAULT_TYPE):

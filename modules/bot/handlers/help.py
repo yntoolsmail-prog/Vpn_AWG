@@ -1,5 +1,6 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from strings import BTN_BACK_MENU, HELP_MAIN, HELP_DNS
+from strings import HELP_MAIN, HELP_DNS
+from .common import BTN_BACK_MENU
 
 
 async def show_help(query):

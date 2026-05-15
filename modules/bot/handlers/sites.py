@@ -8,8 +8,7 @@ from awg_core import (
     process_domain, run_subnet_daemon,
 )
 from sites_data import SITES, CATEGORIES, DEFAULT_SELECTED, ALL_SELECTABLE
-from strings import BTN_BACK, BTN_BACK_MENU, BTN_CANCEL
-from .common import sites_keyboard, WAITING_SITES_DOMAIN
+from .common import sites_keyboard, WAITING_SITES_DOMAIN, BTN_BACK, BTN_BACK_MENU, BTN_CANCEL
 import os
 
 

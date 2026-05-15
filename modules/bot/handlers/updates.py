@@ -6,8 +6,7 @@ from awg_core import (
     get_all_clients, get_real_server_ip, is_approved, load_servers, load_users,
     SERVER_ENDPOINT,
 )
-from strings import BTN_BACK_MENU, BTN_CANCEL
-from .common import IMG_BASE, back_kb
+from .common import IMG_BASE, back_kb, BTN_BACK_MENU, BTN_CANCEL
 
 logger = logging.getLogger(__name__)
 

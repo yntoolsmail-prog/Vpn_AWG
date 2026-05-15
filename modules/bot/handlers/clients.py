@@ -12,8 +12,7 @@ from awg_core import (
     remove_client_from_awg, resolve_endpoint, save_client_excl,
     fmt_handshake, fmt_bytes, SERVER_PUBLIC,
 )
-from strings import BTN_BACK, BTN_BACK_MENU, BTN_BACK_CARD, BTN_CANCEL, BTN_MY_DEVICES
-from .common import _md, back_kb, sites_keyboard, _tma_button, IMG_BASE, WAITING_DEVICE_NAME
+from .common import _md, back_kb, sites_keyboard, _tma_button, IMG_BASE, WAITING_DEVICE_NAME, BTN_BACK, BTN_BACK_MENU, BTN_BACK_CARD, BTN_CANCEL, BTN_MY_DEVICES
 import logging
 
 logger = logging.getLogger(__name__)

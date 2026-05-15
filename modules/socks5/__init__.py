@@ -27,7 +27,7 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
-from .strings import BTN_BACK_MENU
+BTN_BACK_MENU = "◀️ В меню"
 
 logger = logging.getLogger(__name__)
 

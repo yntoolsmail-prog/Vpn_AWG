@@ -15,8 +15,7 @@ from awg_core import (
     process_domain, run_subnet_daemon,
     load_servers,
 )
-from strings import BTN_BACK, BTN_BACK_MENU, BTN_BACK_MAINT, BTN_CANCEL
-from .common import back_kb, WAITING_RESTORE_FILE, WAITING_TZ_INPUT
+from .common import back_kb, WAITING_RESTORE_FILE, WAITING_TZ_INPUT, BTN_BACK, BTN_BACK_MENU, BTN_BACK_MAINT, BTN_CANCEL
 
 logger = logging.getLogger(__name__)
 

@@ -43,10 +43,9 @@ from sites_data import (
     SITES, CATEGORIES, DEFAULT_SELECTED, ALL_SELECTABLE,
 )
 from module_loader import load_modules
-from strings import (
+from handlers.common import (
     BTN_BACK, BTN_BACK_MENU, BTN_BACK_CARD, BTN_BACK_MAINT,
     BTN_CANCEL, BTN_DONE, BTN_REFRESH, BTN_MY_DEVICES,
-    HELP_MAIN, HELP_DNS,
 )
 from handlers.common import (
     WAITING_REGISTER_NAME, WAITING_DEVICE_NAME, WAITING_RESTORE_FILE,

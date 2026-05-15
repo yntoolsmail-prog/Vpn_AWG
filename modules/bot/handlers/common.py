@@ -1,7 +1,16 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from awg_core import TMA_URL, ADMIN_ID
 from sites_data import SITES, CATEGORIES, DEFAULT_SELECTED, ALL_SELECTABLE
-from strings import BTN_DONE, BTN_CANCEL, BTN_BACK_MENU
+
+# Кнопки навигации — единая точка определения для всех хендлеров
+BTN_BACK       = "◀️ Назад"
+BTN_BACK_MENU  = "◀️ В меню"
+BTN_BACK_CARD  = "◀️ Карточка"
+BTN_BACK_MAINT = "◀️ Техобслуживание"
+BTN_CANCEL     = "❌ Отмена"
+BTN_DONE       = "✅ Готово"
+BTN_REFRESH    = "🔄 Обновить"
+BTN_MY_DEVICES = "📋 Мои устройства"
 
 # Состояния ConversationHandler
 WAITING_REGISTER_NAME  = 10

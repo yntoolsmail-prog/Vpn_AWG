@@ -14,8 +14,7 @@ from awg_core import (
     ssh_stop_slave_awg      as _ssh_stop_slave_awg,
     ssh_get_slave_peer_count as _ssh_get_slave_peer_count,
 )
-from strings import BTN_BACK, BTN_BACK_MENU, BTN_CANCEL, BTN_BACK_CARD
-from .common import back_kb, WAITING_SRV_DOMAIN, WAITING_SRV_EDIT_NAME, WAITING_SRV_EDIT_EMOJI
+from .common import back_kb, WAITING_SRV_DOMAIN, WAITING_SRV_EDIT_NAME, WAITING_SRV_EDIT_EMOJI, BTN_BACK, BTN_BACK_MENU, BTN_CANCEL, BTN_BACK_CARD
 
 
 def _count_peers_in_conf(conf_text: str) -> int:
