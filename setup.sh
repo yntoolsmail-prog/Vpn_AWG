@@ -124,8 +124,12 @@ if [[ "$REPO_BRANCH" != "main" && -z "$_REEXEC_BRANCH" ]]; then
     info "Загружаю setup.sh из ветки ${REPO_BRANCH}..."
     _new_script=$(curl -fsSL --max-time 30 "${REPO_RAW}/setup.sh" 2>/dev/null)
     if [[ -n "$_new_script" ]]; then
+        # Сохраняем во временный файл — process substitution <(...) даёт путь /dev/fd/N,
+        # из-за чего dirname "$0" = /dev/fd и source lib/colors.sh ломается.
+        _tmp_setup=$(mktemp /tmp/awg_setup_XXXXXXXX.sh)
+        printf '%s' "$_new_script" > "$_tmp_setup"
         export _REEXEC_BRANCH="$REPO_BRANCH"
-        exec bash <(printf '%s' "$_new_script") "$@"
+        exec bash "$_tmp_setup" "$@"
     else
         warn "Не удалось загрузить setup.sh из ветки. Продолжаю с текущей версией."
     fi
