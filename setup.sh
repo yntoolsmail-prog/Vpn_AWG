@@ -12,14 +12,16 @@
 # Version: 3.2
 
 set -e
+_LIB="$(dirname "$0")/lib"
+[[ ! -f "$_LIB/colors.sh" ]] && _LIB="/root/lib"
 # shellcheck source=lib/colors.sh
-source "$(dirname "$0")/lib/colors.sh"
+source "$_LIB/colors.sh"
 # shellcheck source=lib/utils.sh
-source "$(dirname "$0")/lib/utils.sh"
+source "$_LIB/utils.sh"
 # shellcheck source=lib/modules_setup.sh
-source "$(dirname "$0")/lib/modules_setup.sh"
+source "$_LIB/modules_setup.sh"
 # shellcheck source=lib/ssh_setup.sh
-source "$(dirname "$0")/lib/ssh_setup.sh"
+source "$_LIB/ssh_setup.sh"
 
 # Ждёт освобождения dpkg-блокировки перед apt-get
 _wait_apt_lock() {
