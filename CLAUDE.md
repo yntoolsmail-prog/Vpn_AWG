@@ -24,7 +24,7 @@ Vpn_AWG/
 │   ├── modules.conf     # Включение/отключение модулей (bot=enabled, ...)
 │   ├── bot/
 │   │   ├── bot.py       # Точка входа бота: setup, start, main_menu, button_handler, main()
-│   │   ├── strings.py   # Большие текстовые блоки: HELP_MAIN, HELP_DNS
+│   │   ├── strings.py   # Текстовые блоки: get_help_main(tma_url), HELP_DNS
 │   │   └── handlers/    # Логика по функциональным группам
 │   │       ├── common.py       # BTN_* константы, back_kb, _md, sites_keyboard, WAITING_*
 │   │       ├── bandwidth.py    # Мониторинг трафика, статистика, пики
@@ -34,7 +34,7 @@ Vpn_AWG/
 │   │       ├── sites.py        # Исключения сайтов (split tunneling)
 │   │       ├── updates.py      # Обновления репозитория, проверка IP
 │   │       ├── users.py        # Управление пользователями (approve/kick)
-│   │       └── help.py         # Экраны справки
+│   │       └── help.py         # Экраны справки; вызывает get_help_main(TMA_URL)
 │   ├── tma/
 │   │   ├── tma_server.py # Flask HTTP API для веб-панели (TMA)
 │   │   └── install.sh    # Установщик TMA-модуля
