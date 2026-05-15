@@ -12,14 +12,18 @@
 # Version: 3.2
 
 set -e
+# При запуске через process substitution (exec bash <(...)) $0 = /dev/fd/N,
+# dirname возвращает /dev/fd — там нет lib/. Fallback на /root (installed location).
+_SETUP_DIR="$(dirname "$0")"
+[[ ! -f "$_SETUP_DIR/lib/colors.sh" ]] && _SETUP_DIR="/root"
 # shellcheck source=lib/colors.sh
-source "$(dirname "$0")/lib/colors.sh"
+source "$_SETUP_DIR/lib/colors.sh"
 # shellcheck source=lib/utils.sh
-source "$(dirname "$0")/lib/utils.sh"
+source "$_SETUP_DIR/lib/utils.sh"
 # shellcheck source=lib/modules_setup.sh
-source "$(dirname "$0")/lib/modules_setup.sh"
+source "$_SETUP_DIR/lib/modules_setup.sh"
 # shellcheck source=lib/ssh_setup.sh
-source "$(dirname "$0")/lib/ssh_setup.sh"
+source "$_SETUP_DIR/lib/ssh_setup.sh"
 
 # Ждёт освобождения dpkg-блокировки перед apt-get
 _wait_apt_lock() {
