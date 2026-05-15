@@ -24,9 +24,9 @@ Vpn_AWG/
 │   ├── modules.conf     # Включение/отключение модулей (bot=enabled, ...)
 │   ├── bot/
 │   │   ├── bot.py       # Точка входа бота: setup, start, main_menu, button_handler, main()
-│   │   ├── strings.py   # Все статичные UI-строки и кнопочные константы
+│   │   ├── strings.py   # Большие текстовые блоки: HELP_MAIN, HELP_DNS
 │   │   └── handlers/    # Логика по функциональным группам
-│   │       ├── common.py       # Хелперы: back_kb, _md, sites_keyboard, WAITING_* константы
+│   │       ├── common.py       # BTN_* константы, back_kb, _md, sites_keyboard, WAITING_*
 │   │       ├── bandwidth.py    # Мониторинг трафика, статистика, пики
 │   │       ├── clients.py      # Устройства: конфиги, QR, удаление, сплит-туннелинг
 │   │       ├── maintenance.py  # Техобслуживание, SSH, бэкап/восстановление, часовой пояс
@@ -42,8 +42,7 @@ Vpn_AWG/
 │   │   ├── __init__.py  # Управление MTProxy для Telegram
 │   │   └── strings.py   # UI-строки MTProxy
 │   ├── socks5/
-│   │   ├── __init__.py  # Управление SOCKS5-прокси
-│   │   └── strings.py   # UI-строки SOCKS5
+│   │   └── __init__.py  # Управление SOCKS5-прокси
 │   └── slave_servers/
 │       └── slave_servers.py # Синхронизация с дополнительными серверами по SSH
 │
@@ -51,7 +50,10 @@ Vpn_AWG/
 ├── vpn.sh               # TUI управления (меню, диагностика, бэкапы)
 └── lib/                 # Вспомогательные shell-файлы (подключаются через source)
     ├── colors.sh        # Цветовые константы (RED, GREEN, CYAN, BOLD, NC)
-    └── utils.sh         # Функции log/ok/warn/err/info
+    ├── utils.sh         # Функции log/ok/warn/err/info
+    ├── diagnostics.sh   # Диагностика системы (из vpn.sh)
+    ├── ssh_setup.sh     # SSH-безопасность, fail2ban, ключи (из setup.sh)
+    └── modules_setup.sh # Управление модулями (из setup.sh)
 ```
 
 ---
@@ -151,12 +153,11 @@ Vpn_AWG/
 
 ---
 
-## UI-строки
+## UI-строки и кнопки
 
-Все статичные строки Telegram-интерфейса вынесены в `strings.py` внутри каждого модуля:
-- `modules/bot/strings.py` — строки бота
-- `modules/mtproxy/strings.py` — строки MTProxy
-- `modules/socks5/strings.py` — строки SOCKS5
+- `modules/bot/handlers/common.py` — все кнопки навигации (BTN_BACK, BTN_CANCEL и др.)
+- `modules/bot/strings.py` — только большие тексты: HELP_MAIN, HELP_DNS
+- `modules/mtproxy/strings.py` — тексты и кнопки MTProxy
 
 ---
 
@@ -166,7 +167,7 @@ Vpn_AWG/
 - **Комментарии и UI:** русский язык
 - **Форматирование Telegram:** `parse_mode="Markdown"` (не MarkdownV2)
 - **Права:** только `ADMIN_ID` имеет полный доступ; остальные через `is_approved()`
-- **Блокировки:** `_AWG_LOCK` в awg_core.py защищает одновременное создание клиентов
+- **Блокировки:** `_AWG_LOCK` в awg_clients.py защищает одновременное создание клиентов
 - **Shell-скрипты:** вспомогательные функции в `lib/*.sh`, подключаются через `source`
 
 ---
