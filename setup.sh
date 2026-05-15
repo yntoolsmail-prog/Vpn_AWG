@@ -12,14 +12,28 @@
 # Version: 3.2
 
 set -e
+
+# Если lib/ не установлена — скачиваем с main перед source
+if [[ ! -f "/root/lib/colors.sh" ]]; then
+    echo "[i] Загружаю lib/..."
+    mkdir -p /root/lib
+    for _f in colors.sh utils.sh modules_setup.sh ssh_setup.sh diagnostics.sh; do
+        curl -fsSL --max-time 15 \
+            "https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/lib/${_f}" \
+            -o "/root/lib/${_f}"
+    done
+fi
+
+_LIB="$(dirname "$0")/lib"
+[[ ! -f "$_LIB/colors.sh" ]] && _LIB="/root/lib"
 # shellcheck source=lib/colors.sh
-source "$(dirname "$0")/lib/colors.sh"
+source "$_LIB/colors.sh"
 # shellcheck source=lib/utils.sh
-source "$(dirname "$0")/lib/utils.sh"
+source "$_LIB/utils.sh"
 # shellcheck source=lib/modules_setup.sh
-source "$(dirname "$0")/lib/modules_setup.sh"
+source "$_LIB/modules_setup.sh"
 # shellcheck source=lib/ssh_setup.sh
-source "$(dirname "$0")/lib/ssh_setup.sh"
+source "$_LIB/ssh_setup.sh"
 
 # Ждёт освобождения dpkg-блокировки перед apt-get
 _wait_apt_lock() {
