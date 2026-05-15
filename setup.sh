@@ -12,18 +12,28 @@
 # Version: 3.2
 
 set -e
-# При запуске через process substitution (exec bash <(...)) $0 = /dev/fd/N,
-# dirname возвращает /dev/fd — там нет lib/. Fallback на /root (installed location).
+
+# colors + utils: встроенные определения на случай отсутствия lib/
+# (первый запуск, обновление со старой версии, запуск через bash <(curl ...))
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
+log()  { echo -e "${GREEN}[+]${NC} $1"; }
+ok()   { echo -e "${GREEN}[✓]${NC} $1"; }
+warn() { echo -e "${YELLOW}[!]${NC} $1"; }
+err()  { echo -e "${RED}[✗]${NC} $1"; exit 1; }
+info() { echo -e "${CYAN}[i]${NC} $1"; }
+
+# Если lib/ уже установлена — переопределяем из файлов (могут содержать обновления)
 _SETUP_DIR="$(dirname "$0")"
-[[ ! -f "$_SETUP_DIR/lib/colors.sh" ]] && _SETUP_DIR="/root"
+[[ ! -f "$_SETUP_DIR/lib/colors.sh" && -f "/root/lib/colors.sh" ]] && _SETUP_DIR="/root"
 # shellcheck source=lib/colors.sh
-source "$_SETUP_DIR/lib/colors.sh"
+[[ -f "$_SETUP_DIR/lib/colors.sh" ]] && source "$_SETUP_DIR/lib/colors.sh"
 # shellcheck source=lib/utils.sh
-source "$_SETUP_DIR/lib/utils.sh"
+[[ -f "$_SETUP_DIR/lib/utils.sh"   ]] && source "$_SETUP_DIR/lib/utils.sh"
 # shellcheck source=lib/modules_setup.sh
-source "$_SETUP_DIR/lib/modules_setup.sh"
+[[ -f "$_SETUP_DIR/lib/modules_setup.sh" ]] && source "$_SETUP_DIR/lib/modules_setup.sh"
 # shellcheck source=lib/ssh_setup.sh
-source "$_SETUP_DIR/lib/ssh_setup.sh"
+[[ -f "$_SETUP_DIR/lib/ssh_setup.sh" ]] && source "$_SETUP_DIR/lib/ssh_setup.sh"
 
 # Ждёт освобождения dpkg-блокировки перед apt-get
 _wait_apt_lock() {
