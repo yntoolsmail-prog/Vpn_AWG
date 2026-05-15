@@ -46,7 +46,7 @@ Vpn_AWG/
 │   └── slave_servers/
 │       └── slave_servers.py # Синхронизация с дополнительными серверами по SSH
 │
-├── setup.sh             # Интерактивный установщик системы
+├── setup.sh             # Интерактивный установщик; --modules/_REEXEC_BRANCH через mktemp dir
 ├── vpn.sh               # TUI управления (меню, диагностика, бэкапы)
 └── lib/                 # Вспомогательные shell-файлы (подключаются через source)
     ├── colors.sh        # Цветовые константы (RED, GREEN, CYAN, BOLD, NC)

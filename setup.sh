@@ -122,15 +122,20 @@ REPO_RAW="https://raw.githubusercontent.com/${REPO_ORG}/${REPO_NAME}/${REPO_BRAN
 # Это гарантирует что логика установщика соответствует выбранной ветке.
 if [[ "$REPO_BRANCH" != "main" && -z "$_REEXEC_BRANCH" ]]; then
     info "Загружаю setup.sh из ветки ${REPO_BRANCH}..."
-    _new_script=$(curl -fsSL --max-time 30 "${REPO_RAW}/setup.sh" 2>/dev/null)
-    if [[ -n "$_new_script" ]]; then
-        # Сохраняем во временный файл — process substitution <(...) даёт путь /dev/fd/N,
-        # из-за чего dirname "$0" = /dev/fd и source lib/colors.sh ломается.
-        _tmp_setup=$(mktemp /tmp/awg_setup_XXXXXXXX.sh)
-        printf '%s' "$_new_script" > "$_tmp_setup"
+    # Создаём временную директорию с правильной структурой lib/,
+    # иначе dirname "$0" не будет содержать нужные файлы.
+    _reexec_dir=$(mktemp -d /tmp/awg_XXXXXXXX)
+    mkdir -p "$_reexec_dir/lib"
+    if curl -fsSL --max-time 30 "${REPO_RAW}/setup.sh" -o "$_reexec_dir/setup.sh" 2>/dev/null; then
+        for _reexec_f in colors.sh utils.sh modules_setup.sh ssh_setup.sh; do
+            curl -fsSL --max-time 10 "${REPO_RAW}/lib/${_reexec_f}" \
+                -o "$_reexec_dir/lib/${_reexec_f}" 2>/dev/null || \
+                cp "$(dirname "$0")/lib/${_reexec_f}" "$_reexec_dir/lib/${_reexec_f}" 2>/dev/null || true
+        done
         export _REEXEC_BRANCH="$REPO_BRANCH"
-        exec bash "$_tmp_setup" "$@"
+        exec bash "$_reexec_dir/setup.sh" "$@"
     else
+        rm -rf "$_reexec_dir"
         warn "Не удалось загрузить setup.sh из ветки. Продолжаю с текущей версией."
     fi
 fi
