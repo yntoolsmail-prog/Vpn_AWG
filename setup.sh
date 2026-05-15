@@ -138,11 +138,34 @@ SLAVE_MODE=0
 
 # Список всех файлов проекта — используется в --update
 PROJECT_FILES=(
-    "modules/bot/bot.py:/root/modules/bot/bot.py"
+    # Ядро Python
     "awg_core.py:/root/awg_core.py"
+    "awg_clients.py:/root/awg_clients.py"
+    "awg_stats.py:/root/awg_stats.py"
+    "awg_ssh.py:/root/awg_ssh.py"
     "sites_data.py:/root/sites_data.py"
     "module_loader.py:/root/module_loader.py"
+    # Бот
+    "modules/bot/bot.py:/root/modules/bot/bot.py"
+    "modules/bot/strings.py:/root/modules/bot/strings.py"
+    "modules/bot/handlers/__init__.py:/root/modules/bot/handlers/__init__.py"
+    "modules/bot/handlers/common.py:/root/modules/bot/handlers/common.py"
+    "modules/bot/handlers/bandwidth.py:/root/modules/bot/handlers/bandwidth.py"
+    "modules/bot/handlers/clients.py:/root/modules/bot/handlers/clients.py"
+    "modules/bot/handlers/help.py:/root/modules/bot/handlers/help.py"
+    "modules/bot/handlers/maintenance.py:/root/modules/bot/handlers/maintenance.py"
+    "modules/bot/handlers/servers.py:/root/modules/bot/handlers/servers.py"
+    "modules/bot/handlers/sites.py:/root/modules/bot/handlers/sites.py"
+    "modules/bot/handlers/updates.py:/root/modules/bot/handlers/updates.py"
+    "modules/bot/handlers/users.py:/root/modules/bot/handlers/users.py"
+    # Shell-скрипты
     "vpn.sh:/root/vpn.sh"
+    "lib/colors.sh:/root/lib/colors.sh"
+    "lib/utils.sh:/root/lib/utils.sh"
+    "lib/diagnostics.sh:/root/lib/diagnostics.sh"
+    "lib/ssh_setup.sh:/root/lib/ssh_setup.sh"
+    "lib/modules_setup.sh:/root/lib/modules_setup.sh"
+    # Опциональные модули (пропускаются если не установлены)
     "modules/tma/tma_server.py:/root/modules/tma/tma_server.py"
     "tma/index.html:${AWG_DIR}/tma/index.html"
     "modules/slave_servers/__init__.py:/root/modules/slave_servers/__init__.py"
@@ -158,6 +181,9 @@ if [[ "${1}" == "--update" ]]; then
     echo "  ║       AmneziaWG — Обновление             ║"
     echo "  ╚══════════════════════════════════════════╝"
     echo -e "${NC}"
+
+    # Создаём директории для новых файлов (безопасно, если уже существуют)
+    mkdir -p /root/lib /root/modules/bot/handlers
 
     UPDATED=0
     FAILED=0
@@ -203,6 +229,11 @@ if [[ "${1}" == "--update" ]]; then
         if curl -fsSL "${REPO_RAW}/modules/${_mod}/__init__.py" \
                 -o "${_mod_dir}/__init__.py.new" 2>/dev/null; then
             mv "${_mod_dir}/__init__.py.new" "${_mod_dir}/__init__.py"
+            # Обновляем strings.py если есть в репо
+            curl -fsSL "${REPO_RAW}/modules/${_mod}/strings.py" \
+                -o "${_mod_dir}/strings.py.new" 2>/dev/null \
+                && mv "${_mod_dir}/strings.py.new" "${_mod_dir}/strings.py" \
+                || rm -f "${_mod_dir}/strings.py.new"
             # Также обновляем install.sh и uninstall.sh (не запускаем — только файлы)
             for _sh in install.sh uninstall.sh; do
                 curl -fsSL "${REPO_RAW}/modules/${_mod}/${_sh}" \
@@ -218,6 +249,9 @@ if [[ "${1}" == "--update" ]]; then
             FAILED=$((FAILED+1))
         fi
     done < <(grep -v '^#' /root/modules.conf 2>/dev/null | grep '=')
+
+    # Удаляем устаревшие файлы из старой структуры
+    rm -f /root/modules/socks5/strings.py
 
     # Обновляем setup.sh последним — нельзя перезаписывать запущенный скрипт раньше времени
     log "Обновляю setup.sh..."
