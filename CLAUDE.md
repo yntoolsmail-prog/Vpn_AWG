@@ -11,7 +11,11 @@ Telegram-бот для управления AmneziaWG VPN (форк WireGuard с
 
 ```
 Vpn_AWG/
-├── awg_core.py          # Ядро: конфиги, клиенты, статистика, SSH, утилиты
+├── awg_core.py          # Ядро: пути/константы, пользователи, серверы, subnet-кэш, бэкап
+│                        # Re-экспортирует всё из awg_clients/awg_stats/awg_ssh для совместимости
+├── awg_clients.py       # Клиенты AWG: ключи, конфиги, CRUD, обфускация
+├── awg_stats.py         # Трафик, полоса, гистограмма, vnstat, системная статистика
+├── awg_ssh.py           # SSH-управление slave-серверами: AWG, MTProxy, SOCKS5
 ├── sites_data.py        # Данные сайтов для сплит-туннелинга (SITES, CATEGORIES)
 ├── module_loader.py     # Динамическая загрузка модулей из modules.conf
 ├── subnet_daemon.py     # Фоновый демон обновления подсетей сайтов
@@ -84,22 +88,52 @@ Vpn_AWG/
 
 ---
 
-## Ключевые функции awg_core.py
+## Ключевые функции по модулям
 
+### awg_core.py (542 строки)
 | Функция | Назначение |
 |---------|-----------|
-| `create_client(user_id, name)` | Создать клиента (ключи + awg конфиг) |
-| `remove_client_from_awg(pubkey)` | Удалить клиента из AWG |
-| `get_all_clients()` | Список всех клиентов из конфига AWG |
-| `get_user_clients(user_id)` | Клиенты конкретного пользователя |
-| `get_awg_dump()` | `wg show` dump — трафик и handshake |
-| `make_conf_for_client(name)` | Генерация .conf файла для клиента |
 | `load_users()` / `save_users()` | Работа с users.json |
 | `is_approved(user_id)` | Проверка доступа пользователя |
+| `load_servers()` / `save_servers()` | Список slave-серверов |
 | `create_backup()` | Архив всех конфигов |
+| `build_allowed_ips(keys, domains)` | Split tunneling: AllowedIPs строка |
+| `process_domain(domain)` | DNS-зондирование домена в подсети |
+| `get_allowed_ips_for_client(name)` | AllowedIPs с учётом исключений клиента |
+| `get_sites_json()` | Список сайтов для UI/TMA |
+
+### awg_clients.py (346 строк)
+| Функция | Назначение |
+|---------|-----------|
+| `create_client(name)` | Создать клиента (ключи + awg конфиг) |
+| `remove_client_from_awg(name)` | Удалить клиента из AWG |
+| `get_all_clients()` | Список всех клиентов |
+| `get_awg_dump()` | `awg show` dump — трафик и handshake |
+| `make_conf_for_client(name, endpoint)` | Генерация .conf файла для клиента |
+| `load_client_excl(name)` / `save_client_excl(name, data)` | Исключения сплит-туннелинга |
+| `make_wg_conf(...)` / `make_vpn_link(...)` | Генерация конфига / vpn:// ссылки |
+
+### awg_stats.py (481 строка)
+| Функция | Назначение |
+|---------|-----------|
 | `get_system_stats()` | CPU/RAM/диск сервера |
+| `collect_stats_full()` | Полная статистика (для ADMIN) |
+| `collect_stats_basic()` | Урезанная статистика (для юзеров) |
 | `fmt_bytes(n)` | Форматирование трафика (KB/MB/GB) |
-| `process_domain(domain)` | Резолв домена в подсети |
+| `get_bw_histogram(days)` | Гистограмма нагрузки |
+| `get_vnstat_monthly()` | Помесячный трафик через vnstat |
+| `load_bw_peak()` / `save_bw_peak(data)` | Пики трафика |
+
+### awg_ssh.py (728 строк)
+| Функция | Назначение |
+|---------|-----------|
+| `ssh_clone_awg_to_slave(server)` | Клонировать AWG-конфиг на slave |
+| `ssh_sync_peer_to_slave(server, ...)` | Добавить peer на slave |
+| `ssh_push_admin_key(server)` | Скопировать SSH-ключ на slave |
+| `ssh_sync_mtproxy_secret(server, ...)` | Синхронизировать MTProxy на slave |
+| `ssh_apply_socks5_on_slave(server, ...)` | Настроить SOCKS5 на slave |
+| `ssh_regen_admin_key()` | Перегенерировать awg_admin_key |
+| `PARAMIKO_AVAILABLE` | Флаг доступности paramiko |
 
 ---
 
