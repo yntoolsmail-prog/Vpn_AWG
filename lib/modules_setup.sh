@@ -2,7 +2,6 @@
 # ── Управление модулями ───────────────────────────────────────────────────────
 # Используется из setup.sh. Переменные REPO_RAW, SLAVE_MODE — из родительского скрипта.
 
-# Описания модулей (дублируем сюда комментарии из modules.conf для отображения в меню)
 declare -A _MOD_DESC=(
     ["tma"]="Веб-панель TMA (Telegram Mini App)"
     ["mtproxy"]="Прокси Telegram (MTProxy)"
@@ -17,7 +16,6 @@ _is_base_module() {
     return 1
 }
 
-# Обновить или добавить строку в /root/modules.conf
 _modules_conf_set() {
     local name="$1" state="$2"
     if grep -q "^${name}=" /root/modules.conf 2>/dev/null; then
@@ -27,66 +25,62 @@ _modules_conf_set() {
     fi
 }
 
-# Проверить, установлен ли модуль (системные компоненты)
 _mod_is_installed() {
     [[ -f "/root/modules/${1}/.installed" ]]
 }
 
-# Применить изменения: скачать файлы для включаемых модулей, запустить install.sh
-_apply_modules() {
-    local -n _desired=$1   # associative array name=on|off
-    local -n _names=$2     # indexed array of module names
+# Установить выбранные модули
+_install_modules() {
+    local -n _to_install=$1   # indexed array of module names to install
 
     local changed=0
-
-    for name in "${_names[@]}"; do
-        local want="${_desired[$name]:-off}"
-        local have
-        have=$(grep "^${name}=" /root/modules.conf 2>/dev/null | cut -d= -f2 || echo "off")
-
-        if [[ "$want" == "on" ]]; then
-            if [[ "$have" != "on" ]] || ! _mod_is_installed "$name"; then
-                log "Включение модуля: ${name}..."
-                mkdir -p "/root/modules/${name}"
-
-                # Скачать __init__.py
-                if curl -fsSL "${REPO_RAW}/modules/${name}/__init__.py" \
-                        -o "/root/modules/${name}/__init__.py.new" 2>/dev/null; then
-                    mv "/root/modules/${name}/__init__.py.new" "/root/modules/${name}/__init__.py"
-                    ok "Файлы модуля ${name} загружены"
-                else
-                    warn "Не удалось скачать модуль ${name} — пропуск."
-                    continue
-                fi
-
-                # Скачать install.sh (если есть в репо)
-                curl -fsSL "${REPO_RAW}/modules/${name}/install.sh" \
-                        -o "/root/modules/${name}/install.sh.new" 2>/dev/null \
-                    && mv "/root/modules/${name}/install.sh.new" "/root/modules/${name}/install.sh" \
-                    && chmod +x "/root/modules/${name}/install.sh" \
-                    || rm -f "/root/modules/${name}/install.sh.new"
-
-                # Запускать install.sh только если ещё не установлен (нет sentinel)
-                if _mod_is_installed "$name"; then
-                    info "Модуль ${name} уже установлен — пропускаю установщик."
-                elif [[ -f "/root/modules/${name}/install.sh" ]]; then
-                    log "Запуск установщика модуля ${name}..."
-                    bash "/root/modules/${name}/install.sh" || {
-                        warn "Установщик модуля ${name} завершился с ошибкой."
-                        warn "Модуль будет включён в modules.conf — исправьте вручную при необходимости."
-                    }
-                fi
-
-                _modules_conf_set "$name" "on"
-                changed=1
-            fi
-
-        elif [[ "$want" == "off" && "$have" == "on" ]]; then
-            log "Отключение модуля: ${name}..."
-            _modules_conf_set "$name" "off"
-            changed=1
-            ok "Модуль ${name} отключён (системные компоненты сохранены, можно включить снова)"
+    for name in "${_to_install[@]}"; do
+        if _mod_is_installed "$name"; then
+            info "Модуль ${name} уже установлен — пропускаю."
+            continue
         fi
+
+        log "Установка модуля: ${name}..."
+        mkdir -p "/root/modules/${name}"
+
+        if curl -fsSL "${REPO_RAW}/modules/${name}/__init__.py" \
+                -o "/root/modules/${name}/__init__.py.new" 2>/dev/null; then
+            mv "/root/modules/${name}/__init__.py.new" "/root/modules/${name}/__init__.py"
+            ok "Файлы модуля ${name} загружены"
+        else
+            warn "Не удалось скачать модуль ${name} — пропуск."
+            continue
+        fi
+
+        # Скачать strings.py если есть
+        curl -fsSL "${REPO_RAW}/modules/${name}/strings.py" \
+                -o "/root/modules/${name}/strings.py.new" 2>/dev/null \
+            && mv "/root/modules/${name}/strings.py.new" "/root/modules/${name}/strings.py" \
+            || rm -f "/root/modules/${name}/strings.py.new"
+
+        # Скачать install.sh если есть
+        curl -fsSL "${REPO_RAW}/modules/${name}/install.sh" \
+                -o "/root/modules/${name}/install.sh.new" 2>/dev/null \
+            && mv "/root/modules/${name}/install.sh.new" "/root/modules/${name}/install.sh" \
+            && chmod +x "/root/modules/${name}/install.sh" \
+            || rm -f "/root/modules/${name}/install.sh.new"
+
+        # Скачать uninstall.sh если есть
+        curl -fsSL "${REPO_RAW}/modules/${name}/uninstall.sh" \
+                -o "/root/modules/${name}/uninstall.sh.new" 2>/dev/null \
+            && mv "/root/modules/${name}/uninstall.sh.new" "/root/modules/${name}/uninstall.sh" \
+            && chmod +x "/root/modules/${name}/uninstall.sh" \
+            || rm -f "/root/modules/${name}/uninstall.sh.new"
+
+        if [[ -f "/root/modules/${name}/install.sh" ]]; then
+            log "Запуск установщика модуля ${name}..."
+            bash "/root/modules/${name}/install.sh" || {
+                warn "Установщик модуля ${name} завершился с ошибкой."
+            }
+        fi
+
+        _modules_conf_set "$name" "on"
+        changed=1
     done
 
     if [[ $changed -eq 1 ]]; then
@@ -99,30 +93,21 @@ _apply_modules() {
     fi
 }
 
-# Удалить модуль: запустить uninstall.sh, убрать директорию, убрать из modules.conf
+# Удалить модуль: запустить uninstall.sh, убрать директорию и запись из modules.conf
 _delete_module() {
     local name="$1"
 
-    # Безопасность: нельзя удалять базовые модули
     _is_base_module "$name" && { warn "Базовый модуль ${name} нельзя удалить."; return 1; }
 
-    # Нельзя удалять включённый модуль
-    local _have
-    _have=$(grep "^${name}=" /root/modules.conf 2>/dev/null | cut -d= -f2 || echo "off")
-    if [[ "$_have" == "on" ]]; then
-        warn "Отключите модуль ${name} перед удалением (переключите в [ ] и примените)."
-        return 1
-    fi
-
     echo ""
-    warn "Будет удалено: системные компоненты модуля ${name}."
-    warn "Данные конфигурации сохраняются в /etc/proxy-bot/ или /etc/awg-socks5/ (зависит от модуля)."
+    warn "Будет удалён модуль ${name} и все его системные компоненты."
+    warn "Данные конфигурации (ключи, настройки) сохраняются."
     read -p "  Подтвердить удаление? [y/N]: " _confirm
     [[ "$_confirm" =~ ^[Yy]$ ]] || { info "Отмена."; return 0; }
 
     local _mod_dir="/root/modules/${name}"
 
-    # Скачать актуальный uninstall.sh если его нет
+    # Скачать актуальный uninstall.sh если нет
     if [[ ! -f "${_mod_dir}/uninstall.sh" ]]; then
         curl -fsSL "${REPO_RAW}/modules/${name}/uninstall.sh" \
             -o "${_mod_dir}/uninstall.sh.new" 2>/dev/null \
@@ -138,17 +123,12 @@ _delete_module() {
         warn "uninstall.sh не найден — удаляю только директорию модуля."
     fi
 
-    if [[ -d "$_mod_dir" ]]; then
-        rm -rf "$_mod_dir"
-        ok "Директория ${_mod_dir} удалена."
-    fi
-
+    rm -rf "$_mod_dir"
     sed -i "/^${name}=/d" /root/modules.conf
-
     ok "Модуль ${name} полностью удалён."
 }
 
-# Интерактивное меню выбора модулей
+# Интерактивное меню модулей
 _modules_menu() {
     local _repo_conf _offline=0
     _repo_conf=$(curl -fsSL --max-time 10 "${REPO_RAW}/modules.conf" 2>/dev/null) || true
@@ -179,14 +159,11 @@ _modules_menu() {
         fi
     done <<< "$_repo_conf"
 
-    # На slave-серверах показываем только релевантные модули
+    # На slave-серверах только релевантные модули
     if [[ "${SLAVE_MODE:-0}" -eq 1 ]]; then
-        local -a _slave_only=("socks5" "mtproxy")
         local -a _filtered=()
         for _m in "${_avail[@]}"; do
-            for _sm in "${_slave_only[@]}"; do
-                [[ "$_m" == "$_sm" ]] && { _filtered+=("$_m"); break; }
-            done
+            [[ "$_m" == "socks5" || "$_m" == "mtproxy" ]] && _filtered+=("$_m")
         done
         _avail=("${_filtered[@]}")
     fi
@@ -196,18 +173,8 @@ _modules_menu() {
         return
     fi
 
-    declare -A _cur_state=()
-    while IFS='=' read -r _n _s; do
-        _n="${_n//[[:space:]]/}"; _s="${_s//[[:space:]]/}"
-        [[ -z "$_n" ]] && continue
-        _cur_state["$_n"]="$_s"
-    done < <(grep -v '^#' /root/modules.conf 2>/dev/null | grep '=')
-
-    # Рабочий массив (то, что пользователь ещё не применил)
-    declare -A _new_state=()
-    for _n in "${_avail[@]}"; do
-        _new_state["$_n"]="${_cur_state[$_n]:-off}"
-    done
+    # Модули отмеченные для установки (pending)
+    declare -A _pending=()
 
     while true; do
         clear
@@ -221,38 +188,27 @@ _modules_menu() {
         echo -e "  ${GREEN}[✓]${NC} bot  — Telegram бот"
         echo ""
         [[ "$_offline" -eq 1 ]] && \
-            echo -e "  ${YELLOW}[!] Офлайн-режим — установка новых модулей недоступна${NC}"
-        echo ""
+            echo -e "  ${YELLOW}[!] Офлайн-режим — установка недоступна${NC}\n"
         echo -e "  ${BOLD}Дополнительные:${NC}"
         echo ""
         local _i=1
         for _n in "${_avail[@]}"; do
-            local _st="${_new_state[$_n]:-off}"
             local _desc="${_repo_desc[$_n]:-${_MOD_DESC[$_n]:-$_n}}"
-            local _installed=false
-            _mod_is_installed "$_n" && _installed=true
-
-            if [[ "$_st" == "on" && "$_installed" == "true" ]]; then
-                # Установлен И включён
-                echo -e "  ${CYAN}${_i})${NC} ${GREEN}[✓]${NC} ${_n}  — ${_desc}"
-            elif [[ "$_installed" == "true" ]]; then
-                # Установлен, но выключен
-                echo -e "  ${CYAN}${_i})${NC} ${YELLOW}[○]${NC} ${_n}  — ${_desc}  ${YELLOW}(установлен, выкл)${NC}"
-            elif [[ "$_st" == "on" ]]; then
-                # Включён в conf, но не установлен (sentinel отсутствует)
-                echo -e "  ${CYAN}${_i})${NC} ${CYAN}[~]${NC} ${_n}  — ${_desc}  ${CYAN}(будет установлен)${NC}"
+            if _mod_is_installed "$_n"; then
+                echo -e "  ${CYAN}${_i})${NC} ${GREEN}[✓]${NC} ${_n}  — ${_desc}  ${YELLOW}d${_i} — удалить${NC}"
+            elif [[ "${_pending[$_n]:-0}" -eq 1 ]]; then
+                echo -e "  ${CYAN}${_i})${NC} ${CYAN}[+]${NC} ${_n}  — ${_desc}  ${CYAN}(к установке)${NC}"
             else
-                # Не установлен, выключен
                 echo -e "  ${CYAN}${_i})${NC} [ ] ${_n}  — ${_desc}"
             fi
             ((_i++))
         done
         echo ""
         echo -e "  ${BOLD}Команды:${NC}"
-        echo -e "  ${CYAN}<N>${NC}    — переключить модуль вкл/выкл"
-        echo -e "  ${CYAN}d<N>${NC}  — удалить установленный модуль (только если выкл)"
-        echo -e "  ${CYAN}a${NC}     — применить изменения"
-        echo -e "  ${CYAN}0${NC}     — выход без изменений"
+        echo -e "  ${CYAN}<N>${NC}    — отметить для установки"
+        echo -e "  ${CYAN}d<N>${NC}  — удалить установленный модуль"
+        echo -e "  ${CYAN}a${NC}     — установить отмеченные"
+        echo -e "  ${CYAN}0${NC}     — выход"
         echo ""
         read -p "  > " _ch
 
@@ -261,45 +217,36 @@ _modules_menu() {
             a|A)
                 echo ""
                 if [[ "$_offline" -eq 1 ]]; then
-                    # Проверяем: есть ли попытка включить модуль который не установлен
-                    local _has_new_enable=0
-                    for _n in "${_avail[@]}"; do
-                        if [[ "${_new_state[$_n]}" == "on" && "${_cur_state[$_n]:-off}" != "on" ]]; then
-                            _has_new_enable=1; break
-                        fi
-                    done
-                    if [[ "$_has_new_enable" -eq 1 ]]; then
-                        warn "Офлайн-режим: установка новых модулей требует доступа к интернету."
-                        read -p "  Нажмите Enter..." _dummy
-                        continue
-                    fi
+                    warn "Офлайн-режим: установка недоступна без интернета."
+                    read -p "  Нажмите Enter..." _dummy
+                    continue
                 fi
-                _apply_modules _new_state _avail
-                # Обновляем _cur_state после применения
-                while IFS='=' read -r _n _s; do
-                    _n="${_n//[[:space:]]/}"; _s="${_s//[[:space:]]/}"
-                    [[ -z "$_n" ]] && continue
-                    _cur_state["$_n"]="$_s"
-                done < <(grep -v '^#' /root/modules.conf 2>/dev/null | grep '=')
-                # Даём пользователю увидеть результат
+                local -a _to_install=()
+                for _n in "${_avail[@]}"; do
+                    [[ "${_pending[$_n]:-0}" -eq 1 ]] && _to_install+=("$_n")
+                done
+                if [[ ${#_to_install[@]} -eq 0 ]]; then
+                    info "Нет модулей для установки. Выберите <N>."
+                    sleep 2
+                    continue
+                fi
+                _install_modules _to_install
+                # Сбрасываем pending после установки
+                for _n in "${_avail[@]}"; do _pending["$_n"]=0; done
                 read -p "  Нажмите Enter для возврата в меню..." _dummy
                 ;;
             d[0-9]*)
-                # Команда удаления: d<N>
                 local _dnum="${_ch#d}"
                 local _didx=$((_dnum - 1))
                 if [[ "$_dnum" =~ ^[0-9]+$ && $_didx -ge 0 && $_didx -lt ${#_avail[@]} ]]; then
                     local _dname="${_avail[$_didx]}"
-                    # Принудительно применяем текущее off в рабочем массиве для этого модуля
-                    _new_state["$_dname"]="off"
-                    # Синхронизируем modules.conf если был on
-                    if [[ "${_cur_state[$_dname]:-off}" == "on" ]]; then
-                        _modules_conf_set "$_dname" "off"
-                        systemctl restart awg-bot 2>/dev/null || true
-                        _cur_state["$_dname"]="off"
+                    if ! _mod_is_installed "$_dname"; then
+                        warn "Модуль ${_dname} не установлен."
+                        sleep 1
+                    else
+                        _delete_module "$_dname"
+                        read -p "  Нажмите Enter для возврата в меню..." _dummy
                     fi
-                    _delete_module "$_dname"
-                    read -p "  Нажмите Enter для возврата в меню..." _dummy
                 else
                     warn "Неверный номер модуля."
                     sleep 1
@@ -313,10 +260,15 @@ _modules_menu() {
                 local _idx=$((_ch - 1))
                 if [[ $_idx -ge 0 && $_idx -lt ${#_avail[@]} ]]; then
                     local _name="${_avail[$_idx]}"
-                    if [[ "${_new_state[$_name]}" == "on" ]]; then
-                        _new_state["$_name"]="off"
+                    if _mod_is_installed "$_name"; then
+                        warn "Модуль ${_name} уже установлен. Для удаления: d${_ch}"
+                        sleep 2
                     else
-                        _new_state["$_name"]="on"
+                        if [[ "${_pending[$_name]:-0}" -eq 1 ]]; then
+                            _pending["$_name"]=0
+                        else
+                            _pending["$_name"]=1
+                        fi
                     fi
                 else
                     warn "Нет модуля с таким номером."

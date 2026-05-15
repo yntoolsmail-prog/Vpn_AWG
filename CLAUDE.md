@@ -53,7 +53,7 @@ Vpn_AWG/
     ├── utils.sh         # Функции log/ok/warn/err/info
     ├── diagnostics.sh   # Диагностика системы (из vpn.sh)
     ├── ssh_setup.sh     # SSH-безопасность, fail2ban, ключи (из setup.sh)
-    └── modules_setup.sh # Управление модулями (из setup.sh)
+    └── modules_setup.sh # Управление модулями (из setup.sh): только установка/удаление, нет toggle
 ```
 
 ---
@@ -156,7 +156,7 @@ Vpn_AWG/
 ## UI-строки и кнопки
 
 - `modules/bot/handlers/common.py` — все кнопки навигации (BTN_BACK, BTN_CANCEL и др.)
-- `modules/bot/strings.py` — только большие тексты: HELP_MAIN, HELP_DNS
+- `modules/bot/strings.py` — только большие тексты: `get_help_main(tma_url)`, `HELP_DNS`
 - `modules/mtproxy/strings.py` — тексты и кнопки MTProxy
 
 ---
