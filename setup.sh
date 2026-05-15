@@ -12,28 +12,14 @@
 # Version: 3.2
 
 set -e
-
-# colors + utils: встроенные определения на случай отсутствия lib/
-# (первый запуск, обновление со старой версии, запуск через bash <(curl ...))
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
-log()  { echo -e "${GREEN}[+]${NC} $1"; }
-ok()   { echo -e "${GREEN}[✓]${NC} $1"; }
-warn() { echo -e "${YELLOW}[!]${NC} $1"; }
-err()  { echo -e "${RED}[✗]${NC} $1"; exit 1; }
-info() { echo -e "${CYAN}[i]${NC} $1"; }
-
-# Если lib/ уже установлена — переопределяем из файлов (могут содержать обновления)
-_SETUP_DIR="$(dirname "$0")"
-[[ ! -f "$_SETUP_DIR/lib/colors.sh" && -f "/root/lib/colors.sh" ]] && _SETUP_DIR="/root"
 # shellcheck source=lib/colors.sh
-[[ -f "$_SETUP_DIR/lib/colors.sh" ]] && source "$_SETUP_DIR/lib/colors.sh"
+source "$(dirname "$0")/lib/colors.sh"
 # shellcheck source=lib/utils.sh
-[[ -f "$_SETUP_DIR/lib/utils.sh"   ]] && source "$_SETUP_DIR/lib/utils.sh"
+source "$(dirname "$0")/lib/utils.sh"
 # shellcheck source=lib/modules_setup.sh
-[[ -f "$_SETUP_DIR/lib/modules_setup.sh" ]] && source "$_SETUP_DIR/lib/modules_setup.sh"
+source "$(dirname "$0")/lib/modules_setup.sh"
 # shellcheck source=lib/ssh_setup.sh
-[[ -f "$_SETUP_DIR/lib/ssh_setup.sh" ]] && source "$_SETUP_DIR/lib/ssh_setup.sh"
+source "$(dirname "$0")/lib/ssh_setup.sh"
 
 # Ждёт освобождения dpkg-блокировки перед apt-get
 _wait_apt_lock() {
@@ -136,20 +122,11 @@ REPO_RAW="https://raw.githubusercontent.com/${REPO_ORG}/${REPO_NAME}/${REPO_BRAN
 # Это гарантирует что логика установщика соответствует выбранной ветке.
 if [[ "$REPO_BRANCH" != "main" && -z "$_REEXEC_BRANCH" ]]; then
     info "Загружаю setup.sh из ветки ${REPO_BRANCH}..."
-    # Создаём временную директорию с правильной структурой lib/,
-    # иначе dirname "$0" не будет содержать нужные файлы.
-    _reexec_dir=$(mktemp -d /tmp/awg_XXXXXXXX)
-    mkdir -p "$_reexec_dir/lib"
-    if curl -fsSL --max-time 30 "${REPO_RAW}/setup.sh" -o "$_reexec_dir/setup.sh" 2>/dev/null; then
-        for _reexec_f in colors.sh utils.sh modules_setup.sh ssh_setup.sh; do
-            curl -fsSL --max-time 10 "${REPO_RAW}/lib/${_reexec_f}" \
-                -o "$_reexec_dir/lib/${_reexec_f}" 2>/dev/null || \
-                cp "$(dirname "$0")/lib/${_reexec_f}" "$_reexec_dir/lib/${_reexec_f}" 2>/dev/null || true
-        done
+    _new_script=$(curl -fsSL --max-time 30 "${REPO_RAW}/setup.sh" 2>/dev/null)
+    if [[ -n "$_new_script" ]]; then
         export _REEXEC_BRANCH="$REPO_BRANCH"
-        exec bash "$_reexec_dir/setup.sh" "$@"
+        exec bash <(printf '%s' "$_new_script") "$@"
     else
-        rm -rf "$_reexec_dir"
         warn "Не удалось загрузить setup.sh из ветки. Продолжаю с текущей версией."
     fi
 fi
