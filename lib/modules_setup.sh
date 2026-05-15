@@ -126,6 +126,9 @@ _delete_module() {
     rm -rf "$_mod_dir"
     sed -i "/^${name}=/d" /root/modules.conf
     ok "Модуль ${name} полностью удалён."
+
+    log "Перезапускаю awg-bot..."
+    systemctl restart awg-bot 2>/dev/null && ok "awg-bot перезапущен" || warn "awg-bot не запущен"
 }
 
 # Интерактивное меню модулей

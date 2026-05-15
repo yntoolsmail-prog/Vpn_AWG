@@ -53,7 +53,7 @@ Vpn_AWG/
     ├── utils.sh         # Функции log/ok/warn/err/info
     ├── diagnostics.sh   # Диагностика системы (из vpn.sh)
     ├── ssh_setup.sh     # SSH-безопасность, fail2ban, ключи (из setup.sh)
-    └── modules_setup.sh # Управление модулями (из setup.sh): только установка/удаление, нет toggle
+    └── modules_setup.sh # Управление модулями (из setup.sh): установка/удаление, перезапуск awg-bot
 ```
 
 ---
