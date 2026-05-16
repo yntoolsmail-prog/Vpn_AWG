@@ -21,6 +21,10 @@ import time
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import CallbackQueryHandler
+from .strings import (
+    BTN_BACK, BTN_BACK_MENU, BTN_CANCEL, BTN_REFRESH,
+    MTP_NOT_AVAILABLE, MTP_NOT_CONFIGURED, MTP_NOT_INSTALLED, MTP_SECRET_ASK,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -558,11 +562,9 @@ async def _sync_secret_to_slaves(secret: str, port: str) -> list[str]:
 async def _show_mtp_user(query):
     if not _mtp_installed():
         await query.edit_message_text(
-            "📡 *Прокси Telegram*\n\n"
-            "Прокси сейчас недоступен.\n"
-            "Обратитесь к администратору.",
+            MTP_NOT_AVAILABLE,
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("◀️ В меню", callback_data="back")]
+                [InlineKeyboardButton(BTN_BACK_MENU, callback_data="back")]
             ]),
             parse_mode="Markdown"
         )
@@ -573,11 +575,9 @@ async def _show_mtp_user(query):
 
     if not secret:
         await query.edit_message_text(
-            "📡 *Прокси Telegram*\n\n"
-            "Прокси ещё не настроен.\n"
-            "Обратитесь к администратору.",
+            MTP_NOT_CONFIGURED,
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("◀️ В меню", callback_data="back")]
+                [InlineKeyboardButton(BTN_BACK_MENU, callback_data="back")]
             ]),
             parse_mode="Markdown"
         )
@@ -607,8 +607,8 @@ async def _show_mtp_user(query):
     await query.edit_message_text(
         text,
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔄 Обновить", callback_data="proxy_mtp_menu")],
-            [InlineKeyboardButton("◀️ В меню",   callback_data="back")],
+            [InlineKeyboardButton(BTN_REFRESH, callback_data="proxy_mtp_menu")],
+            [InlineKeyboardButton(BTN_BACK_MENU,   callback_data="back")],
         ]),
         parse_mode="Markdown"
     )
@@ -619,12 +619,9 @@ async def _show_mtp_user(query):
 async def _show_mtp_admin(query):
     if not _mtp_installed():
         await query.edit_message_text(
-            "⚫ MTProxy не установлен.\n\n"
-            "Запустите на сервере:\n"
-            "`bash <(curl -s https://raw.githubusercontent.com/"
-            "yntoolsmail-prog/Proxy-Telegram-Whatsapp/main/setup_proxy.sh)`",
+            MTP_NOT_INSTALLED,
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("◀️ В меню", callback_data="back")]
+                [InlineKeyboardButton(BTN_BACK_MENU, callback_data="back")]
             ]),
             parse_mode="Markdown"
         )
@@ -683,8 +680,8 @@ async def _show_mtp_admin(query):
             [InlineKeyboardButton("📊 Статистика",          callback_data="proxy_mtp_stats")],
             [InlineKeyboardButton("🔄 Принудительный рестарт", callback_data="proxy_mtp_update_cfg")],
             [InlineKeyboardButton("📖 Инструкция",          callback_data="proxy_mtp_help")],
-            [InlineKeyboardButton("🔄 Обновить",            callback_data="proxy_mtp_menu")],
-            [InlineKeyboardButton("◀️ В меню",              callback_data="back")],
+            [InlineKeyboardButton(BTN_REFRESH,            callback_data="proxy_mtp_menu")],
+            [InlineKeyboardButton(BTN_BACK_MENU,              callback_data="back")],
         ]),
         parse_mode="Markdown"
     )
@@ -692,13 +689,7 @@ async def _show_mtp_admin(query):
 
 async def _show_mtp_secret_ask(query):
     await query.edit_message_text(
-        "🔑 *Смена секрета MTProxy*\n\n"
-        "⚠️ *Внимание!* После смены секрета:\n"
-        "• Все подключённые пользователи отвалятся\n"
-        "• Старая ссылка перестанет работать\n"
-        "• Нужно разослать новую ссылку всем\n"
-        "• Секрет будет автоматически синхронизирован на slave\n\n"
-        "Выберите тип нового секрета:",
+        MTP_SECRET_ASK,
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("🔐 EE — TLS 1.3 (рекомендуется)",
                                   callback_data="proxy_mtp_secret_ee")],
@@ -706,7 +697,7 @@ async def _show_mtp_secret_ask(query):
                                   callback_data="proxy_mtp_secret_dd")],
             [InlineKeyboardButton("🔓 plain",
                                   callback_data="proxy_mtp_secret_plain")],
-            [InlineKeyboardButton("❌ Отмена",
+            [InlineKeyboardButton(BTN_CANCEL,
                                   callback_data="proxy_mtp_menu")],
         ]),
         parse_mode="Markdown"
@@ -724,7 +715,7 @@ async def _show_mtp_secret_confirm(query, mode: str):
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ Да, сменить",
                                   callback_data=f"proxy_mtp_secret_confirm_{mode}")],
-            [InlineKeyboardButton("❌ Отмена",
+            [InlineKeyboardButton(BTN_CANCEL,
                                   callback_data="proxy_mtp_menu")],
         ]),
         parse_mode="Markdown"
@@ -750,7 +741,7 @@ async def _show_mtp_help(query):
         "• ПК: Настройки → Продвинутые настройки → Тип соединения\n"
         "Или просто нажмите на ссылку из главного меню.",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("◀️ Назад", callback_data="proxy_mtp_menu")]
+            [InlineKeyboardButton(BTN_BACK, callback_data="proxy_mtp_menu")]
         ]),
         parse_mode="Markdown"
     )
@@ -766,7 +757,7 @@ async def _show_mtp_stats(query, view: str = "now"):
         await query.edit_message_text(
             f"❌ Ошибка сбора статистики: {e}",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("◀️ Назад", callback_data="proxy_mtp_menu")]
+                [InlineKeyboardButton(BTN_BACK, callback_data="proxy_mtp_menu")]
             ])
         )
         return
@@ -892,8 +883,8 @@ async def _show_mtp_stats(query, view: str = "now"):
     kb_rows = []
     if len(server_row) > 1:
         kb_rows.append(server_row)
-    kb_rows.append([time_btn, InlineKeyboardButton("🔄 Обновить", callback_data=refresh_cb)])
-    kb_rows.append([InlineKeyboardButton("◀️ Назад", callback_data="proxy_mtp_menu")])
+    kb_rows.append([time_btn, InlineKeyboardButton(BTN_REFRESH, callback_data=refresh_cb)])
+    kb_rows.append([InlineKeyboardButton(BTN_BACK, callback_data="proxy_mtp_menu")])
 
     await query.edit_message_text(
         text,
@@ -932,7 +923,7 @@ async def _show_mtp_stats_slave(query, slave_idx: int, view: str = "now"):
         await query.edit_message_text(
             f"❌ SSH ошибка: {e}",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("◀️ Назад", callback_data="proxy_mtp_stats")]
+                [InlineKeyboardButton(BTN_BACK, callback_data="proxy_mtp_stats")]
             ])
         )
         return
@@ -941,7 +932,7 @@ async def _show_mtp_stats_slave(query, slave_idx: int, view: str = "now"):
         await query.edit_message_text(
             f"❌ Ошибка: {sl['error']}",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("◀️ Назад", callback_data="proxy_mtp_stats")]
+                [InlineKeyboardButton(BTN_BACK, callback_data="proxy_mtp_stats")]
             ])
         )
         return
@@ -1010,8 +1001,8 @@ async def _show_mtp_stats_slave(query, slave_idx: int, view: str = "now"):
         text,
         reply_markup=InlineKeyboardMarkup([
             server_row,
-            [InlineKeyboardButton("🔄 Обновить", callback_data=refresh_cb)],
-            [InlineKeyboardButton("◀️ Назад",    callback_data="proxy_mtp_menu")],
+            [InlineKeyboardButton(BTN_REFRESH, callback_data=refresh_cb)],
+            [InlineKeyboardButton(BTN_BACK,    callback_data="proxy_mtp_menu")],
         ]),
         parse_mode="Markdown"
     )
