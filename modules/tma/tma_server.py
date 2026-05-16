@@ -35,8 +35,8 @@ from awg_core import (
     make_vpn_link, make_wg_conf,
     remove_client_from_awg, save_client_excl, save_users, set_maintenance,
     load_servers,
-    _histogram_for_tma,
 )
+from awg_stats import _histogram_for_tma
 from sites_data import DEFAULT_SELECTED
 
 logging.basicConfig(level=logging.WARNING)
