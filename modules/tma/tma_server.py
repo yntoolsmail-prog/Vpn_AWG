@@ -26,7 +26,7 @@ from flask import Flask, jsonify, request, Response, send_file
 
 from awg_core import (
     ADMIN_ID, AWG_CONF, AWG_IFACE, AWG_SERVICE, BACKUP_DIR, BOT_SERVICE, CLIENTS_DIR, BOT_TOKEN,
-    ENV_FILE, QRENCODE_BIN, SERVER_ENDPOINT, SERVER_ENDPOINT_BACKUP, SERVER_IP, SERVER_PORT,
+    ENV_FILE, QRENCODE_BIN, SERVER_ENDPOINT, SERVER_ENDPOINT_BACKUP, SERVER_IP, SERVER_PORT, SERVER_PUBLIC,
     PRIMARY_DNS, SECONDARY_DNS, USERS_FILE,
     build_allowed_ips, can_access_device, collect_stats_basic, collect_stats_full,
     create_backup, create_client, device_short_name, fmt_bytes,
@@ -421,17 +421,26 @@ def device_qr(user_id, name):
 @app.route("/api/devices/<path:name>/vpnlink")
 @require_auth
 def device_vpnlink(user_id, name):
-    """Ссылка vpn:// для AmneziaVPN. Принимает ?endpoint=X."""
+    """Ссылка vpn:// для AmneziaVPN. Принимает ?endpoint=X&srv_id=Y."""
     if not can_access_device(user_id, name):
         return jsonify({"error": "Нет доступа"}), 403
-    keys     = get_client_keys(name)
+    keys = get_client_keys(name)
     if not keys:
         return jsonify({"error": "Устройство не найдено"}), 404
     endpoint = request.args.get("endpoint") or SERVER_ENDPOINT
+    srv_id   = request.args.get("srv_id", "")
+    spub, sprt = SERVER_PUBLIC, SERVER_PORT
+    if srv_id:
+        for s in load_servers():
+            if s.get("id") == srv_id:
+                spub = s.get("awg_public_key") or SERVER_PUBLIC
+                sprt = str(s.get("awg_port") or SERVER_PORT)
+                break
     try:
         link = make_vpn_link(
             keys["priv"], keys["pub"], keys["ip"], keys["psk"], keys["obfs"],
             name=name, endpoint=endpoint,
+            server_public=spub, server_port=sprt,
         )
         return jsonify({"link": link})
     except Exception as e:

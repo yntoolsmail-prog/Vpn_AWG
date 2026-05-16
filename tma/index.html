@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/twemoji@14.0.2/dist/twemoji.min.js" crossorigin="anonymous"></script>
 <script>
   // Telegram SDK принудительно отключает зум — восстанавливаем
   (function() {
@@ -52,7 +53,7 @@
   html, body {
     background: var(--bg);
     color: var(--text);
-    font-family: 'JetBrains Mono', 'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', monospace;
+    font-family: 'JetBrains Mono', monospace;
     font-size: 15px;
     min-height: 100vh;
     overscroll-behavior: none;
@@ -1125,6 +1126,11 @@ let _servers = null;
 let _selectedEndpoint = null;   // строка — выбранный эндпоинт
 let _selectedServerName = null; // отображаемое имя сервера для метки
 let _selectedSrvRawName = null; // имя сервера без emoji — для нейминга файлов
+let _selectedSrvId = null;      // id сервера — для передачи ключей vpnlink
+
+function _tw(el) {
+  if (typeof twemoji !== 'undefined') twemoji.parse(el, { folder: 'svg', ext: '.svg' });
+}
 
 function _loadServers() {
   if (_servers !== null) return Promise.resolve(_servers);
@@ -1137,6 +1143,7 @@ function _loadServers() {
       _selectedEndpoint    = ep.value;
       _selectedServerName  = `${srv.emoji} ${ep.value}`;
       _selectedSrvRawName  = srv.name;
+      _selectedSrvId       = srv.id;
     }
     return srvs;
   }).catch(() => { _servers = []; return []; });
@@ -1148,6 +1155,7 @@ function _updateServerLabel() {
   if (_selectedEndpoint && _selectedServerName) {
     el.textContent = _selectedServerName;
     el.style.color = 'var(--text-main)';
+    _tw(el);
   } else {
     el.textContent = 'Сервер не выбран';
     el.style.color = 'var(--text-dim)';
@@ -1169,20 +1177,22 @@ function openServerPicker() {
           const vfMark   = ep.verified ? ' ✅' : '';
           return `<button class="btn ${isSel ? 'btn-green' : 'btn-ghost'}"
                           style="text-align:left;justify-content:flex-start;gap:8px"
-                          onclick="selectServerEndpoint('${_esc(ep.value)}','${_esc(srv.emoji+' '+ep.value)}','${_esc(srv.name)}')">
+                          onclick="selectServerEndpoint('${_esc(ep.value)}','${_esc(srv.emoji+' '+ep.value)}','${_esc(srv.name)}','${_esc(srv.id)}')">
                     ${srv.emoji} ${_esc(srv.name)} &nbsp; ${typeIcon} ${_esc(ep.value)}${vfMark}
                   </button>`;
         }).join('');
       }).join('');
     }
+    _tw(body);
     openModal('modal-server-picker');
   });
 }
 
-function selectServerEndpoint(epValue, displayName, srvRawName) {
+function selectServerEndpoint(epValue, displayName, srvRawName, srvId) {
   _selectedEndpoint   = epValue;
   _selectedServerName = displayName;
   _selectedSrvRawName = srvRawName || '';
+  _selectedSrvId      = srvId || '';
   closeModal('modal-server-picker');
   _updateServerLabel();
 }
@@ -1195,6 +1205,7 @@ function _resetServerSelection() {
   _selectedEndpoint   = null;
   _selectedServerName = null;
   _selectedSrvRawName = null;
+  _selectedSrvId      = null;
   _updateServerLabel();
   // Если один сервер/эндпоинт — автовыбираем
   if (_servers && _servers.length === 1 && _servers[0].endpoints.length === 1) {
@@ -1203,6 +1214,7 @@ function _resetServerSelection() {
     _selectedEndpoint   = ep.value;
     _selectedServerName = `${srv.emoji} ${ep.value}`;
     _selectedSrvRawName = srv.name;
+    _selectedSrvId      = srv.id;
     _updateServerLabel();
   }
 }
@@ -1307,8 +1319,9 @@ async function showVpnLink(name) {
     return;
   }
   closeModal('modal-device');
+  const srvId = _selectedSrvId || '';
   try {
-    const resp = await API(`/api/devices/${encodeURIComponent(name)}/vpnlink?endpoint=${encodeURIComponent(endpoint)}`);
+    const resp = await API(`/api/devices/${encodeURIComponent(name)}/vpnlink?endpoint=${encodeURIComponent(endpoint)}&srv_id=${encodeURIComponent(srvId)}`);
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || 'Ошибка');
     if (navigator.clipboard) {

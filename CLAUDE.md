@@ -190,8 +190,11 @@ Vpn_AWG/
   - создание клиента синкает peer на все slave-серверы через `_sync_new_peer_to_slaves()` в фоновых потоках
   - `/backups/<name>/restore` валидирует содержимое архива перед восстановлением (наличие `*.conf` + `server.env`)
   - `/send` принимает `srv_name` в теле запроса; `_make_conf_filename(name, srv_name)` формирует нейм `User.Server.Device.conf`
+  - `/vpnlink` принимает `srv_id` в query; ищет сервер в `load_servers()`, берёт `awg_public_key`/`awg_port` — аналогично боту
 - `tma/index.html` — фронтенд TMA:
   - `_selectedSrvRawName` хранит имя сервера без emoji для нейминга; передаётся в `srv_name` при отправке `.conf`
+  - `_selectedSrvId` хранит id сервера; передаётся в `srv_id` при генерации vpnlink
   - `_getSelectedEndpoint()` возвращает пустую строку если сервер не выбран; `sendConf`/`showQR`/`showVpnLink` блокируют выполнение с алертом "Выберите сервер"
+  - Twemoji (`twemoji.parse`) применяется для корректного рендера эмодзи (включая флаги) в лейбле сервера и пикере
 - Конфигурационные файлы в `/etc/amnezia/` — создаются при установке
 - `amnezia.gpg.asc` — GPG-ключ для верификации пакетов
