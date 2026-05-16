@@ -505,35 +505,6 @@ def device_sites_get(user_id, name):
     })
 
 
-@app.route("/api/devices/<path:name>/sites", methods=["PUT"])
-@require_auth
-def device_sites_put(user_id, name):
-    """Обновить site exclusions и перегенерировать .conf."""
-    if not can_access_device(user_id, name):
-        return jsonify({"error": "Нет доступа"}), 403
-
-    body           = request.get_json(silent=True) or {}
-    selected       = set(body.get("sites", [])) | DEFAULT_SELECTED
-    custom_domains = body.get("custom_domains", [])
-    keys           = get_client_keys(name)
-    if not keys:
-        return jsonify({"error": "Устройство не найдено"}), 404
-
-    conf_text   = _get_conf_text(name)
-    endpoint    = _endpoint_for(conf_text) if conf_text else SERVER_ENDPOINT
-    allowed_ips = build_allowed_ips(selected, extra_domains=custom_domains)
-    new_conf    = make_wg_conf(
-        keys["priv"], keys["ip"], keys["psk"], keys["obfs"],
-        endpoint=endpoint, allowed_ips=allowed_ips,
-    )
-    try:
-        with open(f"{CLIENTS_DIR}/{name}.conf", "w") as f:
-            f.write(new_conf)
-        return jsonify({"ok": True, "allowed_ips": allowed_ips})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
 # ── Исключения клиента (.excl.json) ──────────────────────────────────────────
 
 @app.route("/api/devices/<path:name>/excl", methods=["GET"])
