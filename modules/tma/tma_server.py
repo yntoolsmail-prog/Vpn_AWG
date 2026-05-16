@@ -30,7 +30,7 @@ from awg_core import (
     PRIMARY_DNS, SECONDARY_DNS, USERS_FILE,
     build_allowed_ips, can_access_device, collect_stats_basic, collect_stats_full,
     create_backup, create_client, device_short_name, fmt_bytes,
-    get_all_clients, get_allowed_ips_for_client, get_awg_dump, get_bw_histogram,
+    get_all_clients, get_allowed_ips_for_client, get_awg_dump, get_combined_awg_dump, get_bw_histogram,
     get_client_keys, get_client_pub,
     get_maintenance, get_sites_json, get_system_stats, get_user_clients, get_user_name,
     is_approved, load_client_excl, load_users, make_conf_for_client, make_conf_for_client_ep,
@@ -254,7 +254,7 @@ def api_stats():
         data = collect_stats_basic()
         data["is_admin"] = False
         # Устройства пользователя в монитор
-        dump  = get_awg_dump()
+        dump  = get_combined_awg_dump()
         now   = int(time.time())
         names = get_user_clients(uid)
         data["peers"] = [_device_info(n, dump, now) for n in names]
@@ -275,7 +275,7 @@ def api_stats():
 @require_auth
 def list_devices(user_id):
     """Список устройств текущего пользователя."""
-    dump  = get_awg_dump()
+    dump  = get_combined_awg_dump()
     now   = int(time.time())
     names = get_user_clients(user_id)
     return jsonify([_device_info(n, dump, now) for n in names])
@@ -298,7 +298,7 @@ def api_bw_histogram(user_id):
 @require_admin
 def list_all_devices(user_id):
     """Все устройства всех пользователей (admin)."""
-    dump  = get_awg_dump()
+    dump  = get_combined_awg_dump()
     now   = int(time.time())
     names = get_all_clients()
     return jsonify([_device_info(n, dump, now) for n in names])
@@ -322,7 +322,7 @@ def create_device(user_id):
 
     try:
         keys = _run_async(create_client(full_name))
-        dump = get_awg_dump()
+        dump = get_combined_awg_dump()
         _sync_new_peer_to_slaves(full_name, keys)
         return jsonify(_device_info(full_name, dump, int(time.time()))), 201
     except Exception as e:
@@ -672,7 +672,7 @@ def user_reject(user_id, target_id):
 def users_list(user_id):
     """Все одобренные пользователи с их устройствами."""
     users    = load_users()
-    dump     = get_awg_dump()
+    dump     = get_combined_awg_dump()
     now      = int(time.time())
     approved = users.get("approved", {})
 

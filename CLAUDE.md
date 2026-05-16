@@ -187,7 +187,7 @@ Vpn_AWG/
 
 ## Что не трогать
 
-- `modules/tma/tma_server.py` — Flask API:
+- `modules/tma/tma_server.py` — Flask API (все вызовы get_awg_dump заменены на get_combined_awg_dump — статистика учитывает slaves):
   - исключения сайтов хранятся только в `.excl.json` и применяются динамически при генерации конфига
   - `/excl PUT` валидирует домены + запускает `process_domain()` в фоне; IP/CIDR применяются напрямую без DNS
   - создание клиента синкает peer на все slave-серверы через `_sync_new_peer_to_slaves()` в фоновых потоках
