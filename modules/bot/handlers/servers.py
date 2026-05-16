@@ -47,8 +47,8 @@ async def show_servers_list(query):
         )])
     if _modules and any(getattr(m, "__name__", "") == "modules.slave_servers" for m in _modules.modules):
         rows.append([InlineKeyboardButton("➕ Добавить сервер", callback_data="srv_add")])
-    rows.append([InlineKeyboardButton("🔍 Проверить DNS", callback_data="srv_checkdns"),
-                 InlineKeyboardButton("🗑 Удалить домен", callback_data="srv_deldomain_list")])
+    rows.append([InlineKeyboardButton("🔍 Проверить DNS", callback_data="srv_checkdns")])
+    rows.append([InlineKeyboardButton("🗑 Удалить домен", callback_data="srv_deldomain_list")])
     rows.append([InlineKeyboardButton(BTN_BACK, callback_data="back")])
     await query.edit_message_text(
         "\n".join(lines),
