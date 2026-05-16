@@ -38,6 +38,7 @@ from awg_core import (
     remove_client_from_awg, save_client_excl, save_users, set_maintenance,
     load_servers,
 )
+from awg_ssh import PARAMIKO_AVAILABLE, ssh_sync_peer_to_slave
 from awg_stats import _histogram_for_tma
 from sites_data import DEFAULT_SELECTED
 
@@ -153,6 +154,25 @@ def _get_conf_text(name: str) -> str | None:
         return None
     with open(path) as f:
         return f.read()
+
+
+def _sync_new_peer_to_slaves(name: str, keys: dict) -> None:
+    """Синхронизирует нового peer на все slave-серверы в фоне (fire-and-forget).
+    Идентично боту: bot/handlers/servers.py _sync_peer_to_all_slaves."""
+    if not PARAMIKO_AVAILABLE:
+        return
+    slaves = [s for s in load_servers() if not s.get("is_primary")]
+    if not slaves:
+        return
+    pub = keys["pub"]
+    psk = keys["psk"]
+    ip  = keys["ip"]  # без /32, ssh_sync_peer_to_slave добавляет сам
+    for srv in slaves:
+        threading.Thread(
+            target=ssh_sync_peer_to_slave,
+            args=(srv, name, pub, psk, ip),
+            daemon=True,
+        ).start()
 
 
 def _resolve_allowed_ips(name: str, use_excl: bool) -> str:
@@ -290,8 +310,9 @@ def create_device(user_id):
         return jsonify({"error": "Устройство с таким именем уже существует"}), 409
 
     try:
-        _run_async(create_client(full_name))
+        keys = _run_async(create_client(full_name))
         dump = get_awg_dump()
+        _sync_new_peer_to_slaves(full_name, keys)
         return jsonify(_device_info(full_name, dump, int(time.time()))), 201
     except Exception as e:
         return jsonify({"error": str(e)}), 500
