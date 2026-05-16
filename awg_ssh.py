@@ -240,6 +240,63 @@ def ssh_get_slave_peer_count(server: dict):
         return None
 
 
+def ssh_get_slave_awg_dump(server: dict) -> dict:
+    """SSH на slave: запускает awg show dump, возвращает dict {pub: {rx,tx,endpoint,allowed,handshake}}.
+    Возвращает {} при ошибке или если paramiko недоступен."""
+    if not PARAMIKO_AVAILABLE:
+        return {}
+    ssh = server.get("ssh", {})
+    try:
+        client = _ssh_connect(ssh, timeout=8)
+        try:
+            _, stdout, _ = client.exec_command(
+                f"awg show {AWG_IFACE} dump 2>/dev/null",
+                timeout=10
+            )
+            out = stdout.read().decode()
+        finally:
+            client.close()
+    except Exception:
+        return {}
+    peers = {}
+    for line in out.strip().split("\n")[1:]:
+        parts = line.split("\t")
+        if len(parts) < 7:
+            continue
+        pub       = parts[0]
+        endpoint  = parts[2] if parts[2] != "(none)" else ""
+        allowed   = parts[3] if parts[3] != "(none)" else ""
+        handshake = int(parts[4]) if parts[4] not in ("0", "(none)") else 0
+        rx        = int(parts[5])
+        tx        = int(parts[6])
+        peers[pub] = {"rx": rx, "tx": tx, "endpoint": endpoint,
+                      "allowed": allowed, "handshake": handshake}
+    return peers
+
+
+def ssh_read_slave_awg_bytes(server: dict) -> tuple[int, int]:
+    """SSH на slave: читает счётчики rx/tx интерфейса awg0. Возвращает (rx, tx) или (0, 0) при ошибке."""
+    if not PARAMIKO_AVAILABLE:
+        return 0, 0
+    ssh = server.get("ssh", {})
+    try:
+        client = _ssh_connect(ssh, timeout=8)
+        try:
+            _, stdout, _ = client.exec_command(
+                f"cat /sys/class/net/{AWG_IFACE}/statistics/rx_bytes "
+                f"/sys/class/net/{AWG_IFACE}/statistics/tx_bytes 2>/dev/null",
+                timeout=5
+            )
+            lines = stdout.read().decode().strip().split("\n")
+            if len(lines) >= 2:
+                return int(lines[0]), int(lines[1])
+        finally:
+            client.close()
+    except Exception:
+        pass
+    return 0, 0
+
+
 def ssh_read_slave_env(ip: str, port: int, login: str, password: str) -> None:
     """Подключается к slave по SSH, проверяет соединение и наличие AWG. Бросает исключение при ошибке."""
     if not PARAMIKO_AVAILABLE:

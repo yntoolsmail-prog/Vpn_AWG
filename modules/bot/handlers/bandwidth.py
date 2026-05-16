@@ -1,4 +1,4 @@
-import os, time
+import os, time, asyncio
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from awg_core import (
@@ -7,6 +7,8 @@ from awg_core import (
     get_all_clients, get_awg_dump, get_bw_histogram, get_bw_histogram_day,
     get_bw_top, get_log_days, get_vnstat_monthly,
     load_bw_peak, read_iface_bytes, save_bw_peak, get_host_iface,
+    load_servers,
+    ssh_read_slave_awg_bytes, PARAMIKO_AVAILABLE as _PARAMIKO_AVAILABLE,
 )
 from .common import back_kb, BTN_BACK, BTN_BACK_MENU, BTN_CANCEL
 
@@ -53,6 +55,11 @@ async def bw_monitor_job(context: ContextTypes.DEFAULT_TYPE):
                     "eth_r": eth_r2, "eth_t": eth_t2, "ts": now,
                 }
                 return
+
+            # Добавляем трафик slave-серверов (обновляется slave_bw_poll_job каждые 30 с)
+            slave_bw = context.bot_data.get("slave_bw", {})
+            awg_down = round(awg_down + slave_bw.get("awg_down", 0), 2)
+            awg_up   = round(awg_up   + slave_bw.get("awg_up",   0), 2)
 
             # Пики — по клиентской нагрузке (awg), пики сервера (eth) рядом
             awg_load = round(max(awg_down, awg_up), 2)
@@ -289,6 +296,47 @@ async def do_bw_reset_all(query):
         pass
     await query.answer("✅ Все данные сброшены", show_alert=False)
     await show_bandwidth(query)
+
+
+async def slave_bw_poll_job(context: ContextTypes.DEFAULT_TYPE):
+    """Job: каждые 30 секунд опрашивает slave-серверы по SSH и сохраняет их AWG-трафик
+    в context.bot_data['slave_bw'] = {awg_down: float, awg_up: float}.
+    bw_monitor_job прибавляет эти значения к primary-скоростям."""
+    if not _PARAMIKO_AVAILABLE:
+        return
+    slaves = [s for s in load_servers() if not s.get("is_primary")]
+    if not slaves:
+        return
+
+    now = int(time.time())
+    prev_slave = context.bot_data.get("slave_bw_prev", {})
+    new_prev   = {}
+    total_down = 0.0
+    total_up   = 0.0
+
+    loop = asyncio.get_event_loop()
+    for srv in slaves:
+        sid = srv.get("id") or srv.get("name", "")
+        rx2, tx2 = await loop.run_in_executor(None, ssh_read_slave_awg_bytes, srv)
+        if rx2 == 0 and tx2 == 0:
+            continue
+        new_prev[sid] = {"rx": rx2, "tx": tx2, "ts": now}
+        old = prev_slave.get(sid)
+        if old:
+            dt = now - old["ts"]
+            if dt > 0:
+                down = (tx2 - old["tx"]) * 8 / 1_000_000 / dt  # TX slave = клиенты скачивают
+                up   = (rx2 - old["rx"]) * 8 / 1_000_000 / dt  # RX slave = клиенты отдают
+                if 0 <= down <= 10_000 and 0 <= up <= 10_000:
+                    total_down += down
+                    total_up   += up
+
+    context.bot_data["slave_bw_prev"] = new_prev
+    context.bot_data["slave_bw"] = {
+        "awg_down": round(total_down, 2),
+        "awg_up":   round(total_up,   2),
+        "ts":       now,
+    }
 
 
 # ── Бэкап ──────────────────────────────────────────────────────────────────────

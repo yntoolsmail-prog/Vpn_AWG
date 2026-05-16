@@ -19,7 +19,7 @@ from awg_core import (
     get_awg_dump, get_bw_histogram, get_bw_histogram_day,
     get_bw_top, get_client_keys, get_client_pub,
     get_host_iface, get_kernel_version, get_log_days,
-    get_maintenance, get_system_stats,
+    get_combined_awg_dump, get_maintenance, get_system_stats,
     get_ubuntu_version, get_user_clients, get_user_display,
     get_user_name, get_vnstat_monthly,
     is_approved, load_bw_peak, load_client_excl, load_users,
@@ -54,7 +54,7 @@ from handlers.common import (
     IMG_BASE, back_kb, _tma_button, sites_keyboard, _md,
 )
 from handlers.bandwidth import (
-    bw_monitor_job, show_bandwidth, show_bw_days,
+    bw_monitor_job, slave_bw_poll_job, show_bandwidth, show_bw_days,
     show_bw_reset_ask, do_bw_reset, do_bw_reset_all, do_backup,
 )
 from handlers.help import show_help, show_help_dns
@@ -138,7 +138,7 @@ async def show_start_screen(msg, user_id: int, edit: bool = False):
         await main_menu(msg, user_id, edit=edit)
         return
 
-    peers   = get_awg_dump()
+    peers   = get_combined_awg_dump()
     now    = int(time.time())
     online = sum(1 for p in peers.values() if p.get("handshake") and now - p["handshake"] < 180)
     total  = len(get_all_clients())
@@ -260,7 +260,7 @@ async def main_menu(msg, user_id: int, edit=False):
     is_admin = (user_id == ADMIN_ID)
 
     if is_admin:
-        peers_a  = get_awg_dump()
+        peers_a  = get_combined_awg_dump()
         now_a    = int(time.time())
         online_a = sum(1 for p in peers_a.values() if p.get("handshake") and now_a - p["handshake"] < 180)
         total_a  = len(get_all_clients())
@@ -300,7 +300,7 @@ async def main_menu(msg, user_id: int, edit=False):
         n = len(my_clients)
         word = "устройство" if n == 1 else ("устройства" if 2 <= n <= 4 else "устройств")
 
-        peers   = get_awg_dump()
+        peers   = get_combined_awg_dump()
         now_ts  = int(time.time())
         online  = sum(1 for p in peers.values() if p.get("handshake") and now_ts - p["handshake"] < 180)
         total   = len(get_all_clients())
@@ -750,6 +750,8 @@ def main():
     app.job_queue.run_repeating(maintenance_reminder, interval=86400, first=60)
     # Мониторинг трафика — каждые 5 секунд (пики), в лог раз в минуту
     app.job_queue.run_repeating(bw_monitor_job, interval=5, first=10)
+    # Опрос полосы пропускания на slave-серверах — каждые 30 секунд
+    app.job_queue.run_repeating(slave_bw_poll_job, interval=30, first=15)
     # Уведомление о старте — через 5 секунд после запуска
     app.job_queue.run_once(send_start_hello, when=5)
     # Мониторинг обновлений репозитория — раз в сутки, первая проверка через 20 секунд после старта

@@ -6,7 +6,7 @@ from awg_core import (
     SERVER_ENDPOINT, SERVER_ENDPOINT_BACKUP, SERVER_PORT, TMA_URL,
     can_access_device, create_client, device_short_name,
     gen_obfs, get_all_clients, get_allowed_ips_for_client,
-    get_awg_dump, get_client_keys, get_client_pub, get_user_clients,
+    get_awg_dump, get_combined_awg_dump, get_client_keys, get_client_pub, get_user_clients,
     get_user_name, is_approved, load_client_excl, load_servers,
     make_conf_for_client, make_conf_for_client_ep, make_vpn_link,
     remove_client_from_awg, resolve_endpoint, save_client_excl,
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 async def show_my_devices(query, user_id: int):
     clients = get_user_clients(user_id)
-    peers   = get_awg_dump()
+    peers   = get_combined_awg_dump()
 
     if not clients:
         kb = [
@@ -52,7 +52,7 @@ async def show_device(query, name: str, user_id: int):
         await query.answer("⛔ Это не ваше устройство.", show_alert=True)
         return
 
-    peers = get_awg_dump()
+    peers = get_combined_awg_dump()
     pub   = get_client_pub(name)
     stats = peers.get(pub, {}) if pub else {}
 
@@ -61,11 +61,13 @@ async def show_device(query, name: str, user_id: int):
     dl    = fmt_bytes(stats.get("tx", 0))  # tx сервера = клиент скачал (↓)
     ul    = fmt_bytes(stats.get("rx", 0))  # rx сервера = клиент отдал (↑)
     ep    = stats.get("endpoint", "—")
+    srv_label = stats.get("server", "")
+    srv_note  = f" _({srv_label})_" if srv_label else ""
 
     info = (
         f"📱 Устройство: *{short}*\n"
         f"👤 Пользователь: {name.split('.')[0]}\n\n"
-        f"🕐 Хендшейк: {hs}\n"
+        f"🕐 Хендшейк: {hs}{srv_note}\n"
         f"📍 Endpoint: {ep}\n"
         f"📶 Трафик: ↓{dl} ↑{ul}"
     )
@@ -86,7 +88,7 @@ async def show_device(query, name: str, user_id: int):
 
 async def show_all_clients(query):
     clients = get_all_clients()
-    peers   = get_awg_dump()
+    peers   = get_combined_awg_dump()
 
     if not clients:
         await query.edit_message_text("👥 Клиентов нет.", reply_markup=back_kb())

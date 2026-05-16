@@ -181,6 +181,7 @@ Vpn_AWG/
 - **Re-экспорт `awg_core`:** `from awg_core import *` не реэкспортирует функции с `_` префиксом — для них нужен явный импорт из оригинального модуля (`awg_stats`, `awg_clients`, `awg_ssh`)
 - **Кнопки меню:** каждая кнопка на отдельной строке (`[btn]`), не группировать по две в строку
 - **Удалённый функционал:** «Сменить часовой пояс» и «Обновить IP сервера» — убраны из бота полностью (handlers, ConversationHandler, job)
+- **Статистика со slaves:** `get_combined_awg_dump()` в `awg_stats.py` — агрегирует awg dump primary + slaves с кэшем 30 с; `slave_bw_poll_job` каждые 30 с опрашивает slave по SSH для real-time Mbit/s
 
 ---
 

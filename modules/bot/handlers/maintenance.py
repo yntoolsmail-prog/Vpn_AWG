@@ -6,7 +6,7 @@ from awg_core import (
     SERVER_IP, SERVER_PORT,
     ADMIN_KEY_PATH,
     create_backup, device_short_name, fmt_bytes, fmt_handshake,
-    get_all_clients, get_awg_dump, get_client_pub, get_kernel_version,
+    get_all_clients, get_awg_dump, get_combined_awg_dump, get_client_pub, get_kernel_version,
     get_maintenance, get_system_stats, get_ubuntu_version,
     get_user_clients, is_approved, load_users, log_maintenance_done,
     remove_client_from_awg, save_users,
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 async def show_status(query):
-    peers  = get_awg_dump()
+    peers  = get_combined_awg_dump()
     now    = int(time.time())
     online = sum(1 for p in peers.values() if p.get("handshake") and now - p["handshake"] < 180)
     sys    = get_system_stats()

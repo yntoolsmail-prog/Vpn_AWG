@@ -10,6 +10,55 @@ from awg_core import (
 )
 from awg_clients import get_awg_dump, get_all_clients, get_client_pub
 
+# ── Агрегация дампов primary + slaves ──────────────────────────────────────────
+_combined_dump_cache: dict = {}
+_combined_dump_ts: float = 0.0
+_COMBINED_DUMP_TTL: int = 30  # секунд
+
+
+def get_combined_awg_dump() -> dict:
+    """Объединённый awg dump: primary + все доступные slaves.
+    Для каждого peer: handshake = max по серверам, rx/tx = sum, endpoint = с сервера с макс. handshake.
+    Дополнительное поле 'server' — метка сервера с последним хендшейком (пусто = primary).
+    Кэшируется на 30 секунд."""
+    global _combined_dump_cache, _combined_dump_ts
+    now = time.time()
+    if now - _combined_dump_ts < _COMBINED_DUMP_TTL and _combined_dump_cache:
+        return _combined_dump_cache
+
+    from awg_ssh import ssh_get_slave_awg_dump, PARAMIKO_AVAILABLE
+    from awg_core import load_servers
+
+    merged: dict = {}
+
+    def _merge(dump: dict, srv_label: str = ""):
+        for pub, data in dump.items():
+            if pub not in merged:
+                merged[pub] = dict(data)
+                merged[pub]["server"] = srv_label if data.get("handshake") else ""
+            else:
+                ex = merged[pub]
+                if data.get("handshake", 0) > ex.get("handshake", 0):
+                    ex["handshake"] = data["handshake"]
+                    ex["endpoint"]  = data.get("endpoint", "")
+                    ex["server"]    = srv_label
+                ex["rx"] = ex.get("rx", 0) + data.get("rx", 0)
+                ex["tx"] = ex.get("tx", 0) + data.get("tx", 0)
+
+    _merge(get_awg_dump(), "")
+
+    if PARAMIKO_AVAILABLE:
+        for srv in load_servers():
+            if not srv.get("is_primary"):
+                slave_dump = ssh_get_slave_awg_dump(srv)
+                if slave_dump:
+                    label = f"{srv.get('emoji', '')} {srv.get('name', 'Slave')}".strip()
+                    _merge(slave_dump, label)
+
+    _combined_dump_cache = merged
+    _combined_dump_ts = now
+    return merged
+
 
 def fmt_bytes(b: int) -> str:
     if b < 1024:       return f"{b} B"
@@ -323,7 +372,7 @@ def get_system_stats() -> dict:
 
 def collect_stats_full() -> dict:
     """Полная статистика — только для ADMIN_ID"""
-    peers = get_awg_dump()
+    peers = get_combined_awg_dump()
     now   = int(time.time())
     iface = get_host_iface()
     peak  = load_bw_peak()
@@ -432,7 +481,7 @@ def _histogram_for_tma(hist: dict | None) -> dict | None:
 
 def collect_stats_basic() -> dict:
     """Урезанная статистика — для обычных пользователей"""
-    peers  = get_awg_dump()
+    peers  = get_combined_awg_dump()
     now    = int(time.time())
     online = sum(1 for p in peers.values()
                  if p.get("handshake") and now - p["handshake"] < 180)
