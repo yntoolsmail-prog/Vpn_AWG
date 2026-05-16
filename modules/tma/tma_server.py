@@ -8,6 +8,7 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import os
@@ -16,6 +17,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import threading
 import time
 from functools import wraps
 from urllib.parse import unquote
@@ -32,7 +34,7 @@ from awg_core import (
     get_client_keys, get_client_pub,
     get_maintenance, get_sites_json, get_system_stats, get_user_clients, get_user_name,
     is_approved, load_client_excl, load_users, make_conf_for_client, make_conf_for_client_ep,
-    make_vpn_link, make_wg_conf,
+    make_vpn_link, make_wg_conf, process_domain,
     remove_client_from_awg, save_client_excl, save_users, set_maintenance,
     load_servers,
 )
@@ -546,6 +548,24 @@ def device_excl_get(user_id, name):
     return jsonify(excl)
 
 
+def _validate_domain_entry(entry: str) -> tuple[bool, str]:
+    """Валидация домена/IP/CIDR — идентична боту (sites.py).
+    Возвращает (True, нормализованный_вход) или (False, сообщение_об_ошибке)."""
+    entry = entry.strip()
+    for prefix in ("https://", "http://", "www."):
+        if entry.startswith(prefix):
+            entry = entry[len(prefix):]
+    entry = entry.rstrip("/")
+    try:
+        ipaddress.ip_network(entry, strict=False)
+        return True, entry
+    except ValueError:
+        pass
+    if "." in entry and len(entry) >= 4 and not entry.startswith("."):
+        return True, entry
+    return False, f"Неверный формат: «{entry}». Укажите домен (site.ru) или IP/CIDR (1.2.3.0/24)."
+
+
 @app.route("/api/devices/<path:name>/excl", methods=["PUT"])
 @require_auth
 def device_excl_put(user_id, name):
@@ -554,10 +574,31 @@ def device_excl_put(user_id, name):
         return jsonify({"error": "Нет доступа"}), 403
     if not os.path.exists(f"{CLIENTS_DIR}/{name}.conf"):
         return jsonify({"error": "Не найдено"}), 404
+
     body = request.get_json(silent=True) or {}
+    raw_domains = list(body.get("custom_domains", []))
+
+    # Валидация кастомных доменов (идентично боту)
+    validated = []
+    for raw in raw_domains:
+        ok, result = _validate_domain_entry(raw)
+        if not ok:
+            return jsonify({"error": result}), 400
+        validated.append(result)
+
+    # DNS-пробинг для новых доменов (не IP/CIDR) — как в боте
+    existing = load_client_excl(name) or {}
+    existing_domains = set(existing.get("custom_domains", []))
+    for entry in validated:
+        if entry not in existing_domains:
+            try:
+                ipaddress.ip_network(entry, strict=False)
+            except ValueError:
+                threading.Thread(target=process_domain, args=(entry,), daemon=True).start()
+
     data = {
         "sites":          list(body.get("sites", [])),
-        "custom_domains": list(body.get("custom_domains", [])),
+        "custom_domains": validated,
     }
     try:
         save_client_excl(name, data)
@@ -766,6 +807,22 @@ def backup_restore(user_id, filename):
     path = os.path.join(BACKUP_DIR, filename)
     if not os.path.exists(path):
         return jsonify({"error": "Файл не найден"}), 404
+
+    # Валидация архива — идентично боту (maintenance.py)
+    try:
+        with tarfile.open(path, "r:gz") as tar:
+            names = tar.getnames()
+    except Exception as e:
+        return jsonify({"error": f"Не удалось открыть архив: {e}"}), 400
+
+    has_conf = any(n.endswith(".conf") and "awg" in n for n in names)
+    has_env  = "server.env" in names
+    if not has_conf or not has_env:
+        return jsonify({
+            "error": "Файл не похож на бэкап AmneziaWG — не найдены обязательные файлы (конфиг интерфейса, server.env).",
+            "has_conf": has_conf,
+            "has_env":  has_env,
+        }), 400
 
     # Автобэкап перед восстановлением
     try:
