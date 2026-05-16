@@ -8,6 +8,7 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import os
@@ -16,6 +17,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import threading
 import time
 from functools import wraps
 from urllib.parse import unquote
@@ -24,7 +26,7 @@ from flask import Flask, jsonify, request, Response, send_file
 
 from awg_core import (
     ADMIN_ID, AWG_CONF, AWG_IFACE, AWG_SERVICE, BACKUP_DIR, BOT_SERVICE, CLIENTS_DIR, BOT_TOKEN,
-    ENV_FILE, QRENCODE_BIN, SERVER_ENDPOINT, SERVER_ENDPOINT_BACKUP, SERVER_IP, SERVER_PORT,
+    ENV_FILE, QRENCODE_BIN, SERVER_ENDPOINT, SERVER_ENDPOINT_BACKUP, SERVER_IP, SERVER_PORT, SERVER_PUBLIC,
     PRIMARY_DNS, SECONDARY_DNS, USERS_FILE,
     build_allowed_ips, can_access_device, collect_stats_basic, collect_stats_full,
     create_backup, create_client, device_short_name, fmt_bytes,
@@ -32,11 +34,12 @@ from awg_core import (
     get_client_keys, get_client_pub,
     get_maintenance, get_sites_json, get_system_stats, get_user_clients, get_user_name,
     is_approved, load_client_excl, load_users, make_conf_for_client, make_conf_for_client_ep,
-    make_vpn_link, make_wg_conf,
+    make_vpn_link, make_wg_conf, process_domain,
     remove_client_from_awg, save_client_excl, save_users, set_maintenance,
     load_servers,
-    _histogram_for_tma,
 )
+from awg_ssh import PARAMIKO_AVAILABLE, ssh_sync_peer_to_slave
+from awg_stats import _histogram_for_tma
 from sites_data import DEFAULT_SELECTED
 
 logging.basicConfig(level=logging.WARNING)
@@ -151,6 +154,36 @@ def _get_conf_text(name: str) -> str | None:
         return None
     with open(path) as f:
         return f.read()
+
+
+def _make_conf_filename(name: str, srv_name: str = "") -> str:
+    """Формирует имя файла конфига: User.ServerName.Device.conf — аналогично боту."""
+    if not srv_name:
+        return f"{name}.conf"
+    srv_clean = re.sub(r"[^\w]", "", srv_name.replace(" ", "_"))
+    parts = name.split(".", 1)
+    if len(parts) == 2:
+        return f"{parts[0]}.{srv_clean}.{parts[1]}.conf"
+    return f"{name}.{srv_clean}.conf"
+
+
+def _sync_new_peer_to_slaves(name: str, keys: dict) -> None:
+    """Синхронизирует нового peer на все slave-серверы в фоне (fire-and-forget).
+    Идентично боту: bot/handlers/servers.py _sync_peer_to_all_slaves."""
+    if not PARAMIKO_AVAILABLE:
+        return
+    slaves = [s for s in load_servers() if not s.get("is_primary")]
+    if not slaves:
+        return
+    pub = keys["pub"]
+    psk = keys["psk"]
+    ip  = keys["ip"]  # без /32, ssh_sync_peer_to_slave добавляет сам
+    for srv in slaves:
+        threading.Thread(
+            target=ssh_sync_peer_to_slave,
+            args=(srv, name, pub, psk, ip),
+            daemon=True,
+        ).start()
 
 
 def _resolve_allowed_ips(name: str, use_excl: bool) -> str:
@@ -288,8 +321,9 @@ def create_device(user_id):
         return jsonify({"error": "Устройство с таким именем уже существует"}), 409
 
     try:
-        _run_async(create_client(full_name))
+        keys = _run_async(create_client(full_name))
         dump = get_awg_dump()
+        _sync_new_peer_to_slaves(full_name, keys)
         return jsonify(_device_info(full_name, dump, int(time.time()))), 201
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -387,17 +421,28 @@ def device_qr(user_id, name):
 @app.route("/api/devices/<path:name>/vpnlink")
 @require_auth
 def device_vpnlink(user_id, name):
-    """Ссылка vpn:// для AmneziaVPN. Принимает ?endpoint=X."""
+    """Ссылка vpn:// для AmneziaVPN. Принимает ?endpoint=X&srv_id=Y."""
     if not can_access_device(user_id, name):
         return jsonify({"error": "Нет доступа"}), 403
-    keys     = get_client_keys(name)
+    keys = get_client_keys(name)
     if not keys:
         return jsonify({"error": "Устройство не найдено"}), 404
-    endpoint = request.args.get("endpoint") or SERVER_ENDPOINT
+    endpoint  = request.args.get("endpoint") or SERVER_ENDPOINT
+    srv_id    = request.args.get("srv_id", "")
+    srv_emoji = request.args.get("srv_emoji", "")
+    spub, sprt = SERVER_PUBLIC, SERVER_PORT
+    if srv_id:
+        for s in load_servers():
+            if s.get("id") == srv_id:
+                spub = s.get("awg_public_key") or SERVER_PUBLIC
+                sprt = str(s.get("awg_port") or SERVER_PORT)
+                break
+    vpn_display_name = f"{srv_emoji} {name}".strip() if srv_emoji else name
     try:
         link = make_vpn_link(
             keys["priv"], keys["pub"], keys["ip"], keys["psk"], keys["obfs"],
-            name=name, endpoint=endpoint,
+            name=vpn_display_name, endpoint=endpoint,
+            server_public=spub, server_port=sprt,
         )
         return jsonify({"link": link})
     except Exception as e:
@@ -413,13 +458,14 @@ def device_send(user_id, name):
     body        = request.get_json(silent=True) or {}
     endpoint    = body.get("endpoint") or SERVER_ENDPOINT
     use_excl    = bool(body.get("use_excl", False))
+    srv_name    = body.get("srv_name", "")
     allowed_ips = _resolve_allowed_ips(name, use_excl)
     conf_text   = make_conf_for_client(name, endpoint, allowed_ips)
     if conf_text is None:
         return jsonify({"error": "Устройство не найдено"}), 404
     short      = device_short_name(name)
     excl_note  = "\n🌐 С исключениями сайтов" if use_excl and allowed_ips != "0.0.0.0/0" else ""
-    filename   = f"{name}.conf"
+    filename   = _make_conf_filename(name, srv_name)
     caption    = (
         f"📄 Конфиг {short}\n"
         f"🌐 Endpoint: {endpoint}:{SERVER_PORT}{excl_note}\n\n"
@@ -503,35 +549,6 @@ def device_sites_get(user_id, name):
     })
 
 
-@app.route("/api/devices/<path:name>/sites", methods=["PUT"])
-@require_auth
-def device_sites_put(user_id, name):
-    """Обновить site exclusions и перегенерировать .conf."""
-    if not can_access_device(user_id, name):
-        return jsonify({"error": "Нет доступа"}), 403
-
-    body           = request.get_json(silent=True) or {}
-    selected       = set(body.get("sites", [])) | DEFAULT_SELECTED
-    custom_domains = body.get("custom_domains", [])
-    keys           = get_client_keys(name)
-    if not keys:
-        return jsonify({"error": "Устройство не найдено"}), 404
-
-    conf_text   = _get_conf_text(name)
-    endpoint    = _endpoint_for(conf_text) if conf_text else SERVER_ENDPOINT
-    allowed_ips = build_allowed_ips(selected, extra_domains=custom_domains)
-    new_conf    = make_wg_conf(
-        keys["priv"], keys["ip"], keys["psk"], keys["obfs"],
-        endpoint=endpoint, allowed_ips=allowed_ips,
-    )
-    try:
-        with open(f"{CLIENTS_DIR}/{name}.conf", "w") as f:
-            f.write(new_conf)
-        return jsonify({"ok": True, "allowed_ips": allowed_ips})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
 # ── Исключения клиента (.excl.json) ──────────────────────────────────────────
 
 @app.route("/api/devices/<path:name>/excl", methods=["GET"])
@@ -546,6 +563,24 @@ def device_excl_get(user_id, name):
     return jsonify(excl)
 
 
+def _validate_domain_entry(entry: str) -> tuple[bool, str]:
+    """Валидация домена/IP/CIDR — идентична боту (sites.py).
+    Возвращает (True, нормализованный_вход) или (False, сообщение_об_ошибке)."""
+    entry = entry.strip()
+    for prefix in ("https://", "http://", "www."):
+        if entry.startswith(prefix):
+            entry = entry[len(prefix):]
+    entry = entry.rstrip("/")
+    try:
+        ipaddress.ip_network(entry, strict=False)
+        return True, entry
+    except ValueError:
+        pass
+    if "." in entry and len(entry) >= 4 and not entry.startswith("."):
+        return True, entry
+    return False, f"Неверный формат: «{entry}». Укажите домен (site.ru) или IP/CIDR (1.2.3.0/24)."
+
+
 @app.route("/api/devices/<path:name>/excl", methods=["PUT"])
 @require_auth
 def device_excl_put(user_id, name):
@@ -554,10 +589,31 @@ def device_excl_put(user_id, name):
         return jsonify({"error": "Нет доступа"}), 403
     if not os.path.exists(f"{CLIENTS_DIR}/{name}.conf"):
         return jsonify({"error": "Не найдено"}), 404
+
     body = request.get_json(silent=True) or {}
+    raw_domains = list(body.get("custom_domains", []))
+
+    # Валидация кастомных доменов (идентично боту)
+    validated = []
+    for raw in raw_domains:
+        ok, result = _validate_domain_entry(raw)
+        if not ok:
+            return jsonify({"error": result}), 400
+        validated.append(result)
+
+    # DNS-пробинг для новых доменов (не IP/CIDR) — как в боте
+    existing = load_client_excl(name) or {}
+    existing_domains = set(existing.get("custom_domains", []))
+    for entry in validated:
+        if entry not in existing_domains:
+            try:
+                ipaddress.ip_network(entry, strict=False)
+            except ValueError:
+                threading.Thread(target=process_domain, args=(entry,), daemon=True).start()
+
     data = {
         "sites":          list(body.get("sites", [])),
-        "custom_domains": list(body.get("custom_domains", [])),
+        "custom_domains": validated,
     }
     try:
         save_client_excl(name, data)
@@ -766,6 +822,22 @@ def backup_restore(user_id, filename):
     path = os.path.join(BACKUP_DIR, filename)
     if not os.path.exists(path):
         return jsonify({"error": "Файл не найден"}), 404
+
+    # Валидация архива — идентично боту (maintenance.py)
+    try:
+        with tarfile.open(path, "r:gz") as tar:
+            names = tar.getnames()
+    except Exception as e:
+        return jsonify({"error": f"Не удалось открыть архив: {e}"}), 400
+
+    has_conf = any(n.endswith(".conf") and "awg" in n for n in names)
+    has_env  = "server.env" in names
+    if not has_conf or not has_env:
+        return jsonify({
+            "error": "Файл не похож на бэкап AmneziaWG — не найдены обязательные файлы (конфиг интерфейса, server.env).",
+            "has_conf": has_conf,
+            "has_env":  has_env,
+        }), 400
 
     # Автобэкап перед восстановлением
     try:

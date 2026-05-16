@@ -1,5 +1,16 @@
 {
   "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "INPUT=$(cat); FILE=$(echo \"$INPUT\" | jq -r '.tool_input.file_path // empty'); echo \"$FILE\" | grep -qE '\\.(py|sh)$' || exit 0; jq -n --arg f \"$FILE\" '{hookSpecificOutput:{hookEventName:\"PostToolUse\",additionalContext:(\"Ты изменил .py/.sh файл (\" + $f + \"). Проверь CLAUDE.md — нужно ли отразить изменения архитектуры, новые паттерны или соглашения.\")}}'"
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash",

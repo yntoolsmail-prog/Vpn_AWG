@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/twemoji@14.0.2/dist/twemoji.min.js" crossorigin="anonymous"></script>
 <script>
   // Telegram SDK принудительно отключает зум — восстанавливаем
   (function() {
@@ -48,6 +49,13 @@
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+
+  img.emoji {
+    height: 1em; width: 1em;
+    margin: 0 0.05em 0 0.1em;
+    vertical-align: -0.1em;
+    display: inline;
+  }
 
   html, body {
     background: var(--bg);
@@ -1124,6 +1132,13 @@ function renderDeviceList(devices) {
 let _servers = null;
 let _selectedEndpoint = null;   // строка — выбранный эндпоинт
 let _selectedServerName = null; // отображаемое имя сервера для метки
+let _selectedSrvRawName = null; // имя сервера без emoji — для нейминга файлов
+let _selectedSrvId = null;      // id сервера — для передачи ключей vpnlink
+let _selectedSrvEmoji = null;   // emoji сервера — для description в vpnlink
+
+function _tw(el) {
+  if (typeof twemoji !== 'undefined') twemoji.parse(el, { folder: 'svg', ext: '.svg' });
+}
 
 function _loadServers() {
   if (_servers !== null) return Promise.resolve(_servers);
@@ -1135,6 +1150,9 @@ function _loadServers() {
       const ep  = srv.endpoints[0];
       _selectedEndpoint    = ep.value;
       _selectedServerName  = `${srv.emoji} ${ep.value}`;
+      _selectedSrvRawName  = srv.name;
+      _selectedSrvId       = srv.id;
+      _selectedSrvEmoji    = srv.emoji;
     }
     return srvs;
   }).catch(() => { _servers = []; return []; });
@@ -1146,6 +1164,7 @@ function _updateServerLabel() {
   if (_selectedEndpoint && _selectedServerName) {
     el.textContent = _selectedServerName;
     el.style.color = 'var(--text-main)';
+    _tw(el);
   } else {
     el.textContent = 'Сервер не выбран';
     el.style.color = 'var(--text-dim)';
@@ -1167,36 +1186,37 @@ function openServerPicker() {
           const vfMark   = ep.verified ? ' ✅' : '';
           return `<button class="btn ${isSel ? 'btn-green' : 'btn-ghost'}"
                           style="text-align:left;justify-content:flex-start;gap:8px"
-                          onclick="selectServerEndpoint('${_esc(ep.value)}','${_esc(srv.emoji+' '+ep.value)}')">
+                          onclick="selectServerEndpoint('${_esc(ep.value)}','${_esc(srv.emoji+' '+ep.value)}','${_esc(srv.name)}','${_esc(srv.id)}','${_esc(srv.emoji)}')">
                     ${srv.emoji} ${_esc(srv.name)} &nbsp; ${typeIcon} ${_esc(ep.value)}${vfMark}
                   </button>`;
         }).join('');
       }).join('');
     }
+    _tw(body);
     openModal('modal-server-picker');
   });
 }
 
-function selectServerEndpoint(epValue, displayName) {
+function selectServerEndpoint(epValue, displayName, srvRawName, srvId, srvEmoji) {
   _selectedEndpoint   = epValue;
   _selectedServerName = displayName;
+  _selectedSrvRawName = srvRawName || '';
+  _selectedSrvId      = srvId || '';
+  _selectedSrvEmoji   = srvEmoji || '';
   closeModal('modal-server-picker');
   _updateServerLabel();
 }
 
 function _getSelectedEndpoint() {
-  // Если ничего не выбрано вручную — берём первый эндпоинт первого сервера
-  if (_selectedEndpoint) return _selectedEndpoint;
-  if (_servers && _servers.length) {
-    const eps = _servers[0].endpoints || [];
-    if (eps.length) return eps[0].value;
-  }
-  return '';
+  return _selectedEndpoint || '';
 }
 
 function _resetServerSelection() {
   _selectedEndpoint   = null;
   _selectedServerName = null;
+  _selectedSrvRawName = null;
+  _selectedSrvId      = null;
+  _selectedSrvEmoji   = null;
   _updateServerLabel();
   // Если один сервер/эндпоинт — автовыбираем
   if (_servers && _servers.length === 1 && _servers[0].endpoints.length === 1) {
@@ -1204,6 +1224,9 @@ function _resetServerSelection() {
     const ep  = srv.endpoints[0];
     _selectedEndpoint   = ep.value;
     _selectedServerName = `${srv.emoji} ${ep.value}`;
+    _selectedSrvRawName = srv.name;
+    _selectedSrvId      = srv.id;
+    _selectedSrvEmoji   = srv.emoji;
     _updateServerLabel();
   }
 }
@@ -1275,14 +1298,19 @@ async function openDeviceDetail(d) {
 // ── Отправить .conf в Telegram ──
 async function sendConf(name) {
   const endpoint = _getSelectedEndpoint();
-  const useExcl  = !!(document.getElementById('chk-use-excl')?.checked);
+  if (!endpoint) {
+    tg?.showAlert?.('⚠️ Выберите сервер') || alert('⚠️ Выберите сервер');
+    return;
+  }
+  const useExcl = !!(document.getElementById('chk-use-excl')?.checked);
+  const srvName = _selectedSrvRawName || '';
   const btn = document.getElementById('btn-conf');
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Отправка…';
   try {
     const resp = await API(`/api/devices/${encodeURIComponent(name)}/send`, {
       method: 'POST',
-      body: JSON.stringify({ endpoint, use_excl: useExcl }),
+      body: JSON.stringify({ endpoint, use_excl: useExcl, srv_name: srvName }),
     });
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || 'Ошибка');
@@ -1298,9 +1326,15 @@ async function sendConf(name) {
 // ── AmneziaVPN ссылка ──
 async function showVpnLink(name) {
   const endpoint = _getSelectedEndpoint();
+  if (!endpoint) {
+    tg?.showAlert?.('⚠️ Выберите сервер') || alert('⚠️ Выберите сервер');
+    return;
+  }
   closeModal('modal-device');
+  const srvId    = _selectedSrvId    || '';
+  const srvEmoji = _selectedSrvEmoji || '';
   try {
-    const resp = await API(`/api/devices/${encodeURIComponent(name)}/vpnlink?endpoint=${encodeURIComponent(endpoint)}`);
+    const resp = await API(`/api/devices/${encodeURIComponent(name)}/vpnlink?endpoint=${encodeURIComponent(endpoint)}&srv_id=${encodeURIComponent(srvId)}&srv_emoji=${encodeURIComponent(srvEmoji)}`);
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || 'Ошибка');
     if (navigator.clipboard) {
@@ -1320,6 +1354,10 @@ let _qrContext = { name: '', endpoint: '', useExcl: false };
 
 async function showQR(name) {
   const endpoint = _getSelectedEndpoint();
+  if (!endpoint) {
+    tg?.showAlert?.('⚠️ Выберите сервер') || alert('⚠️ Выберите сервер');
+    return;
+  }
   const useExcl  = !!(document.getElementById('chk-use-excl')?.checked);
   _qrContext = { name, endpoint, useExcl };
   closeModal('modal-device');

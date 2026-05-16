@@ -30,7 +30,7 @@ Vpn_AWG/
 │   │       ├── bandwidth.py    # Мониторинг трафика, статистика, пики
 │   │       ├── clients.py      # Устройства: конфиги, QR, удаление, сплит-туннелинг
 │   │       ├── maintenance.py  # Техобслуживание, SSH, бэкап/восстановление, часовой пояс
-│   │       ├── servers.py      # Slave-серверы, DNS, синхронизация
+│   │       ├── servers.py      # Slave-серверы, DNS, синхронизация; _sync_peer_to_all_slaves()
 │   │       ├── sites.py        # Исключения сайтов (split tunneling)
 │   │       ├── updates.py      # Обновления репозитория, проверка IP
 │   │       ├── users.py        # Управление пользователями (approve/kick)
@@ -61,11 +61,16 @@ Vpn_AWG/
 ## Поток данных
 
 ```
-Пользователь (Telegram)
-        ↓
-   modules/bot/bot.py          ← Telegram PTB Application
-        ↓
-   awg_core.py                 ← вся бизнес-логика
+Пользователь (Telegram)           Пользователь (браузер/TMA)
+        ↓                                   ↓
+   modules/bot/bot.py          modules/tma/tma_server.py
+   (Telegram PTB Application)  (Flask HTTP API, порт 8080)
+        ↓                                   ↓
+   ╔══════════════════════════════════════════════╗
+   ║              awg_core.py                     ║
+   ║  (бизнес-логика, re-экспорт awg_clients/     ║
+   ║   awg_stats/awg_ssh)                         ║
+   ╚══════════════════════════════════════════════╝
      ├── /etc/amnezia/amneziawg/<iface>.conf  (awg конфиг)
      ├── /etc/amnezia/amneziawg/users.json    (права пользователей)
      ├── /etc/amnezia/amneziawg/clients/      (конфиги клиентов)
@@ -73,6 +78,10 @@ Vpn_AWG/
         ↓
    sites_data.py               ← данные сайтов для сплит-туннелинга
    subnet_daemon.py            ← фоновое обновление подсетей
+
+Синк на slave: awg_ssh.ssh_sync_peer_to_slave() — общее ядро;
+  бот вызывает через _sync_peer_to_all_slaves() (async, handlers/servers.py),
+  TMA — через _sync_new_peer_to_slaves() (threading, tma_server.py).
 ```
 
 ---
@@ -169,11 +178,23 @@ Vpn_AWG/
 - **Права:** только `ADMIN_ID` имеет полный доступ; остальные через `is_approved()`
 - **Блокировки:** `_AWG_LOCK` в awg_clients.py защищает одновременное создание клиентов
 - **Shell-скрипты:** вспомогательные функции в `lib/*.sh`, подключаются через `source`
+- **Re-экспорт `awg_core`:** `from awg_core import *` не реэкспортирует функции с `_` префиксом — для них нужен явный импорт из оригинального модуля (`awg_stats`, `awg_clients`, `awg_ssh`)
 
 ---
 
 ## Что не трогать
 
-- `modules/tma/tma_server.py` — Flask API, минимум текста, хорошо структурирован
+- `modules/tma/tma_server.py` — Flask API:
+  - исключения сайтов хранятся только в `.excl.json` и применяются динамически при генерации конфига
+  - `/excl PUT` валидирует домены + запускает `process_domain()` в фоне; IP/CIDR применяются напрямую без DNS
+  - создание клиента синкает peer на все slave-серверы через `_sync_new_peer_to_slaves()` в фоновых потоках
+  - `/backups/<name>/restore` валидирует содержимое архива перед восстановлением (наличие `*.conf` + `server.env`)
+  - `/send` принимает `srv_name` в теле запроса; `_make_conf_filename(name, srv_name)` формирует нейм `User.Server.Device.conf`
+  - `/vpnlink` принимает `srv_id` в query; ищет сервер в `load_servers()`, берёт `awg_public_key`/`awg_port` — аналогично боту
+- `tma/index.html` — фронтенд TMA:
+  - `_selectedSrvRawName` хранит имя сервера без emoji для нейминга; передаётся в `srv_name` при отправке `.conf`
+  - `_selectedSrvId` хранит id сервера; передаётся в `srv_id` при генерации vpnlink
+  - `_getSelectedEndpoint()` возвращает пустую строку если сервер не выбран; `sendConf`/`showQR`/`showVpnLink` блокируют выполнение с алертом "Выберите сервер"
+  - Twemoji (`twemoji.parse`) применяется для корректного рендера эмодзи (включая флаги) в лейбле сервера и пикере
 - Конфигурационные файлы в `/etc/amnezia/` — создаются при установке
 - `amnezia.gpg.asc` — GPG-ключ для верификации пакетов
