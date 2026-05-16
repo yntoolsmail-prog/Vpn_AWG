@@ -156,6 +156,17 @@ def _get_conf_text(name: str) -> str | None:
         return f.read()
 
 
+def _make_conf_filename(name: str, srv_name: str = "") -> str:
+    """Формирует имя файла конфига: User.ServerName.Device.conf — аналогично боту."""
+    if not srv_name:
+        return f"{name}.conf"
+    srv_clean = re.sub(r"[^\w]", "", srv_name.replace(" ", "_"))
+    parts = name.split(".", 1)
+    if len(parts) == 2:
+        return f"{parts[0]}.{srv_clean}.{parts[1]}.conf"
+    return f"{name}.{srv_clean}.conf"
+
+
 def _sync_new_peer_to_slaves(name: str, keys: dict) -> None:
     """Синхронизирует нового peer на все slave-серверы в фоне (fire-and-forget).
     Идентично боту: bot/handlers/servers.py _sync_peer_to_all_slaves."""
@@ -436,13 +447,14 @@ def device_send(user_id, name):
     body        = request.get_json(silent=True) or {}
     endpoint    = body.get("endpoint") or SERVER_ENDPOINT
     use_excl    = bool(body.get("use_excl", False))
+    srv_name    = body.get("srv_name", "")
     allowed_ips = _resolve_allowed_ips(name, use_excl)
     conf_text   = make_conf_for_client(name, endpoint, allowed_ips)
     if conf_text is None:
         return jsonify({"error": "Устройство не найдено"}), 404
     short      = device_short_name(name)
     excl_note  = "\n🌐 С исключениями сайтов" if use_excl and allowed_ips != "0.0.0.0/0" else ""
-    filename   = f"{name}.conf"
+    filename   = _make_conf_filename(name, srv_name)
     caption    = (
         f"📄 Конфиг {short}\n"
         f"🌐 Endpoint: {endpoint}:{SERVER_PORT}{excl_note}\n\n"
