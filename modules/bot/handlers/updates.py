@@ -2,9 +2,8 @@ import json, logging, subprocess, os
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from awg_core import (
-    ADMIN_ID, AWG_CONF, BOT_SERVICE, ENV_FILE, SERVER_IP, SERVER_PORT, TMA_URL,
-    get_all_clients, get_real_server_ip, is_approved, load_servers, load_users,
-    SERVER_ENDPOINT,
+    ADMIN_ID, AWG_CONF, BOT_SERVICE, SERVER_PORT, TMA_URL,
+    get_all_clients, is_approved, load_servers, load_users,
 )
 from .common import IMG_BASE, back_kb, BTN_BACK_MENU, BTN_CANCEL
 
@@ -161,66 +160,3 @@ async def send_start_hello(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.warning(f"send_start_hello: не удалось отправить сообщение: {e}")
 
-async def check_ip_on_start(context: ContextTypes.DEFAULT_TYPE):
-    """Job: запускается один раз через 15 секунд после старта.
-    Сравнивает реальный IP с SERVER_IP в server.env.
-    Если расходятся — уведомляет админа."""
-    real_ip = get_real_server_ip()
-    if not real_ip:
-        logger.warning("check_ip_on_start: не удалось получить внешний IP")
-        return
-    if real_ip == SERVER_IP:
-        logger.info(f"check_ip_on_start: IP актуален ({SERVER_IP})")
-        return
-    # IP расходится — уведомляем админа
-    ep_note = ""
-    if SERVER_ENDPOINT == SERVER_IP:
-        ep_note = f"\n⚠️ SERVER_ENDPOINT тоже указывает на старый IP и будет обновлён."
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔄 Обновить IP", callback_data=f"update_ip_{real_ip}")],
-        [InlineKeyboardButton("❌ Пропустить",  callback_data="update_ip_skip")],
-    ])
-    await context.bot.send_message(
-        chat_id=ADMIN_ID,
-        text=(
-            f"⚠️ IP сервера изменился!\n\n"
-            f"В настройках: `{SERVER_IP}`\n"
-            f"Реальный IP:  `{real_ip}`{ep_note}\n\n"
-            f"Обновить server.env?"
-        ),
-        reply_markup=kb,
-        parse_mode="Markdown"
-    )
-
-async def do_update_ip(query, new_ip: str):
-    """Обновляет SERVER_IP (и SERVER_ENDPOINT если он был равен старому IP) в server.env."""
-    try:
-        with open(ENV_FILE) as f:
-            lines = f.readlines()
-
-        updated = []
-        ep_updated = False
-        for line in lines:
-            if line.startswith("SERVER_IP="):
-                updated.append(f"SERVER_IP={new_ip}\n")
-            elif line.startswith("SERVER_ENDPOINT=") and SERVER_ENDPOINT == SERVER_IP:
-                updated.append(f"SERVER_ENDPOINT={new_ip}\n")
-                ep_updated = True
-            else:
-                updated.append(line)
-
-        with open(ENV_FILE, "w") as f:
-            f.writelines(updated)
-
-        ep_note = f"\n✅ SERVER_ENDPOINT обновлён: `{new_ip}`" if ep_updated else ""
-        old_ip = SERVER_IP
-        await query.edit_message_text(
-            f"✅ IP обновлён!\n\n"
-            f"Старый: `{old_ip}`\n"
-            f"Новый:  `{new_ip}`{ep_note}\n\n"
-            f"⏳ Бот перезапускается...",
-            parse_mode="Markdown"
-        )
-        subprocess.Popen(["bash", "-c", f"sleep 2 && systemctl restart {BOT_SERVICE}"])
-    except Exception as e:
-        await query.edit_message_text(f"❌ Ошибка обновления IP: {e}")

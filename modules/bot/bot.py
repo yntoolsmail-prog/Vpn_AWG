@@ -19,7 +19,7 @@ from awg_core import (
     get_awg_dump, get_bw_histogram, get_bw_histogram_day,
     get_bw_top, get_client_keys, get_client_pub,
     get_host_iface, get_kernel_version, get_log_days,
-    get_maintenance, get_real_server_ip, get_system_stats,
+    get_maintenance, get_system_stats,
     get_ubuntu_version, get_user_clients, get_user_display,
     get_user_name, get_vnstat_monthly,
     is_approved, load_bw_peak, load_client_excl, load_users,
@@ -49,7 +49,7 @@ from handlers.common import (
 )
 from handlers.common import (
     WAITING_REGISTER_NAME, WAITING_DEVICE_NAME, WAITING_RESTORE_FILE,
-    WAITING_TZ_INPUT, WAITING_SITES_DOMAIN, WAITING_SRV_DOMAIN,
+    WAITING_SITES_DOMAIN, WAITING_SRV_DOMAIN,
     WAITING_SRV_EDIT_NAME, WAITING_SRV_EDIT_EMOJI,
     IMG_BASE, back_kb, _tma_button, sites_keyboard, _md,
 )
@@ -82,13 +82,11 @@ from handlers.maintenance import (
     show_status, do_diagnostics,
     start_restore, cancel_restore, receive_restore_file, confirm_restore,
     show_ssh_admin, do_ssh_getkey, do_ssh_toggle_pass, do_ssh_regen_ask, do_ssh_regen,
-    show_maintenance, show_maint_tz, ask_tz_manual, receive_tz_manual,
-    do_set_tz, do_maint_upgrade, do_maint_ptb, do_maint_done,
+    show_maintenance, do_maint_upgrade, do_maint_ptb, do_maint_done,
     do_refresh_subnets, maintenance_reminder,
 )
 from handlers.updates import (
     check_repo_updates, do_repo_update, send_start_hello,
-    check_ip_on_start, do_update_ip,
     _write_last_commit,
 )
 _modules = load_modules()
@@ -494,53 +492,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await do_maint_upgrade(query)
     elif data == "maint_ptb" and is_admin:
         await do_maint_ptb(query)
-    elif data == "maint_tz" and is_admin:
-        await show_maint_tz(query)
-    elif data == "set_tz_manual" and is_admin:
-        await ask_tz_manual(update, context)
-    elif data.startswith("set_tz_") and is_admin:
-        await do_set_tz(query, data[7:])
     elif data == "maint_done" and is_admin:
         await do_maint_done(query)
     elif data == "refresh_subnets" and is_admin:
         await do_refresh_subnets(query, context)
-    elif data == "maint_update_ip" and is_admin:
-        await query.edit_message_text("⏳ Определяю текущий IP сервера...")
-        real_ip = get_real_server_ip()
-        if not real_ip:
-            await query.edit_message_text(
-                "❌ Не удалось определить внешний IP.\nПроверьте интернет-соединение сервера.",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(BTN_BACK, callback_data="maintenance")]])
-            )
-            return
-        if real_ip == SERVER_IP:
-            await query.edit_message_text(
-                f"✅ IP актуален: `{SERVER_IP}`\nОбновление не требуется.",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(BTN_BACK, callback_data="maintenance")]]),
-                parse_mode="Markdown"
-            )
-            return
-        ep_note = ""
-        if SERVER_ENDPOINT == SERVER_IP:
-            ep_note = f"\n⚠️ SERVER_ENDPOINT тоже будет обновлён на `{real_ip}`."
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ Обновить", callback_data=f"update_ip_{real_ip}")],
-            [InlineKeyboardButton(BTN_CANCEL,   callback_data="maintenance")],
-        ])
-        await query.edit_message_text(
-            f"🔄 Обновление IP сервера\n\n"
-            f"В настройках: `{SERVER_IP}`\n"
-            f"Реальный IP:  `{real_ip}`{ep_note}\n\n"
-            f"Подтвердить обновление?",
-            reply_markup=kb,
-            parse_mode="Markdown"
-        )
-    elif data.startswith("update_ip_") and is_admin:
-        new_ip = data[10:]
-        if new_ip == "skip":
-            await query.edit_message_text("Пропущено. IP не изменён.", reply_markup=back_kb())
-        else:
-            await do_update_ip(query, new_ip)
     elif data.startswith("repo_update_") and is_admin:
         sha = data[12:]
         await do_repo_update(query, sha)
@@ -738,19 +693,6 @@ def main():
         allow_reentry=True,
     )
 
-    tz_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(ask_tz_manual, pattern="^set_tz_manual$")],
-        states={
-            WAITING_TZ_INPUT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_tz_manual),
-            ],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-        per_chat=True,
-        per_message=False,
-        allow_reentry=True,
-    )
-
     # sites_add_custom — регистрируем ДО общего button_handler,
     # чтобы колбэк "sites_add_custom" перехватывался сюда,
     # а не уходил в button_handler как sites_<name>
@@ -796,7 +738,6 @@ def main():
     app.add_handler(reg_conv)
     app.add_handler(add_conv)
     app.add_handler(restore_conv)
-    app.add_handler(tz_conv)
     app.add_handler(sites_custom_conv)  # до общего button_handler
     app.add_handler(srv_domain_conv)
     app.add_handler(srv_rename_conv)
@@ -809,8 +750,6 @@ def main():
     app.job_queue.run_repeating(maintenance_reminder, interval=86400, first=60)
     # Мониторинг трафика — каждые 5 секунд (пики), в лог раз в минуту
     app.job_queue.run_repeating(bw_monitor_job, interval=5, first=10)
-    # Проверка IP сервера — один раз через 15 секунд после старта
-    app.job_queue.run_once(check_ip_on_start, when=15)
     # Уведомление о старте — через 5 секунд после запуска
     app.job_queue.run_once(send_start_hello, when=5)
     # Мониторинг обновлений репозитория — раз в сутки, первая проверка через 20 секунд после старта

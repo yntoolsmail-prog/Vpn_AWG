@@ -16,7 +16,6 @@ BTN_MY_DEVICES = "📋 Мои устройства"
 WAITING_REGISTER_NAME  = 10
 WAITING_DEVICE_NAME    = 11
 WAITING_RESTORE_FILE   = 12
-WAITING_TZ_INPUT       = 15   # ждём ручной ввод часового пояса
 WAITING_SITES_DOMAIN   = 16   # ждём домен/IP для добавления в исключения
 # Добавление домена к серверу
 WAITING_SRV_DOMAIN     = 26

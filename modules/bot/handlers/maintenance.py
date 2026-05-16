@@ -3,11 +3,11 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 from awg_core import (
     ADMIN_ID, AWG_CONF, AWG_IFACE, BOT_SERVICE, CLIENTS_DIR, ENV_FILE, EXCL_EXT,
-    SERVER_IP, SERVER_PORT, TZ,
+    SERVER_IP, SERVER_PORT,
     ADMIN_KEY_PATH,
     create_backup, device_short_name, fmt_bytes, fmt_handshake,
     get_all_clients, get_awg_dump, get_client_pub, get_kernel_version,
-    get_maintenance, get_real_server_ip, get_system_stats, get_ubuntu_version,
+    get_maintenance, get_system_stats, get_ubuntu_version,
     get_user_clients, is_approved, load_users, log_maintenance_done,
     remove_client_from_awg, save_users,
     get_admin_pubkey, get_ssh_password_auth_local,
@@ -15,7 +15,7 @@ from awg_core import (
     process_domain, run_subnet_daemon,
     load_servers,
 )
-from .common import back_kb, WAITING_RESTORE_FILE, WAITING_TZ_INPUT, BTN_BACK, BTN_BACK_MENU, BTN_BACK_MAINT, BTN_CANCEL
+from .common import back_kb, WAITING_RESTORE_FILE, BTN_BACK, BTN_BACK_MENU, BTN_BACK_MAINT, BTN_CANCEL
 
 logger = logging.getLogger(__name__)
 
@@ -413,153 +413,26 @@ async def show_maintenance(query):
     ubuntu    = get_ubuntu_version()
     kernel    = get_kernel_version()
 
-    try:
-        tz_sys = subprocess.check_output(["cat", "/etc/timezone"], text=True).strip()
-    except:
-        tz_sys = TZ
-
     text = (
         f"🔧 Техобслуживание\n\n"
         f"📅 Последнее: {last_date}\n\n"
         f"🖥 Система: {ubuntu}\n"
         f"⚙️ Ядро: {kernel}\n"
-        f"🐍 python-telegram-bot: {ptb_ver}\n"
-        f"🕐 Часовой пояс: {tz_sys} (бот: {TZ})\n\n"
+        f"🐍 python-telegram-bot: {ptb_ver}\n\n"
         f"Рекомендуется проводить раз в 6 месяцев."
     )
-    real_ip = get_real_server_ip()
-    ip_status = ""
-    if real_ip and real_ip != SERVER_IP:
-        ip_status = f"\n\n⚠️ IP расходится!\nВ настройках: {SERVER_IP}\nРеальный: {real_ip}"
-
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("💾 Создать бэкап",               callback_data="backup")],
         [InlineKeyboardButton("📥 Восстановить из бэкапа",      callback_data="restore")],
         [InlineKeyboardButton("🔍 Диагностика конфигов",        callback_data="diagnostics")],
         [InlineKeyboardButton("💿 Бэкап + apt upgrade",         callback_data="maint_upgrade")],
         [InlineKeyboardButton("📦 Проверить версию библиотеки", callback_data="maint_ptb")],
-        [InlineKeyboardButton("🕐 Сменить часовой пояс",        callback_data="maint_tz")],
-        [InlineKeyboardButton("🔄 Обновить IP сервера",         callback_data="maint_update_ip")],
         [InlineKeyboardButton("♻️ Обновить IP исключений",        callback_data="refresh_subnets")],
         [InlineKeyboardButton("🔑 SSH-доступ",                     callback_data="ssh_admin")],
         [InlineKeyboardButton("✅ Отмечено — всё ок",            callback_data="maint_done")],
         [InlineKeyboardButton(BTN_BACK_MENU,                       callback_data="back")],
     ])
-    await query.edit_message_text(text + ip_status, reply_markup=kb)
-
-async def show_maint_tz(query):
-    """Экран выбора часового пояса"""
-    popular_tz = [
-        ("🇷🇺 Москва",       "Europe/Moscow"),
-        ("🇷🇺 Екатеринбург", "Asia/Yekaterinburg"),
-        ("🇷🇺 Новосибирск",  "Asia/Novosibirsk"),
-        ("🇷🇺 Владивосток",  "Asia/Vladivostok"),
-        ("🇺🇦 Киев",         "Europe/Kiev"),
-        ("🇰🇿 Алматы",       "Asia/Almaty"),
-        ("🇩🇪 Берлин",       "Europe/Berlin"),
-        ("🌍 UTC",           "UTC"),
-    ]
-    try:
-        sys_tz = subprocess.check_output(["cat", "/etc/timezone"], text=True).strip()
-    except:
-        sys_tz = "неизвестно"
-
-    now_local = time.strftime("%H:%M %d.%m.%Y")
-    kb_rows = []
-    for label, tz in popular_tz:
-        mark = "✅ " if tz == TZ else ""
-        kb_rows.append([InlineKeyboardButton(
-            f"{mark}{label}", callback_data=f"set_tz_{tz}"
-        )])
-    mark_sys = "✅ " if sys_tz == TZ else ""
-    kb_rows.append([InlineKeyboardButton(
-        f"{mark_sys}🖥 Как у сервера ({sys_tz})", callback_data=f"set_tz_{sys_tz}"
-    )])
-    kb_rows.append([InlineKeyboardButton("⌨️ Ввести вручную", callback_data="set_tz_manual")])
-    kb_rows.append([InlineKeyboardButton(BTN_BACK, callback_data="maintenance")])
-    await query.edit_message_text(
-        f"🕐 Часовой пояс\n\n"
-        f"Текущий бота: *{TZ}*\n"
-        f"Системный:    *{sys_tz}*\n"
-        f"Время бота:   {now_local}\n\n"
-        f"Выберите из списка, укажите как у сервера, или введите вручную.\n"
-        f"Бот перезапустится автоматически.",
-        reply_markup=InlineKeyboardMarkup(kb_rows),
-        parse_mode="Markdown"
-    )
-
-async def ask_tz_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Просим ввести пояс вручную"""
-    query = update.callback_query
-    await query.answer()
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton(BTN_CANCEL, callback_data="maint_tz")],
-    ])
-    await query.edit_message_text(
-        "⌨️ *Ввод часового пояса вручную*\n\n"
-        "Напишите код пояса в этот чат, например:\n"
-        "`Europe/Helsinki` `Europe/Moscow` `UTC`\n"
-        "`Asia/Tokyo` `America/New_York`\n\n"
-        "Полный список: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones\n\n"
-        "Или нажмите *Отмена* для возврата.",
-        parse_mode="Markdown",
-        reply_markup=kb,
-    )
-    return WAITING_TZ_INPUT
-
-async def receive_tz_manual(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Получаем ручной ввод пояса и применяем"""
-    tz = update.message.text.strip()
-    try:
-        all_tz = subprocess.check_output(["timedatectl", "list-timezones"], text=True).splitlines()
-    except:
-        all_tz = []
-    if all_tz and tz not in all_tz:
-        await update.message.reply_text(
-            f"❌ Часовой пояс `{tz}` не найден.\n\n"
-            f"Проверьте написание и попробуйте снова, или /cancel для отмены.",
-            parse_mode="Markdown"
-        )
-        return WAITING_TZ_INPUT
-    try:
-        env_lines = open(ENV_FILE).readlines()
-        new_lines = [l for l in env_lines if not l.startswith("TIMEZONE=")]
-        new_lines.append(f"TIMEZONE={tz}\n")
-        with open(ENV_FILE, "w") as f:
-            f.writelines(new_lines)
-        subprocess.run(["timedatectl", "set-timezone", tz], check=True)
-        await update.message.reply_text(
-            f"✅ Часовой пояс изменён на *{tz}*\n\nБот перезапускается...",
-            parse_mode="Markdown"
-        )
-        subprocess.Popen(["bash", "-c", f"sleep 2 && systemctl restart {BOT_SERVICE}"])
-    except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка: {e}")
-    return ConversationHandler.END
-
-
-async def do_set_tz(query, tz: str):
-    """Применяет новый часовой пояс — пишет в server.env и перезапускает бота"""
-    try:
-        subprocess.check_output(["timedatectl", "list-timezones"], text=True)
-        env_lines = open(ENV_FILE).readlines()
-        new_lines = [l for l in env_lines if not l.startswith("TIMEZONE=")]
-        new_lines.append(f"TIMEZONE={tz}\n")
-        with open(ENV_FILE, "w") as f:
-            f.writelines(new_lines)
-        subprocess.run(["timedatectl", "set-timezone", tz], check=True)
-        await query.edit_message_text(
-            f"✅ Часовой пояс изменён на *{tz}*\n\nБот перезапустится через 3 секунды...",
-            parse_mode="Markdown"
-        )
-        subprocess.Popen(["bash", "-c", f"sleep 3 && systemctl restart {BOT_SERVICE}"])
-    except Exception as e:
-        await query.edit_message_text(
-            f"❌ Ошибка: {e}",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton(BTN_BACK, callback_data="maintenance")
-            ]])
-        )
+    await query.edit_message_text(text, reply_markup=kb)
 
 async def do_maint_upgrade(query):
     """Бэкап + apt upgrade + перезапуск бота"""
