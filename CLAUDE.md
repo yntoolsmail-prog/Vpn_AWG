@@ -175,6 +175,6 @@ Vpn_AWG/
 
 ## Что не трогать
 
-- `modules/tma/tma_server.py` — Flask API, минимум текста, хорошо структурирован
+- `modules/tma/tma_server.py` — Flask API; логика кастомных доменов (/excl PUT) идентична боту: валидация формата + DNS-пробинг через process_domain() в фоне
 - Конфигурационные файлы в `/etc/amnezia/` — создаются при установке
 - `amnezia.gpg.asc` — GPG-ключ для верификации пакетов
