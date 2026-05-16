@@ -1134,6 +1134,7 @@ let _selectedEndpoint = null;   // строка — выбранный эндп�
 let _selectedServerName = null; // отображаемое имя сервера для метки
 let _selectedSrvRawName = null; // имя сервера без emoji — для нейминга файлов
 let _selectedSrvId = null;      // id сервера — для передачи ключей vpnlink
+let _selectedSrvEmoji = null;   // emoji сервера — для description в vpnlink
 
 function _tw(el) {
   if (typeof twemoji !== 'undefined') twemoji.parse(el, { folder: 'svg', ext: '.svg' });
@@ -1151,6 +1152,7 @@ function _loadServers() {
       _selectedServerName  = `${srv.emoji} ${ep.value}`;
       _selectedSrvRawName  = srv.name;
       _selectedSrvId       = srv.id;
+      _selectedSrvEmoji    = srv.emoji;
     }
     return srvs;
   }).catch(() => { _servers = []; return []; });
@@ -1184,7 +1186,7 @@ function openServerPicker() {
           const vfMark   = ep.verified ? ' ✅' : '';
           return `<button class="btn ${isSel ? 'btn-green' : 'btn-ghost'}"
                           style="text-align:left;justify-content:flex-start;gap:8px"
-                          onclick="selectServerEndpoint('${_esc(ep.value)}','${_esc(srv.emoji+' '+ep.value)}','${_esc(srv.name)}','${_esc(srv.id)}')">
+                          onclick="selectServerEndpoint('${_esc(ep.value)}','${_esc(srv.emoji+' '+ep.value)}','${_esc(srv.name)}','${_esc(srv.id)}','${_esc(srv.emoji)}')">
                     ${srv.emoji} ${_esc(srv.name)} &nbsp; ${typeIcon} ${_esc(ep.value)}${vfMark}
                   </button>`;
         }).join('');
@@ -1195,11 +1197,12 @@ function openServerPicker() {
   });
 }
 
-function selectServerEndpoint(epValue, displayName, srvRawName, srvId) {
+function selectServerEndpoint(epValue, displayName, srvRawName, srvId, srvEmoji) {
   _selectedEndpoint   = epValue;
   _selectedServerName = displayName;
   _selectedSrvRawName = srvRawName || '';
   _selectedSrvId      = srvId || '';
+  _selectedSrvEmoji   = srvEmoji || '';
   closeModal('modal-server-picker');
   _updateServerLabel();
 }
@@ -1213,6 +1216,7 @@ function _resetServerSelection() {
   _selectedServerName = null;
   _selectedSrvRawName = null;
   _selectedSrvId      = null;
+  _selectedSrvEmoji   = null;
   _updateServerLabel();
   // Если один сервер/эндпоинт — автовыбираем
   if (_servers && _servers.length === 1 && _servers[0].endpoints.length === 1) {
@@ -1222,6 +1226,7 @@ function _resetServerSelection() {
     _selectedServerName = `${srv.emoji} ${ep.value}`;
     _selectedSrvRawName = srv.name;
     _selectedSrvId      = srv.id;
+    _selectedSrvEmoji   = srv.emoji;
     _updateServerLabel();
   }
 }
@@ -1326,9 +1331,10 @@ async function showVpnLink(name) {
     return;
   }
   closeModal('modal-device');
-  const srvId = _selectedSrvId || '';
+  const srvId    = _selectedSrvId    || '';
+  const srvEmoji = _selectedSrvEmoji || '';
   try {
-    const resp = await API(`/api/devices/${encodeURIComponent(name)}/vpnlink?endpoint=${encodeURIComponent(endpoint)}&srv_id=${encodeURIComponent(srvId)}`);
+    const resp = await API(`/api/devices/${encodeURIComponent(name)}/vpnlink?endpoint=${encodeURIComponent(endpoint)}&srv_id=${encodeURIComponent(srvId)}&srv_emoji=${encodeURIComponent(srvEmoji)}`);
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || 'Ошибка');
     if (navigator.clipboard) {

@@ -427,8 +427,9 @@ def device_vpnlink(user_id, name):
     keys = get_client_keys(name)
     if not keys:
         return jsonify({"error": "Устройство не найдено"}), 404
-    endpoint = request.args.get("endpoint") or SERVER_ENDPOINT
-    srv_id   = request.args.get("srv_id", "")
+    endpoint  = request.args.get("endpoint") or SERVER_ENDPOINT
+    srv_id    = request.args.get("srv_id", "")
+    srv_emoji = request.args.get("srv_emoji", "")
     spub, sprt = SERVER_PUBLIC, SERVER_PORT
     if srv_id:
         for s in load_servers():
@@ -436,10 +437,11 @@ def device_vpnlink(user_id, name):
                 spub = s.get("awg_public_key") or SERVER_PUBLIC
                 sprt = str(s.get("awg_port") or SERVER_PORT)
                 break
+    vpn_display_name = f"{srv_emoji} {name}".strip() if srv_emoji else name
     try:
         link = make_vpn_link(
             keys["priv"], keys["pub"], keys["ip"], keys["psk"], keys["obfs"],
-            name=name, endpoint=endpoint,
+            name=vpn_display_name, endpoint=endpoint,
             server_public=spub, server_port=sprt,
         )
         return jsonify({"link": link})
