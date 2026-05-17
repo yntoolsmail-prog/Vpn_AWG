@@ -121,58 +121,8 @@ _SUBNET_REFRESH_RUNNING = threading.Event()
 
 
 async def show_start_screen(msg, user_id: int, edit: bool = False):
-    """Стартовый экран:
-    - Обычный пользователь → главное меню.
-    - Администратор с TMA → статус-экран с кнопкой «Открыть VPN» + «Режим бота».
-    - Администратор без TMA → сразу главное меню (промежуточный экран бессмысленен).
-    """
-    is_admin = (user_id == ADMIN_ID)
-
-    if not is_admin:
-        await main_menu(msg, user_id, edit=edit)
-        return
-
-    # Если TMA не настроен — показываем сразу полное меню администратора
-    tma_btn = _tma_button()
-    if not tma_btn:
-        await main_menu(msg, user_id, edit=edit)
-        return
-
-    peers   = get_combined_awg_dump()
-    now    = int(time.time())
-    online = sum(1 for p in peers.values() if p.get("handshake") and now - p["handshake"] < 180)
-    total  = len(get_all_clients())
-    sys_s  = get_system_stats()
-    bw     = load_bw_peak().get("last", {})
-    ram_pct = round(sys_s["ram_used"] / sys_s["ram_total"] * 100) if sys_s.get("ram_total") else 0
-
-    users         = load_users()
-    pending_count = len(users["pending"])
-    pending_note  = f"  🔴 Ожидают: {pending_count}" if pending_count else ""
-
-    text = (
-        f"🔐 AmneziaWG\n"
-        f"━━━━━━━━━━━━━━\n"
-        f"🟢 Онлайн: {online} из {total}\n"
-        f"💾 RAM: {ram_pct}%  💿 Диск: {sys_s['disk_pct']}%\n"
-        f"⬇️ {bw.get('awg_down', 0)} / ⬆️ {bw.get('awg_up', 0)} Mbit/s\n\n"
-        f"🖥 IP: {SERVER_IP}\n"
-        f"📱 Клиентов: {total} | 👥 Польз.: {len(users['approved'])}{pending_note}"
-    )
-
-    tma_lbl = "▶️ Веб интерфейс 🔑"
-    if TMA_URL.startswith("https://"):
-        admin_tma_btn = InlineKeyboardButton(tma_lbl, web_app=WebAppInfo(url=TMA_URL))
-    else:
-        admin_tma_btn = InlineKeyboardButton(tma_lbl, url=TMA_URL)
-    markup = InlineKeyboardMarkup([
-        [admin_tma_btn],
-        [InlineKeyboardButton("📱 Режим бота", callback_data="back")],
-    ])
-    if edit:
-        await msg.edit_message_text(text, reply_markup=markup, parse_mode="Markdown")
-    else:
-        await msg.reply_text(text, reply_markup=markup, parse_mode="Markdown")
+    """Стартовый экран — всегда ведёт на главное меню."""
+    await main_menu(msg, user_id, edit=edit)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
