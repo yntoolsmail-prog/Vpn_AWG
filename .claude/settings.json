@@ -1,12 +1,23 @@
 {
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd /home/user/Vpn_AWG && INPUT=$(cat); echo \"$INPUT\" | grep -qE 'git (commit|push)' || exit 0; STAGED_PY_SH=$(git diff --cached --name-only 2>/dev/null | grep -E '\\.(py|sh)$' | grep -v '^$' | head -1); if [ -n \"$STAGED_PY_SH\" ]; then jq -n '{hookSpecificOutput:{hookEventName:\"PreToolUse\",additionalContext:\"В коммите есть .py/.sh файлы. Открой CLAUDE.md и реши сам — нужно ли обновить архитектурную карту. Обновляй только если изменилась структура файлов, добавились ключевые функции или соглашения. Мелкие правки — не повод.\"}}'; fi"
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Edit|Write|MultiEdit",
         "hooks": [
           {
             "type": "command",
-            "command": "INPUT=$(cat); FILE=$(echo \"$INPUT\" | jq -r '.tool_input.file_path // empty'); echo \"$FILE\" | grep -qE '\\.(py|sh)$' || exit 0; jq -n --arg f \"$FILE\" '{hookSpecificOutput:{hookEventName:\"PostToolUse\",additionalContext:(\"Ты изменил .py/.sh файл (\" + $f + \"). Обнови CLAUDE.md только если изменилась архитектура: добавлены/удалены файлы, новые ключевые функции или соглашения. Мелкие правки — не повод.\")}}'"
+            "command": "INPUT=$(cat); FILE=$(echo \"$INPUT\" | jq -r '.tool_input.file_path // empty'); echo \"$FILE\" | grep -qE '\\.(py|sh)$' || exit 0; jq -n --arg f \"$FILE\" '{hookSpecificOutput:{hookEventName:\"PostToolUse\",additionalContext:(\"Изменён \" + $f + \". Обнови CLAUDE.md только если изменилась архитектура: новые файлы, ключевые функции, соглашения. Мелкие правки — не повод.\")}}'"
           }
         ]
       }
