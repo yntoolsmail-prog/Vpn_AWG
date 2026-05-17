@@ -22,10 +22,12 @@ async def show_my_devices(query, user_id: int):
     clients = get_user_clients(user_id)
     peers   = get_combined_awg_dump()
 
+    back_target = "clients_menu" if user_id == ADMIN_ID else "back"
+
     if not clients:
         kb = [
             [InlineKeyboardButton("➕ Добавить первое устройство", callback_data="add")],
-            [InlineKeyboardButton(BTN_BACK_MENU, callback_data="clients_menu")],
+            [InlineKeyboardButton(BTN_BACK_MENU, callback_data=back_target)],
         ]
         await query.edit_message_text(
             "📱 У вас пока нет устройств.\nДобавьте первое!",
@@ -44,7 +46,7 @@ async def show_my_devices(query, user_id: int):
 
     kb = [[InlineKeyboardButton(f"📋 {device_short_name(name)}",
            callback_data=f"device_{name}")] for name in clients]
-    kb.append([InlineKeyboardButton(BTN_BACK_MENU, callback_data="clients_menu")])
+    kb.append([InlineKeyboardButton(BTN_BACK_MENU, callback_data=back_target)])
     await query.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(kb))
 
 async def show_device(query, name: str, user_id: int):
@@ -104,7 +106,7 @@ async def show_all_clients(query):
         lines.append(f"• {name} | {hs} | ↓{dl} ↑{ul}")
 
     kb = [[InlineKeyboardButton(f"📋 {name}", callback_data=f"device_{name}")] for name in clients]
-    kb.append([InlineKeyboardButton(BTN_BACK_MENU, callback_data="back")])
+    kb.append([InlineKeyboardButton(BTN_BACK_MENU, callback_data="clients_menu")])
     await query.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(kb))
 
 def _server_kb(name: str, action: str) -> InlineKeyboardMarkup:

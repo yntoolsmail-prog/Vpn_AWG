@@ -21,28 +21,42 @@ logger = logging.getLogger(__name__)
 
 
 async def show_status(query):
-    peers  = get_combined_awg_dump()
-    now    = int(time.time())
-    online = sum(1 for p in peers.values() if p.get("handshake") and now - p["handshake"] < 180)
-    sys    = get_system_stats()
-    total_dl  = sum(p.get("tx", 0) for p in peers.values())  # tx сервера = клиенты скачали (↓)
-    total_ul  = sum(p.get("rx", 0) for p in peers.values())  # rx сервера = клиенты отдали (↑)
-    users     = load_users()
+    from handlers.servers import _srv_block_primary, _srv_block_slave
 
-    load = sys["load"]
-    text = (
-        f"📊 Статус сервера\n\n"
-        f"🟢 AWG: работает\n"
-        f"🖥 IP: {SERVER_IP}:{SERVER_PORT}\n"
-        f"⏱ Uptime: {sys['uptime']}\n\n"
-        f"📈 Load: {load[0]} {load[1]} {load[2]}\n"
-        f"💾 RAM: {sys['ram_used']}/{sys['ram_total']} MB\n"
-        f"💿 Диск: {sys['disk_used']}/{sys['disk_total']} ({sys['disk_pct']}%)\n\n"
-        f"👤 Клиентов: {len(get_all_clients())}\n"
-        f"👥 Пользователей: {len(users['approved'])}\n"
-        f"🟢 Онлайн: {online}\n"
-        f"📶 Трафик (с перезагрузки): ↓{fmt_bytes(total_dl)} ↑{fmt_bytes(total_ul)}"
-    )
+    peers    = get_combined_awg_dump()
+    now      = int(time.time())
+    online   = sum(1 for p in peers.values() if p.get("handshake") and now - p["handshake"] < 180)
+    total    = len(get_all_clients())
+    users    = load_users()
+    servers  = load_servers()
+    total_dl = sum(p.get("tx", 0) for p in peers.values())
+    total_ul = sum(p.get("rx", 0) for p in peers.values())
+
+    slave_tasks = {
+        i: asyncio.ensure_future(_srv_block_slave(srv, i))
+        for i, srv in enumerate(servers)
+        if not srv.get("is_primary")
+    }
+    slave_blocks: dict = {}
+    if slave_tasks:
+        done = await asyncio.gather(*slave_tasks.values(), return_exceptions=True)
+        for (i, _), result in zip(slave_tasks.items(), done):
+            slave_blocks[i] = result if isinstance(result, str) else "⚠️ нет данных"
+
+    lines = [
+        f"📊 *Статус серверов*\n",
+        f"👤 Клиентов: {total} | 🟢 Онлайн: {online}",
+        f"👥 Пользователей: {len(users['approved'])}",
+        f"📶 Трафик: ↓{fmt_bytes(total_dl)} ↑{fmt_bytes(total_ul)}\n",
+    ]
+    for i, srv in enumerate(servers):
+        emoji  = srv.get("emoji", "🖥")
+        name   = srv.get("name", f"Сервер {i + 1}")
+        is_pri = srv.get("is_primary", False)
+        role   = "Основной" if is_pri else "Слейв"
+        lines.append(f"{emoji} {name} *({role})*")
+        lines.append(_srv_block_primary() if is_pri else slave_blocks.get(i, "⚠️ нет данных"))
+        lines.append("")
 
     is_admin = (query.from_user.id == ADMIN_ID)
     kb_rows = [[InlineKeyboardButton("🔄 Перезапустить бота", callback_data="restart_bot")]]
@@ -50,7 +64,11 @@ async def show_status(query):
         kb_rows.append([InlineKeyboardButton("⚡ Перезапустить AWG",  callback_data="restart_awg")])
         kb_rows.append([InlineKeyboardButton("📈 Трафик / пики",      callback_data="bandwidth")])
     kb_rows.append([InlineKeyboardButton(BTN_BACK_MENU, callback_data="back")])
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb_rows))
+    await query.edit_message_text(
+        "\n".join(lines),
+        reply_markup=InlineKeyboardMarkup(kb_rows),
+        parse_mode="Markdown"
+    )
 
 async def do_diagnostics(query):
     """Диагностика конфигов: orphan peers, orphan files, orphan excl.json."""
@@ -427,7 +445,6 @@ async def show_maintenance(query):
         [InlineKeyboardButton("🔍 Диагностика конфигов",        callback_data="diagnostics")],
         [InlineKeyboardButton("💿 Бэкап + apt upgrade",         callback_data="maint_upgrade")],
         [InlineKeyboardButton("📦 Проверить версию библиотеки", callback_data="maint_ptb")],
-        [InlineKeyboardButton("♻️ Обновить IP исключений",        callback_data="refresh_subnets")],
         [InlineKeyboardButton("✅ Отмечено — всё ок",            callback_data="maint_done")],
         [InlineKeyboardButton(BTN_BACK_MENU,                       callback_data="settings_menu")],
     ])
