@@ -312,7 +312,7 @@ async def show_ssh_admin(query):
         [InlineKeyboardButton("📥 Скачать приватный ключ", callback_data="ssh_getkey")],
         [InlineKeyboardButton(f"{pw_icon} {pw_btn}",       callback_data="ssh_toggle_pass")],
         [InlineKeyboardButton("🔄 Пересоздать ключ",       callback_data="ssh_regen_ask")],
-        [InlineKeyboardButton(BTN_BACK_MAINT,        callback_data="settings_menu")],
+        [InlineKeyboardButton(BTN_BACK_MENU,         callback_data="settings_menu")],
     ])
     await query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
 
@@ -505,7 +505,7 @@ async def do_refresh_subnets(query, context):
         "Опрашиваются все домены из базы и исключений пользователей.\n"
         "Обычно занимает 15–60 секунд.",
         reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton(BTN_BACK_MAINT, callback_data="maintenance")
+            InlineKeyboardButton(BTN_BACK_MENU, callback_data="settings_menu")
         ]])
     )
     chat_id = query.message.chat_id

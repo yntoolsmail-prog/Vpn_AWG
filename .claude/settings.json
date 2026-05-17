@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cd /home/user/Vpn_AWG && INPUT=$(cat); echo \"$INPUT\" | grep -qE 'git (commit|push)' || exit 0; STAGED_PY_SH=$(git diff --cached --name-only 2>/dev/null | grep -E '\\.(py|sh)$' | grep -v '^$' | head -1); if [ -n \"$STAGED_PY_SH\" ]; then jq -n '{hookSpecificOutput:{hookEventName:\"PreToolUse\",additionalContext:\"В коммите есть .py/.sh файлы. Открой CLAUDE.md и реши сам — нужно ли обновить архитектурную карту. Обновляй только если изменилась структура файлов, добавились ключевые функции или соглашения. Мелкие правки — не повод.\"}}'; fi"
+            "command": "cd /home/user/Vpn_AWG && INPUT=$(cat); echo \"$INPUT\" | grep -qE 'git (commit|push)' || exit 0; STAGED_PY_SH=$(git diff --cached --name-only 2>/dev/null | grep -E '\\.(py|sh)$' | grep -v '^$' | head -1); STAGED_CLAUDE=$(git diff --cached --name-only 2>/dev/null | grep -F 'CLAUDE.md' | head -1); if [ -n \"$STAGED_PY_SH\" ] && [ -z \"$STAGED_CLAUDE\" ]; then jq -n '{hookSpecificOutput:{hookEventName:\"PreToolUse\",additionalContext:\"СТОП. В коммите есть .py/.sh файлы, но CLAUDE.md не обновлён. Прочитай CLAUDE.md и реши явно: изменилась ли архитектура (новые файлы, функции, соглашения, маршруты навигации)? Если да — обнови CLAUDE.md и добавь его в коммит. Если нет — объясни почему в ответе, затем повтори git commit.\"}}'; exit 2; fi"
           }
         ]
       }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "INPUT=$(cat); FILE=$(echo \"$INPUT\" | jq -r '.tool_input.file_path // empty'); echo \"$FILE\" | grep -qE '\\.(py|sh)$' || exit 0; jq -n --arg f \"$FILE\" '{hookSpecificOutput:{hookEventName:\"PostToolUse\",additionalContext:(\"Изменён \" + $f + \". Обнови CLAUDE.md только если изменилась архитектура: новые файлы, ключевые функции, соглашения. Мелкие правки — не повод.\")}}'"
+            "command": "INPUT=$(cat); FILE=$(echo \"$INPUT\" | jq -r '.tool_input.file_path // empty'); echo \"$FILE\" | grep -qE '\\.(py|sh)$' || exit 0; jq -n --arg f \"$FILE\" '{hookSpecificOutput:{hookEventName:\"PostToolUse\",additionalContext:(\"Изменён \" + $f + \". Нужно ли обновить CLAUDE.md? Да — если изменилась архитектура: новые файлы, ключевые функции, маршруты, соглашения. Нет — если мелкая правка логики без архитектурных последствий.\")}}'"
           }
         ]
       }
@@ -27,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cd /home/user/Vpn_AWG && ALL=\"$(git diff --name-only HEAD~1 HEAD 2>/dev/null)\n$(git diff --name-only 2>/dev/null)\n$(git diff --cached --name-only 2>/dev/null)\n$(git ls-files --others --exclude-standard 2>/dev/null)\"; PY_SH=$(echo \"$ALL\" | grep -E '\\.(py|sh)$' | grep -v '^$' | head -1); CLAUDE=$(echo \"$ALL\" | grep -F 'CLAUDE.md' | head -1); if [ -n \"$PY_SH\" ] && [ -z \"$CLAUDE\" ]; then echo '{\"systemMessage\": \"\\u26a0\\ufe0f  Обнови CLAUDE.md если в сессии добавлены/удалены файлы или новые архитектурные соглашения\"}'; fi"
+            "command": "cd /home/user/Vpn_AWG && ALL=\"$(git diff --name-only HEAD~1 HEAD 2>/dev/null)\n$(git diff --name-only 2>/dev/null)\n$(git diff --cached --name-only 2>/dev/null)\n$(git ls-files --others --exclude-standard 2>/dev/null)\"; PY_SH=$(echo \"$ALL\" | grep -E '\\.(py|sh)$' | grep -v '^$' | head -1); CLAUDE=$(echo \"$ALL\" | grep -F 'CLAUDE.md' | head -1); if [ -n \"$PY_SH\" ] && [ -z \"$CLAUDE\" ]; then echo '{\"systemMessage\": \"СТОП. В сессии изменены .py/.sh файлы, но CLAUDE.md не тронут. Прочитай CLAUDE.md и реши: нужно ли отразить изменения? Если да — обнови и закоммить. Если нет — явно объясни почему.\"}'; fi"
           }
         ]
       }
