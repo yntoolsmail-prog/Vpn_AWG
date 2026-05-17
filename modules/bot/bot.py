@@ -750,8 +750,8 @@ def main():
     app.job_queue.run_repeating(maintenance_reminder, interval=86400, first=60)
     # Мониторинг трафика — каждые 5 секунд (пики), в лог раз в минуту
     app.job_queue.run_repeating(bw_monitor_job, interval=5, first=10)
-    # Опрос полосы пропускания на slave-серверах — каждые 30 секунд
-    app.job_queue.run_repeating(slave_bw_poll_job, interval=30, first=15)
+    # Опрос полосы пропускания на slave-серверах — каждые 5 секунд (для захвата пиков)
+    app.job_queue.run_repeating(slave_bw_poll_job, interval=5, first=10)
     # Уведомление о старте — через 5 секунд после запуска
     app.job_queue.run_once(send_start_hello, when=5)
     # Мониторинг обновлений репозитория — раз в сутки, первая проверка через 20 секунд после старта

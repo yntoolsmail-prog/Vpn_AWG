@@ -299,7 +299,7 @@ async def do_bw_reset_all(query):
 
 
 async def slave_bw_poll_job(context: ContextTypes.DEFAULT_TYPE):
-    """Job: каждые 30 секунд опрашивает slave-серверы по SSH и сохраняет их AWG-трафик
+    """Job: каждые 5 секунд опрашивает slave-серверы по SSH и сохраняет их AWG-трафик
     в context.bot_data['slave_bw'] = {awg_down: float, awg_up: float}.
     bw_monitor_job прибавляет эти значения к primary-скоростям."""
     if not _PARAMIKO_AVAILABLE:
