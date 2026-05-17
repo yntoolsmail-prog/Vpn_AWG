@@ -294,7 +294,7 @@ async def show_ssh_admin(query):
         [InlineKeyboardButton("📥 Скачать приватный ключ", callback_data="ssh_getkey")],
         [InlineKeyboardButton(f"{pw_icon} {pw_btn}",       callback_data="ssh_toggle_pass")],
         [InlineKeyboardButton("🔄 Пересоздать ключ",       callback_data="ssh_regen_ask")],
-        [InlineKeyboardButton(BTN_BACK_MAINT,        callback_data="maintenance")],
+        [InlineKeyboardButton(BTN_BACK_MAINT,        callback_data="settings_menu")],
     ])
     await query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
 
@@ -428,7 +428,6 @@ async def show_maintenance(query):
         [InlineKeyboardButton("💿 Бэкап + apt upgrade",         callback_data="maint_upgrade")],
         [InlineKeyboardButton("📦 Проверить версию библиотеки", callback_data="maint_ptb")],
         [InlineKeyboardButton("♻️ Обновить IP исключений",        callback_data="refresh_subnets")],
-        [InlineKeyboardButton("🔑 SSH-доступ",                     callback_data="ssh_admin")],
         [InlineKeyboardButton("✅ Отмечено — всё ок",            callback_data="maint_done")],
         [InlineKeyboardButton(BTN_BACK_MENU,                       callback_data="settings_menu")],
     ])

@@ -29,7 +29,7 @@ Vpn_AWG/
 │   │       ├── common.py       # BTN_* константы, back_kb, _md, sites_keyboard, WAITING_*
 │   │       ├── bandwidth.py    # Мониторинг трафика, статистика, пики
 │   │       ├── clients.py      # Устройства: конфиги, QR, удаление, сплит-туннелинг
-│   │       ├── maintenance.py  # Техобслуживание, SSH, бэкап/восстановление, часовой пояс
+│   │       ├── maintenance.py  # Техобслуживание, бэкап/восстановление
 │   │       ├── servers.py      # Slave-серверы, DNS, синхронизация; _sync_peer_to_all_slaves()
 │   │       ├── sites.py        # Исключения сайтов (split tunneling)
 │   │       ├── updates.py      # Обновления репозитория, проверка IP
@@ -55,6 +55,49 @@ Vpn_AWG/
     ├── ssh_setup.sh     # SSH-безопасность, fail2ban, ключи (из setup.sh)
     └── modules_setup.sh # Управление модулями (из setup.sh): установка/удаление, перезапуск awg-bot
 ```
+
+---
+
+## Структура меню бота
+
+### Администратор (`ADMIN_ID`)
+
+```
+/start → main_menu
+  ├── ▶️ Веб интерфейс 🔑   (TMA WebApp, только если TMA_URL задан)
+  ├── 📱 Клиенты  → clients_menu
+  │     ├── 🧲 Добавить устройство
+  │     ├── 📋 Мои устройства
+  │     ├── 🌍 Все устройства
+  │     └── ◀️ В меню
+  ├── 👥 Пользователи
+  └── ⚙️ Настройки  → settings_menu
+        ├── 🖥 Серверы (N)  → show_servers_list  [шапка со статистикой каждого сервера]
+        ├── 📈 Трафик/пики
+        ├── 🔄 Перезапустить бота
+        ├── ⚡ Перезапустить AWG
+        ├── 🔧 Техобслуживание
+        ├── 🔑 SSH-доступ
+        ├── ♻️ Обновить IP исключений
+        ├── 📖 Инструкция
+        └── ◀️ В меню
+```
+
+### Обычный пользователь
+
+```
+/start → main_menu
+  ├── ▶️ ОТКРЫТЬ VPN 🔑   (TMA WebApp, если настроен)
+  ├── 📋 Мои устройства
+  ├── 🧲 Добавить устройство
+  ├── 📊 Статус сервера
+  └── 📖 Инструкция
+```
+
+### Навигация «Назад»
+- Серверы / Трафик-пики / Техобслуживание / SSH / Инструкция → `settings_menu`
+- Мои устройства / Все устройства → `clients_menu`
+- SSH-доступ: `BTN_BACK_MAINT → settings_menu`
 
 ---
 
@@ -94,26 +137,26 @@ Vpn_AWG/
 | `/etc/amnezia/amneziawg/server.env` | `SERVER_IP`, `SERVER_PORT`, `VPN_SUBNET`, `VPN_IFACE`, `TIMEZONE`, ... |
 | `/etc/amnezia/amneziawg/users.json` | Пользователи и их права (approved/admin) |
 | `/etc/amnezia/amneziawg/clients/` | Конфиги и ключи каждого клиента |
-| `/etc/amnezia/amneziawg/servers.json` | Список slave-серверов |
+| `/etc/amnezia/amneziawg/servers.json` | Список slave-серверов (поле `country` — русское название страны) |
 | `/var/log/awg-bw.log` | Лог трафика |
 
 ---
 
 ## Ключевые функции по модулям
 
-### awg_core.py (542 строки)
+### awg_core.py
 | Функция | Назначение |
 |---------|-----------|
 | `load_users()` / `save_users()` | Работа с users.json |
 | `is_approved(user_id)` | Проверка доступа пользователя |
-| `load_servers()` / `save_servers()` | Список slave-серверов |
+| `load_servers()` / `save_servers()` | Список серверов (primary + slaves) |
 | `create_backup()` | Архив всех конфигов |
 | `build_allowed_ips(keys, domains)` | Split tunneling: AllowedIPs строка |
 | `process_domain(domain)` | DNS-зондирование домена в подсети |
 | `get_allowed_ips_for_client(name)` | AllowedIPs с учётом исключений клиента |
 | `get_sites_json()` | Список сайтов для UI/TMA |
 
-### awg_clients.py (346 строк)
+### awg_clients.py
 | Функция | Назначение |
 |---------|-----------|
 | `create_client(name)` | Создать клиента (ключи + awg конфиг) |
@@ -124,18 +167,20 @@ Vpn_AWG/
 | `load_client_excl(name)` / `save_client_excl(name, data)` | Исключения сплит-туннелинга |
 | `make_wg_conf(...)` / `make_vpn_link(...)` | Генерация конфига / vpn:// ссылки |
 
-### awg_stats.py (481 строка)
+### awg_stats.py
 | Функция | Назначение |
 |---------|-----------|
-| `get_system_stats()` | CPU/RAM/диск сервера |
+| `get_system_stats()` | CPU/RAM/диск/uptime сервера |
 | `collect_stats_full()` | Полная статистика (для ADMIN) |
 | `collect_stats_basic()` | Урезанная статистика (для юзеров) |
 | `fmt_bytes(n)` | Форматирование трафика (KB/MB/GB) |
 | `get_bw_histogram(days)` | Гистограмма нагрузки |
 | `get_vnstat_monthly()` | Помесячный трафик через vnstat |
-| `load_bw_peak()` / `save_bw_peak(data)` | Пики трафика |
+| `load_bw_peak()` / `save_bw_peak(data)` | Пики трафика (combined primary+slaves) |
+| `get_combined_awg_dump()` | AWG dump primary+slaves, кэш 30 с; поле `server` = метка сервера с макс. handshake |
+| `read_iface_bytes(iface)` | Счётчики rx/tx интерфейса из /sys |
 
-### awg_ssh.py (728 строк)
+### awg_ssh.py
 | Функция | Назначение |
 |---------|-----------|
 | `ssh_clone_awg_to_slave(server)` | Клонировать AWG-конфиг на slave |
@@ -144,7 +189,80 @@ Vpn_AWG/
 | `ssh_sync_mtproxy_secret(server, ...)` | Синхронизировать MTProxy на slave |
 | `ssh_apply_socks5_on_slave(server, ...)` | Настроить SOCKS5 на slave |
 | `ssh_regen_admin_key()` | Перегенерировать awg_admin_key |
+| `ssh_get_slave_sys_stats(server)` | Системные метрики slave за одно SSH-подключение: `{awg_ok, uptime, ram_pct, disk_pct, rx_bytes, tx_bytes}` |
+| `ssh_get_slave_awg_dump(server)` | AWG dump со slave по SSH |
+| `ssh_read_slave_awg_bytes(server)` | Счётчики rx/tx AWG-интерфейса со slave |
 | `PARAMIKO_AVAILABLE` | Флаг доступности paramiko |
+
+### handlers/bandwidth.py
+| Символ | Назначение |
+|--------|-----------|
+| `bw_monitor_job` | Job каждые 5 с: измеряет primary AWG скорость, затем добавляет slaves, пишет в peak |
+| `slave_bw_poll_job` | Job каждые 5 с: SSH на каждый slave, обновляет `_slave_bw_detail` и `context.bot_data["slave_bw"]` |
+| `_primary_bw` | Модульный кэш — primary-only Mbit/s (до прибавления slaves). Обновляется в `bw_monitor_job`. |
+| `get_primary_bw()` | Геттер `_primary_bw` — используется в `_srv_block_primary()` |
+| `_slave_bw_detail` | Модульный кэш — per-server `{id: {awg_down, awg_up}}`. Обновляется в `slave_bw_poll_job`. |
+| `get_slave_bw_detail()` | Геттер `_slave_bw_detail` — используется в `_srv_block_slave()` |
+| `load_bw_peak()["last"]` | **Combined** (primary+slaves) — используется на экране Трафик/пики |
+
+### handlers/servers.py
+| Функция | Назначение |
+|---------|-----------|
+| `show_servers_list(query)` | Шапка с блоком статистики по каждому серверу подряд + кнопки карточек |
+| `_srv_block_primary()` | Синхронный блок статистики основного сервера (local stats) |
+| `_srv_block_slave(srv, idx)` | Async блок статистики slave: SSH с timeout 8 с через `asyncio.wait_for` |
+| `show_server_card(query, idx)` | Карточка сервера: метка _(Основной)_/_(Слейв)_, только domain-эндпоинты |
+| `srv_rename_start/name/emoji/country` | 3-шаговый диалог: name → emoji → country (WAITING_SRV_COUNTRY) |
+| `_sync_peer_to_all_slaves()` | Async синк нового пира на все slave-серверы |
+
+### handlers/clients.py
+| Функция | Назначение |
+|---------|-----------|
+| `show_my_devices(query, uid)` | Список устройств пользователя, кнопка «Назад» → `clients_menu` |
+| `show_all_clients(query)` | Все устройства (admin), кнопка «Назад» → `clients_menu` |
+| `_show_server_select(query, name, uid, action)` | **1-й экран**: кнопка на каждый сервер (`{action}_auto_{si}_{name}`) + «Расширенная настройка». Только «Выберите сервер:», без инструкций. |
+| `_show_ep_select(query, name, uid, action)` | **2-й экран** (Расширенная настройка): плоский список всех эндпоинтов с иконками 🌐/🔢 + инструкция домен/IP. Назад → `{action}_{name}` |
+| `show_conf/qr/share_ep_select` | Входные точки — вызывают `_show_server_select` |
+
+---
+
+## Поле `country` в servers.json
+
+```json
+{
+  "id": "server_1",
+  "name": "NLD",
+  "emoji": "🇳🇱",
+  "country": "Голландия",
+  ...
+}
+```
+
+- Запрашивается при добавлении сервера (3-й шаг после emoji, `WAITING_SRV_COUNTRY`)
+- Запрашивается при переименовании (3-й шаг, тот же `WAITING_SRV_COUNTRY = 29`)
+- Используется в кнопках `_show_server_select`: `f"{emoji} {name} {country}"` → `🇳🇱 NLD Голландия`
+- Enter — пропустить/оставить текущее
+
+---
+
+## Conversation states (common.py + slave_servers.py)
+
+| Константа | Значение | Где используется |
+|-----------|---------|-----------------|
+| `WAITING_REGISTER_NAME` | 10 | Регистрация нового пользователя |
+| `WAITING_DEVICE_NAME` | 11 | Добавление устройства |
+| `WAITING_RESTORE_FILE` | 12 | Восстановление бэкапа |
+| `WAITING_SITES_DOMAIN` | 16 | Добавление кастомного домена в исключения |
+| `WAITING_SRV_IP` | 20 | Добавление slave: IP |
+| `WAITING_SRV_PORT` | 21 | Добавление slave: SSH порт |
+| `WAITING_SRV_LOGIN` | 22 | Добавление slave: логин |
+| `WAITING_SRV_PASSWORD` | 23 | Добавление slave: пароль |
+| `WAITING_SRV_NAME` | 24 | Добавление slave: имя |
+| `WAITING_SRV_EMOJI` | 25 | Добавление slave: emoji |
+| `WAITING_SRV_DOMAIN` | 26 | Добавление домена к серверу |
+| `WAITING_SRV_EDIT_NAME` | 27 | Переименование сервера: имя |
+| `WAITING_SRV_EDIT_EMOJI` | 28 | Переименование сервера: emoji |
+| `WAITING_SRV_COUNTRY` | 29 | Добавление/переименование: страна |
 
 ---
 
@@ -154,7 +272,7 @@ Vpn_AWG/
 Каждый модуль в `modules/*/` может определять:
 
 - `register_handlers(app)` — PTB-хендлеры
-- `get_admin_menu_buttons()` — кнопки в админ-меню
+- `get_admin_menu_buttons()` — кнопки в **конец** админ-меню (после Настройки)
 - `get_user_menu_buttons(uid)` — кнопки для пользователя
 - `get_background_jobs()` — фоновые задачи
 - `TMA_BLUEPRINTS` — Flask Blueprint'ы для tma_server.py
@@ -180,7 +298,9 @@ Vpn_AWG/
 - **Shell-скрипты:** вспомогательные функции в `lib/*.sh`, подключаются через `source`
 - **Re-экспорт `awg_core`:** `from awg_core import *` не реэкспортирует функции с `_` префиксом — для них нужен явный импорт из оригинального модуля (`awg_stats`, `awg_clients`, `awg_ssh`)
 - **Кнопки меню:** каждая кнопка на отдельной строке (`[btn]`), не группировать по две в строку
-- **Статистика со slaves:** `get_combined_awg_dump()` в `awg_stats.py` — агрегирует awg dump primary + slaves с кэшем 30 с; `slave_bw_poll_job` каждые 5 с опрашивает slave по SSH для real-time Mbit/s (5 с = тот же интервал что bw_monitor_job, чтобы захватывать пики)
+- **Bandwidth кэши:** `_primary_bw` — только основной сервер (до сложения со slaves); `_slave_bw_detail` — per-server dict; `load_bw_peak()["last"]` — combined, для экрана Трафик/пики
+- **Статистика со slaves:** `get_combined_awg_dump()` агрегирует awg dump primary+slaves с кэшем 30 с; `slave_bw_poll_job` каждые 5 с опрашивает slave по SSH; `ssh_get_slave_sys_stats` получает RAM/диск/uptime/AWG-статус одним SSH-подключением
+- **TMA-кнопка:** `_tma_button()` в common.py → текст `"▶️ ОТКРЫТЬ VPN 🔑"` (пользовательское меню); в admin-меню создаётся отдельно с текстом `"▶️ Веб интерфейс 🔑"`
 
 ---
 
