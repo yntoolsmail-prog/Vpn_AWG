@@ -32,8 +32,9 @@ def _fmt_gb(b: int) -> str:
 
 def _srv_block_primary() -> str:
     """Блок статистики для основного сервера."""
+    from .bandwidth import get_primary_bw
     sys_s  = get_system_stats()
-    bw     = load_bw_peak().get("last", {})
+    bw     = get_primary_bw()
     rx, tx = read_iface_bytes(AWG_IFACE)
     now    = int(time.time())
 

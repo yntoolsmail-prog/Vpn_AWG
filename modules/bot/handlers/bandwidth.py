@@ -13,11 +13,16 @@ from awg_core import (
 from .common import back_kb, BTN_BACK, BTN_BACK_MENU, BTN_CANCEL
 
 # per-server bandwidth cache для show_servers_list
-_slave_bw_detail: dict = {}  # {server_id: {"awg_down": float, "awg_up": float}}
+_slave_bw_detail: dict = {}   # {server_id: {"awg_down": float, "awg_up": float}}
+_primary_bw: dict      = {}   # {"awg_down": float, "awg_up": float}
 
 
 def get_slave_bw_detail() -> dict:
     return _slave_bw_detail
+
+
+def get_primary_bw() -> dict:
+    return _primary_bw
 
 
 async def bw_monitor_job(context: ContextTypes.DEFAULT_TYPE):
@@ -62,6 +67,10 @@ async def bw_monitor_job(context: ContextTypes.DEFAULT_TYPE):
                     "eth_r": eth_r2, "eth_t": eth_t2, "ts": now,
                 }
                 return
+
+            # Сохраняем primary-only скорость для show_servers_list
+            _primary_bw["awg_down"] = awg_down
+            _primary_bw["awg_up"]   = awg_up
 
             # Добавляем трафик slave-серверов (обновляется slave_bw_poll_job каждые 30 с)
             slave_bw = context.bot_data.get("slave_bw", {})
