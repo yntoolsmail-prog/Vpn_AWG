@@ -1257,6 +1257,10 @@ async function openDeviceDetail(d) {
   document.getElementById('modal-device-body').innerHTML = `
     <div class="info-row"><span class="info-label">Статус</span>
       <span style="color:${stColor}">● ${_esc(stText)}</span></div>
+    ${d.endpoint ? `<div class="info-row"><span class="info-label">Endpoint</span>
+      <span style="font-size:12px;font-family:monospace;word-break:break-all">${_esc(d.endpoint)}</span></div>` : ''}
+    ${d.server_label ? `<div class="info-row"><span class="info-label">Сервер</span>
+      <span>${_esc(d.server_label)}</span></div>` : ''}
     <div class="info-row"><span class="info-label">Трафик</span>
       <span><span style="color:var(--blue)">↓${_esc(d.client_download)}</span>
             &nbsp;<span style="color:var(--green)">↑${_esc(d.client_upload)}</span></span></div>
@@ -2167,9 +2171,10 @@ function updateValues(d) {
   // Устройства
   const peersEl = document.getElementById('v-peers');
   if (peersEl && d.peers) {
-    peersEl.innerHTML = d.peers.map(p => {
+    window._monitorPeers = d.peers;
+    peersEl.innerHTML = d.peers.map((p, i) => {
       const hs = fmtHandshake(p.handshake);
-      return `<div class="peer-row">
+      return `<div class="peer-row" style="cursor:pointer" onclick="openDeviceDetail(window._monitorPeers[${i}])">
         <div class="peer-name">${_esc(p.name)}</div>
         <div class="peer-hs ${hs.cls}">${_esc(hs.text)}</div>
         <div class="peer-traffic"><span style="color:var(--blue)">↓${_esc(p.client_download)}</span><br><span style="color:var(--green)">↑${_esc(p.client_upload)}</span></div>

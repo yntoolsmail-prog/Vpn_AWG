@@ -410,6 +410,8 @@ def collect_stats_full() -> dict:
             "online":    bool(hs and now - hs < 180),
             "client_upload":   fmt_bytes(stats.get("rx", 0)),
             "client_download": fmt_bytes(stats.get("tx", 0)),
+            "endpoint":        stats.get("endpoint", ""),
+            "server_label":    stats.get("server", ""),
         })
 
     try:

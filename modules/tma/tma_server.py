@@ -139,6 +139,8 @@ def _device_info(name: str, dump: dict, now: int) -> dict:
         "client_download": fmt_bytes(stats.get("tx", 0)),
         "rx_bytes":        stats.get("rx", 0),
         "tx_bytes":        stats.get("tx", 0),
+        "endpoint":        stats.get("endpoint", ""),
+        "server_label":    stats.get("server", ""),
     }
 
 
