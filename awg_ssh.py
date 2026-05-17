@@ -297,6 +297,74 @@ def ssh_read_slave_awg_bytes(server: dict) -> tuple[int, int]:
     return 0, 0
 
 
+def ssh_get_slave_sys_stats(server: dict) -> dict:
+    """SSH на slave: системные метрики одним подключением.
+    Возвращает {awg_ok, uptime, ram_pct, disk_pct, rx_bytes, tx_bytes}
+    или {} при ошибке."""
+    if not PARAMIKO_AVAILABLE:
+        return {}
+    ssh = server.get("ssh", {})
+    try:
+        client = _ssh_connect(ssh, timeout=8)
+        try:
+            cmd = (
+                f"systemctl is-active awg-quick@{AWG_IFACE} 2>/dev/null; echo ---SEP---;"
+                "uptime -p 2>/dev/null; echo ---SEP---;"
+                "free -m 2>/dev/null | awk 'NR==2{print $2, $7}'; echo ---SEP---;"
+                "df / 2>/dev/null | awk 'NR==2{print $5}'; echo ---SEP---;"
+                f"cat /sys/class/net/{AWG_IFACE}/statistics/rx_bytes "
+                f"/sys/class/net/{AWG_IFACE}/statistics/tx_bytes 2>/dev/null"
+            )
+            _, stdout, _ = client.exec_command(cmd, timeout=10)
+            out = stdout.read().decode()
+        finally:
+            client.close()
+    except Exception:
+        return {}
+
+    secs = out.split("---SEP---")
+    if len(secs) < 5:
+        return {}
+
+    awg_ok    = secs[0].strip() == "active"
+    uptime    = secs[1].strip()
+    mem_parts = secs[2].strip().split()
+    disk_str  = secs[3].strip()
+    byte_lines = [l.strip() for l in secs[4].strip().split("\n") if l.strip()]
+
+    ram_pct = 0
+    if len(mem_parts) >= 2:
+        try:
+            total = int(mem_parts[0])
+            avail = int(mem_parts[1])
+            ram_pct = round((total - avail) / max(total, 1) * 100)
+        except (ValueError, ZeroDivisionError):
+            pass
+
+    disk_pct = 0
+    try:
+        disk_pct = int(disk_str.replace("%", ""))
+    except ValueError:
+        pass
+
+    rx_bytes = tx_bytes = 0
+    if len(byte_lines) >= 2:
+        try:
+            rx_bytes = int(byte_lines[0])
+            tx_bytes = int(byte_lines[1])
+        except ValueError:
+            pass
+
+    return {
+        "awg_ok":   awg_ok,
+        "uptime":   uptime,
+        "ram_pct":  ram_pct,
+        "disk_pct": disk_pct,
+        "rx_bytes": rx_bytes,
+        "tx_bytes": tx_bytes,
+    }
+
+
 def ssh_read_slave_env(ip: str, port: int, login: str, password: str) -> None:
     """Подключается к slave по SSH, проверяет соединение и наличие AWG. Бросает исключение при ошибке."""
     if not PARAMIKO_AVAILABLE:

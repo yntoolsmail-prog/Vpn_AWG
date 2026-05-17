@@ -1,4 +1,4 @@
-import asyncio, re
+import asyncio, re, time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from awg_core import (
@@ -7,12 +7,14 @@ from awg_core import (
     PARAMIKO_AVAILABLE as _PARAMIKO_AVAILABLE,
     get_all_clients, get_client_pub, load_servers, save_servers,
     invalidate_servers_cache, resolve_endpoint,
+    read_iface_bytes, get_system_stats, load_bw_peak, get_combined_awg_dump, fmt_bytes,
     ssh_read_slave_env      as _ssh_read_slave_env,
     ssh_clone_awg_to_slave  as _ssh_clone_awg_to_slave,
     ssh_sync_peer_to_slave  as _ssh_sync_peer_to_slave,
     ssh_sync_all_clients_to_slave as _ssh_sync_all_clients_to_slave,
     ssh_stop_slave_awg      as _ssh_stop_slave_awg,
     ssh_get_slave_peer_count as _ssh_get_slave_peer_count,
+    ssh_get_slave_sys_stats as _ssh_get_slave_sys_stats,
 )
 from .common import back_kb, WAITING_SRV_DOMAIN, WAITING_SRV_EDIT_NAME, WAITING_SRV_EDIT_EMOJI, WAITING_SRV_COUNTRY, BTN_BACK, BTN_BACK_MENU, BTN_CANCEL, BTN_BACK_CARD
 
@@ -22,22 +24,138 @@ def _count_peers_in_conf(conf_text: str) -> int:
     return conf_text.count("\n[Peer]") + (1 if conf_text.startswith("[Peer]") else 0)
 
 
+def _fmt_gb(b: int) -> str:
+    if b < 1024 ** 3:
+        return f"{b / 1024**2:.0f} MB"
+    return f"{b / 1024**3:.2f} GB"
+
+
+def _srv_block_primary() -> str:
+    """Блок статистики для основного сервера."""
+    sys_s  = get_system_stats()
+    bw     = load_bw_peak().get("last", {})
+    rx, tx = read_iface_bytes(AWG_IFACE)
+    now    = int(time.time())
+
+    dump   = get_combined_awg_dump()
+    online = sum(1 for p in dump.values()
+                 if not p.get("server") and p.get("handshake") and now - p["handshake"] < 180)
+
+    ram_pct = round(sys_s["ram_used"] / sys_s["ram_total"] * 100) if sys_s.get("ram_total") else 0
+
+    awg_down = bw.get("awg_down", 0)
+    awg_up   = bw.get("awg_up", 0)
+
+    lines = [
+        f"🟢 AWG: работает",
+        f"🖥 IP: {SERVER_IP}:{SERVER_PORT}",
+        f"⏱ Uptime: {sys_s['uptime']}",
+        "",
+        f"💾 RAM: {ram_pct}%  💿 Диск: {sys_s['disk_pct']}%",
+        f"⬇️ {awg_down} / ⬆️ {awg_up} Mbit/s",
+        f"🟢 Онлайн: {online}",
+        f"📊 Трафик (с перезагрузки): ↓{_fmt_gb(tx)} ↑{_fmt_gb(rx)}",
+    ]
+    return "\n".join(lines)
+
+
+async def _srv_block_slave(srv: dict, idx: int) -> str:
+    """Блок статистики для slave-сервера (SSH)."""
+    from .bandwidth import get_slave_bw_detail
+
+    sid   = srv.get("id") or srv.get("name", "")
+    now   = int(time.time())
+    dump  = get_combined_awg_dump()
+    label = f"{srv.get('emoji', '')} {srv.get('name', 'Slave')}".strip()
+    online = sum(1 for p in dump.values()
+                 if p.get("server") == label and p.get("handshake") and now - p["handshake"] < 180)
+
+    bw_d   = get_slave_bw_detail().get(sid, {})
+    awg_down = bw_d.get("awg_down", 0)
+    awg_up   = bw_d.get("awg_up", 0)
+
+    ssh_ip   = srv.get("ssh", {}).get("ip", "—")
+    awg_port = srv.get("awg_port", 51820)
+
+    if _PARAMIKO_AVAILABLE:
+        try:
+            stats = await asyncio.wait_for(
+                asyncio.get_event_loop().run_in_executor(None, _ssh_get_slave_sys_stats, srv),
+                timeout=8.0
+            )
+        except Exception:
+            stats = {}
+    else:
+        stats = {}
+
+    if stats:
+        awg_icon = "🟢" if stats["awg_ok"] else "🔴"
+        awg_line = f"{awg_icon} AWG: {'работает' if stats['awg_ok'] else 'не работает'}"
+        uptime   = stats.get("uptime", "—")
+        ram_pct  = stats.get("ram_pct", 0)
+        disk_pct = stats.get("disk_pct", 0)
+        rx_b     = stats.get("rx_bytes", 0)
+        tx_b     = stats.get("tx_bytes", 0)
+        traffic  = f"↓{_fmt_gb(tx_b)} ↑{_fmt_gb(rx_b)}"
+    else:
+        awg_line = "⚠️ AWG: нет данных"
+        uptime   = "—"
+        ram_pct  = disk_pct = 0
+        traffic  = "—"
+
+    lines = [
+        awg_line,
+        f"🖥 IP: {ssh_ip}:{awg_port}",
+        f"⏱ Uptime: {uptime}",
+        "",
+        f"💾 RAM: {ram_pct}%  💿 Диск: {disk_pct}%",
+        f"⬇️ {awg_down} / ⬆️ {awg_up} Mbit/s",
+        f"🟢 Онлайн: {online}",
+        f"📊 Трафик (с перезагрузки): {traffic}",
+    ]
+    return "\n".join(lines)
+
+
 async def show_servers_list(query):
-    """Список всех VPS-серверов."""
+    """Список всех VPS-серверов со статистикой в шапке."""
     try:
         from bot import _modules
     except ImportError:
         _modules = None
 
     servers = load_servers()
+
+    # Собираем статблоки параллельно (основной — синхронно, slaves — async)
+    slave_blocks: dict[int, str] = {}
+    if _PARAMIKO_AVAILABLE:
+        tasks = {
+            i: asyncio.ensure_future(_srv_block_slave(srv, i))
+            for i, srv in enumerate(servers)
+            if not srv.get("is_primary")
+        }
+        if tasks:
+            done = await asyncio.gather(*tasks.values(), return_exceptions=True)
+            for (i, _), result in zip(tasks.items(), done):
+                slave_blocks[i] = result if isinstance(result, str) else "⚠️ нет данных"
+
     lines = ["🖥 *Серверы*\n"]
     for i, srv in enumerate(servers):
-        emoji = srv.get("emoji", "🖥")
-        name  = srv.get("name", f"Сервер {i+1}")
-        primary_mark = " *(PRIMARY)*" if srv.get("is_primary") else ""
-        eps = srv.get("endpoints", [])
-        ep_list = ", ".join(e["value"] for e in eps) if eps else "нет"
-        lines.append(f"{emoji} {name}{primary_mark}\n   Эндпоинты: {ep_list}")
+        emoji   = srv.get("emoji", "🖥")
+        name    = srv.get("name", f"Сервер {i+1}")
+        is_pri  = srv.get("is_primary", False)
+        role    = "Основной" if is_pri else "Слейв"
+
+        eps         = srv.get("endpoints", [])
+        domain_eps  = [e["value"] for e in eps if e.get("type") == "domain"]
+        ep_text     = ", ".join(domain_eps) if domain_eps else "нет доменов"
+
+        lines.append(f"{emoji} {name} *({role})*")
+        if is_pri:
+            lines.append(_srv_block_primary())
+        else:
+            lines.append(slave_blocks.get(i, "⚠️ нет данных"))
+        lines.append(f"\nЕндпоинты: {ep_text}\n")
+
     rows = []
     for i, srv in enumerate(servers):
         emoji = srv.get("emoji", "🖥")

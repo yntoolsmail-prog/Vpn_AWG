@@ -12,6 +12,13 @@ from awg_core import (
 )
 from .common import back_kb, BTN_BACK, BTN_BACK_MENU, BTN_CANCEL
 
+# per-server bandwidth cache для show_servers_list
+_slave_bw_detail: dict = {}  # {server_id: {"awg_down": float, "awg_up": float}}
+
+
+def get_slave_bw_detail() -> dict:
+    return _slave_bw_detail
+
 
 async def bw_monitor_job(context: ContextTypes.DEFAULT_TYPE):
     """Job: каждые 5 секунд замеряет скорость по awg0 (клиенты) и eth0 (сервер).
@@ -336,6 +343,21 @@ async def slave_bw_poll_job(context: ContextTypes.DEFAULT_TYPE):
         "awg_up":   round(total_up,   2),
         "ts":       now,
     }
+    # обновляем per-server кэш для show_servers_list
+    for srv in slaves:
+        sid = srv.get("id") or srv.get("name", "")
+        old = prev_slave.get(sid)
+        p   = new_prev.get(sid)
+        if old and p:
+            dt = now - old["ts"]
+            if dt > 0:
+                down = (p["tx"] - old["tx"]) * 8 / 1_000_000 / dt
+                up   = (p["rx"] - old["rx"]) * 8 / 1_000_000 / dt
+                if 0 <= down <= 10_000 and 0 <= up <= 10_000:
+                    _slave_bw_detail[sid] = {
+                        "awg_down": round(down, 2),
+                        "awg_up":   round(up,   2),
+                    }
 
 
 # ── Бэкап ──────────────────────────────────────────────────────────────────────
