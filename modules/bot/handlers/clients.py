@@ -25,7 +25,7 @@ async def show_my_devices(query, user_id: int):
     if not clients:
         kb = [
             [InlineKeyboardButton("➕ Добавить первое устройство", callback_data="add")],
-            [InlineKeyboardButton(BTN_BACK_MENU, callback_data="back")],
+            [InlineKeyboardButton(BTN_BACK_MENU, callback_data="clients_menu")],
         ]
         await query.edit_message_text(
             "📱 У вас пока нет устройств.\nДобавьте первое!",
@@ -44,7 +44,7 @@ async def show_my_devices(query, user_id: int):
 
     kb = [[InlineKeyboardButton(f"📋 {device_short_name(name)}",
            callback_data=f"device_{name}")] for name in clients]
-    kb.append([InlineKeyboardButton(BTN_BACK_MENU, callback_data="back")])
+    kb.append([InlineKeyboardButton(BTN_BACK_MENU, callback_data="clients_menu")])
     await query.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(kb))
 
 async def show_device(query, name: str, user_id: int):
@@ -94,7 +94,7 @@ async def show_all_clients(query):
         await query.edit_message_text("👥 Клиентов нет.", reply_markup=back_kb())
         return
 
-    lines = [f"🌍 Все клиенты ({len(clients)}):\n"]
+    lines = [f"🌍 Все устройства ({len(clients)}):\n"]
     for name in clients:
         pub   = get_client_pub(name)
         stats = peers.get(pub, {}) if pub else {}
@@ -136,8 +136,57 @@ def _action_icon(action: str) -> str:
 def _action_label(action: str) -> str:
     return {"conf": "Скачать .conf", "qr": "QR-код", "share": "Поделиться"}.get(action, action)
 
+async def _show_server_select(query, name: str, user_id: int, action: str):
+    """Первый экран выбора: одна кнопка на сервер + Расширенная настройка."""
+    if not can_access_device(user_id, name):
+        await query.answer("⛔ Это не ваше устройство.", show_alert=True)
+        return
+    servers = load_servers()
+    short = device_short_name(name)
+    icon  = _action_icon(action)
+
+    all_eps = [(si, ei, srv, ep)
+               for si, srv in enumerate(servers)
+               for ei, ep in enumerate(srv.get("endpoints", []))]
+
+    if not all_eps:
+        await query.answer("Нет доступных эндпоинтов.", show_alert=True)
+        return
+
+    # Один эндпоинт — сразу отправляем без лишних экранов
+    if len(all_eps) == 1:
+        si, ei, srv, ep = all_eps[0]
+        await _do_send_action(query, name, action, ep["value"], srv)
+        return
+
+    rows = []
+    for si, srv in enumerate(servers):
+        if not srv.get("endpoints"):
+            continue
+        emoji   = srv.get("emoji", "🖥")
+        sname   = srv.get("name", f"Сервер {si + 1}")
+        country = srv.get("country", "")
+        label   = f"{emoji} {sname}" + (f" {country}" if country else "")
+        rows.append([InlineKeyboardButton(label,
+                        callback_data=f"{action}_auto_{si}_{name}")])
+
+    rows.append([InlineKeyboardButton("🔧 Расширенная настройка",
+                    callback_data=f"{action}_adv_{name}")])
+    rows.append([InlineKeyboardButton(BTN_BACK, callback_data=f"device_{name}")])
+
+    await query.edit_message_text(
+        f"{icon} *{_action_label(action)}* — {short}\n\n"
+        f"Выберите сервер (страну) и способ подключения:\n\n"
+        f"🌐 *Домен* — рекомендуется: универсальный способ подключения, обеспечит работу даже в случае смены реального IP сервера или переезда на другой сервер.\n\n"
+        f"🔢 *IP* — только если домен не работает: прямое подключение к серверу, при смене IP потребуется заново скачать файл конфигурации.\n\n"
+        f"_Флаг и название в скобках — страна/сервер, к которому относится эндпоинт._",
+        reply_markup=InlineKeyboardMarkup(rows),
+        parse_mode="Markdown"
+    )
+
+
 async def _show_ep_select(query, name: str, user_id: int, action: str):
-    """Единый экран выбора эндпоинта — плоский список с меткой сервера."""
+    """Расширенная настройка — полный плоский список всех эндпоинтов."""
     if not can_access_device(user_id, name):
         await query.answer("⛔ Это не ваше устройство.", show_alert=True)
         return
@@ -154,13 +203,6 @@ async def _show_ep_select(query, name: str, user_id: int, action: str):
         await query.answer("Нет доступных эндпоинтов.", show_alert=True)
         return
 
-    # Один эндпоинт — сразу отправляем
-    if len(all_eps) == 1:
-        si, ei, srv, ep = all_eps[0]
-        await _do_send_action(query, name, action, ep["value"], srv)
-        return
-
-    # Плоский список: каждая кнопка = флаг + эндпоинт + (сервер)
     rows = []
     for si, ei, srv, ep in all_eps:
         emoji  = srv.get("emoji", "🖥")
@@ -172,26 +214,25 @@ async def _show_ep_select(query, name: str, user_id: int, action: str):
             f"{type_icon} {emoji} {ep_val}  ({sname})",
             callback_data=f"{action}_s{si}_e{ei}_{name}"
         )])
-    rows.append([InlineKeyboardButton(BTN_BACK, callback_data=f"device_{name}")])
+    rows.append([InlineKeyboardButton(BTN_BACK, callback_data=f"{action}_{name}")])
 
     await query.edit_message_text(
         f"{icon} *{_action_label(action)}* — {short}\n\n"
-        f"Выберите сервер (страну) и способ подключения:\n\n"
-        f"🌐 *Домен* — рекомендуется: универсальный способ подключения, обеспечит работу даже в случае смены реального IP сервера или переезда на другой сервер.\n\n"
-        f"🔢 *IP* — только если домен не работает: прямое подключение к серверу, при смене IP потребуется заново скачать файл конфигурации.\n\n"
+        f"🔧 *Расширенная настройка* — выберите эндпоинт:\n\n"
         f"_Флаг и название в скобках — страна/сервер, к которому относится эндпоинт._",
         reply_markup=InlineKeyboardMarkup(rows),
         parse_mode="Markdown"
     )
 
+
 async def show_conf_ep_select(query, name: str, user_id: int):
-    await _show_ep_select(query, name, user_id, "conf")
+    await _show_server_select(query, name, user_id, "conf")
 
 async def show_qr_ep_select(query, name: str, user_id: int):
-    await _show_ep_select(query, name, user_id, "qr")
+    await _show_server_select(query, name, user_id, "qr")
 
 async def show_share_ep_select(query, name: str, user_id: int):
-    await _show_ep_select(query, name, user_id, "share")
+    await _show_server_select(query, name, user_id, "share")
 
 async def show_server_eps(query, name: str, user_id: int, action: str, srv_idx: int):
     """Показывает список эндпоинтов выбранного сервера."""

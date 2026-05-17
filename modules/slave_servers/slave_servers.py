@@ -33,6 +33,7 @@ WAITING_SRV_LOGIN    = 22
 WAITING_SRV_PASSWORD = 23
 WAITING_SRV_NAME     = 24
 WAITING_SRV_EMOJI    = 25
+WAITING_SRV_COUNTRY  = 29
 
 
 def _back_kb(target: str = "back") -> InlineKeyboardMarkup:
@@ -128,15 +129,24 @@ async def srv_add_name(update, context: ContextTypes.DEFAULT_TYPE):
 
 async def srv_add_emoji(update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
-    emoji = text if text else "🖥"
+    context.user_data["srv_add"]["emoji"] = text if text else "🖥"
+    await update.message.reply_text(
+        "Введите название страны на русском (например: Голландия, Финляндия),\n"
+        "или Enter чтобы пропустить:"
+    )
+    return WAITING_SRV_COUNTRY
+
+
+async def srv_add_country(update, context: ContextTypes.DEFAULT_TYPE):
+    country = update.message.text.strip()
     d = context.user_data.pop("srv_add", {})
-    d["emoji"] = emoji
 
     servers = load_servers()
     new_srv = {
         "id": f"server_{len(servers)}",
         "name": d.get("name", "Сервер"),
         "emoji": d.get("emoji", "🖥"),
+        "country": country,
         "is_primary": False,
         "ssh": {
             "ip": d.get("ip", ""),
@@ -224,6 +234,7 @@ def register_handlers(app) -> None:
             WAITING_SRV_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_add_password)],
             WAITING_SRV_NAME:     [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_add_name)],
             WAITING_SRV_EMOJI:    [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_add_emoji)],
+            WAITING_SRV_COUNTRY:  [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_add_country)],
         },
         fallbacks=[
             CommandHandler("cancel", srv_add_cancel),

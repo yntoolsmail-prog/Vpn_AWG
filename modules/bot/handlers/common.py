@@ -22,6 +22,7 @@ WAITING_SRV_DOMAIN     = 26
 # Переименование сервера (primary или slave)
 WAITING_SRV_EDIT_NAME  = 27
 WAITING_SRV_EDIT_EMOJI = 28
+WAITING_SRV_COUNTRY    = 29
 
 IMG_BASE = "https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/.images"
 

@@ -430,7 +430,7 @@ async def show_maintenance(query):
         [InlineKeyboardButton("♻️ Обновить IP исключений",        callback_data="refresh_subnets")],
         [InlineKeyboardButton("🔑 SSH-доступ",                     callback_data="ssh_admin")],
         [InlineKeyboardButton("✅ Отмечено — всё ок",            callback_data="maint_done")],
-        [InlineKeyboardButton(BTN_BACK_MENU,                       callback_data="back")],
+        [InlineKeyboardButton(BTN_BACK_MENU,                       callback_data="settings_menu")],
     ])
     await query.edit_message_text(text, reply_markup=kb)
 

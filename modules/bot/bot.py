@@ -50,7 +50,7 @@ from handlers.common import (
 from handlers.common import (
     WAITING_REGISTER_NAME, WAITING_DEVICE_NAME, WAITING_RESTORE_FILE,
     WAITING_SITES_DOMAIN, WAITING_SRV_DOMAIN,
-    WAITING_SRV_EDIT_NAME, WAITING_SRV_EDIT_EMOJI,
+    WAITING_SRV_EDIT_NAME, WAITING_SRV_EDIT_EMOJI, WAITING_SRV_COUNTRY,
     IMG_BASE, back_kb, _tma_button, sites_keyboard, _md,
 )
 from handlers.bandwidth import (
@@ -75,7 +75,7 @@ from handlers.servers import (
     show_servers_list, srv_deldomain_list, srv_deldomain_confirm, srv_deldomain_ok,
     show_server_card, _sync_peer_to_all_slaves, _check_endpoint_dns,
     srv_checkdns, srv_del_confirm, srv_del_ok, srv_sync_now,
-    srv_rename_start, srv_rename_name, srv_rename_emoji,
+    srv_rename_start, srv_rename_name, srv_rename_emoji, srv_rename_country,
     srv_adddomain_start, srv_adddomain_pick, srv_adddomain_receive,
 )
 from handlers.maintenance import (
@@ -160,8 +160,13 @@ async def show_start_screen(msg, user_id: int, edit: bool = False):
         f"📱 Клиентов: {total} | 👥 Польз.: {len(users['approved'])}{pending_note}"
     )
 
+    tma_lbl = "▶️ Веб интерфейс 🔑"
+    if TMA_URL.startswith("https://"):
+        admin_tma_btn = InlineKeyboardButton(tma_lbl, web_app=WebAppInfo(url=TMA_URL))
+    else:
+        admin_tma_btn = InlineKeyboardButton(tma_lbl, url=TMA_URL)
     markup = InlineKeyboardMarkup([
-        [tma_btn],
+        [admin_tma_btn],
         [InlineKeyboardButton("📱 Режим бота", callback_data="back")],
     ])
     if edit:
@@ -280,17 +285,19 @@ async def main_menu(msg, user_id: int, edit=False):
             f"🖥 IP: {SERVER_IP}\n"
             f"📱 Клиентов: {total_a} | 👥 Польз.: {len(users['approved'])}{pending_note}"
         )
-        servers = load_servers()
-        srv_label = f"🖥 Серверы ({len(servers)})"
-        kb = [
-            [InlineKeyboardButton("🧲 Добавить устройство",  callback_data="add")],
-            [InlineKeyboardButton(BTN_MY_DEVICES,       callback_data="my_devices")],
-            [InlineKeyboardButton("🌍 Все клиенты",          callback_data="all_clients")],
-            [InlineKeyboardButton(pending_label,             callback_data="manage_users")],
-            [InlineKeyboardButton(srv_label,                 callback_data="servers")],
-            [InlineKeyboardButton("📊 Статус сервера",       callback_data="status")],
-            [InlineKeyboardButton("🔧 Техобслуживание",      callback_data="maintenance")],
-            [InlineKeyboardButton("📖 Инструкция",           callback_data="help")],
+        tma_lbl = "▶️ Веб интерфейс 🔑"
+        if TMA_URL:
+            if TMA_URL.startswith("https://"):
+                admin_tma = InlineKeyboardButton(tma_lbl, web_app=WebAppInfo(url=TMA_URL))
+            else:
+                admin_tma = InlineKeyboardButton(tma_lbl, url=TMA_URL)
+            kb = [[admin_tma]]
+        else:
+            kb = []
+        kb += [
+            [InlineKeyboardButton("📱 Клиенты",    callback_data="clients_menu")],
+            [InlineKeyboardButton(pending_label,   callback_data="manage_users")],
+            [InlineKeyboardButton("⚙️ Настройки",  callback_data="settings_menu")],
         ]
         kb.extend(_modules.get_user_menu_buttons(user_id))
         kb.extend(_modules.get_admin_menu_buttons())
@@ -332,6 +339,35 @@ async def main_menu(msg, user_id: int, edit=False):
         await msg.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
     else:
         await msg.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+
+async def show_clients_menu(query):
+    """Подменю «Клиенты»."""
+    kb = [
+        [InlineKeyboardButton("🧲 Добавить устройство", callback_data="add")],
+        [InlineKeyboardButton(BTN_MY_DEVICES,           callback_data="my_devices")],
+        [InlineKeyboardButton("🌍 Все устройства",      callback_data="all_clients")],
+        [InlineKeyboardButton(BTN_BACK_MENU,            callback_data="back")],
+    ]
+    await query.edit_message_text("📱 Клиенты", reply_markup=InlineKeyboardMarkup(kb))
+
+
+async def show_settings_menu(query):
+    """Подменю «Настройки»."""
+    servers   = load_servers()
+    srv_label = f"🖥 Серверы ({len(servers)})"
+    kb = [
+        [InlineKeyboardButton(srv_label,                      callback_data="servers")],
+        [InlineKeyboardButton("📈 Трафик/пики",               callback_data="bandwidth")],
+        [InlineKeyboardButton("🔄 Перезапустить бота",        callback_data="restart_bot")],
+        [InlineKeyboardButton("⚡ Перезапустить AWG",          callback_data="restart_awg")],
+        [InlineKeyboardButton("🔧 Техобслуживание",           callback_data="maintenance")],
+        [InlineKeyboardButton("🔑 SSH-доступ",                callback_data="ssh_admin")],
+        [InlineKeyboardButton("♻️ Обновить IP исключений",    callback_data="refresh_subnets")],
+        [InlineKeyboardButton("📖 Инструкция",                callback_data="help")],
+        [InlineKeyboardButton(BTN_BACK_MENU,                  callback_data="back")],
+    ]
+    await query.edit_message_text("⚙️ Настройки", reply_markup=InlineKeyboardMarkup(kb))
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ОБРАБОТЧИК КНОПОК
@@ -393,6 +429,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "back":
         await main_menu(query, user_id, edit=True)
+    elif data == "clients_menu" and is_admin:
+        await show_clients_menu(query)
+    elif data == "settings_menu" and is_admin:
+        await show_settings_menu(query)
     elif data == "my_devices":
         await show_my_devices(query, user_id)
     elif data == "all_clients" and is_admin:
@@ -534,6 +574,23 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         ep = eps[ei]["value"]
                         from handlers.clients import _do_send_action
                         await _do_send_action(query, n, "conf", ep, srv)
+        elif rest.startswith("auto_"):
+            # conf_auto_{si}_{name} → автовыбор домена для сервера
+            m = re.match(r'auto_(\d+)_(.*)', rest)
+            if m:
+                si, n = int(m.group(1)), m.group(2)
+                servers = load_servers()
+                if si < len(servers):
+                    srv = servers[si]
+                    ep = next((e for e in srv.get("endpoints", []) if e.get("type") == "domain"),
+                              srv["endpoints"][0] if srv.get("endpoints") else None)
+                    if ep:
+                        from handlers.clients import _do_send_action
+                        await _do_send_action(query, n, "conf", ep["value"], srv)
+        elif rest.startswith("adv_"):
+            # conf_adv_{name} → расширенная настройка (полный список)
+            from handlers.clients import _show_ep_select
+            await _show_ep_select(query, rest[4:], user_id, "conf")
         elif rest.startswith("ep_"):
             # Обратная совместимость: conf_ep_<epkey>_<name>
             parts = rest[3:].split("_", 1)
@@ -554,6 +611,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if ei < len(eps):
                         from handlers.clients import _do_send_action
                         await _do_send_action(query, n, "qr", eps[ei]["value"], servers[si])
+        elif rest.startswith("auto_"):
+            m = re.match(r'auto_(\d+)_(.*)', rest)
+            if m:
+                si, n = int(m.group(1)), m.group(2)
+                servers = load_servers()
+                if si < len(servers):
+                    srv = servers[si]
+                    ep = next((e for e in srv.get("endpoints", []) if e.get("type") == "domain"),
+                              srv["endpoints"][0] if srv.get("endpoints") else None)
+                    if ep:
+                        from handlers.clients import _do_send_action
+                        await _do_send_action(query, n, "qr", ep["value"], srv)
+        elif rest.startswith("adv_"):
+            from handlers.clients import _show_ep_select
+            await _show_ep_select(query, rest[4:], user_id, "qr")
         elif rest.startswith("ep_"):
             parts = rest[3:].split("_", 1)
             if len(parts) == 2:
@@ -573,6 +645,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if ei < len(eps):
                         from handlers.clients import _do_send_action
                         await _do_send_action(query, n, "share", eps[ei]["value"], servers[si])
+        elif rest.startswith("auto_"):
+            m = re.match(r'auto_(\d+)_(.*)', rest)
+            if m:
+                si, n = int(m.group(1)), m.group(2)
+                servers = load_servers()
+                if si < len(servers):
+                    srv = servers[si]
+                    ep = next((e for e in srv.get("endpoints", []) if e.get("type") == "domain"),
+                              srv["endpoints"][0] if srv.get("endpoints") else None)
+                    if ep:
+                        from handlers.clients import _do_send_action
+                        await _do_send_action(query, n, "share", ep["value"], srv)
+        elif rest.startswith("adv_"):
+            from handlers.clients import _show_ep_select
+            await _show_ep_select(query, rest[4:], user_id, "share")
         elif rest.startswith("ep_"):
             parts = rest[3:].split("_", 1)
             if len(parts) == 2:
@@ -728,6 +815,7 @@ def main():
         states={
             WAITING_SRV_EDIT_NAME:  [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_rename_name)],
             WAITING_SRV_EDIT_EMOJI: [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_rename_emoji)],
+            WAITING_SRV_COUNTRY:    [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_rename_country)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         per_chat=True,

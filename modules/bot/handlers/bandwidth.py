@@ -214,8 +214,7 @@ async def show_bandwidth(query, period_days: int = 0):
         [InlineKeyboardButton("📅 По дням",      callback_data="bw_days_0")],
         [InlineKeyboardButton("🗑 Сбросить пики", callback_data="bw_reset_ask")],
         [InlineKeyboardButton("🔄 Обновить",      callback_data=f"bw_period_{period_days}")],
-        [InlineKeyboardButton("◀️ Статус",        callback_data="status")],
-        [InlineKeyboardButton(BTN_BACK_MENU,        callback_data="back")],
+        [InlineKeyboardButton(BTN_BACK_MENU,        callback_data="settings_menu")],
     ])
     await query.edit_message_text("\n".join(lines), reply_markup=kb)
 

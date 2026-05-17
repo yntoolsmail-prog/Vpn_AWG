@@ -14,7 +14,7 @@ from awg_core import (
     ssh_stop_slave_awg      as _ssh_stop_slave_awg,
     ssh_get_slave_peer_count as _ssh_get_slave_peer_count,
 )
-from .common import back_kb, WAITING_SRV_DOMAIN, WAITING_SRV_EDIT_NAME, WAITING_SRV_EDIT_EMOJI, BTN_BACK, BTN_BACK_MENU, BTN_CANCEL, BTN_BACK_CARD
+from .common import back_kb, WAITING_SRV_DOMAIN, WAITING_SRV_EDIT_NAME, WAITING_SRV_EDIT_EMOJI, WAITING_SRV_COUNTRY, BTN_BACK, BTN_BACK_MENU, BTN_CANCEL, BTN_BACK_CARD
 
 
 def _count_peers_in_conf(conf_text: str) -> int:
@@ -49,7 +49,7 @@ async def show_servers_list(query):
         rows.append([InlineKeyboardButton("➕ Добавить сервер", callback_data="srv_add")])
     rows.append([InlineKeyboardButton("🔍 Проверить DNS", callback_data="srv_checkdns")])
     rows.append([InlineKeyboardButton("🗑 Удалить домен", callback_data="srv_deldomain_list")])
-    rows.append([InlineKeyboardButton(BTN_BACK, callback_data="back")])
+    rows.append([InlineKeyboardButton(BTN_BACK, callback_data="settings_menu")])
     await query.edit_message_text(
         "\n".join(lines),
         reply_markup=InlineKeyboardMarkup(rows),
@@ -137,13 +137,13 @@ async def show_server_card(query, srv_idx: int):
     eps = srv.get("endpoints", [])
     ep_lines = []
     for ep in eps:
-        t = "🌐" if ep.get("type") == "domain" else "🔢"
-        v_mark = " ✅" if ep.get("verified") else ""
-        ep_lines.append(f"  {t} {ep['value']}{v_mark}")
-    ep_text = "\n".join(ep_lines) if ep_lines else "  нет"
+        if ep.get("type") == "domain":
+            v_mark = " ✅" if ep.get("verified") else ""
+            ep_lines.append(f"  🌐 {ep['value']}{v_mark}")
+    ep_text = "\n".join(ep_lines) if ep_lines else "  нет доменов"
 
     text = (
-        f"{emoji} *{name}*" + (" _(PRIMARY)_" if is_pri else "") + "\n"
+        f"{emoji} *{name}*" + (" _(Основной)_" if is_pri else " _(Слейв)_") + "\n"
         f"SSH: `{ssh.get('login', 'root')}@{ssh.get('ip', '—')}:{ssh.get('port', 22)}`\n"
         f"AWG-порт: `{port}`\n\n"
         f"*Эндпоинты:*\n{ep_text}"
@@ -425,24 +425,37 @@ async def srv_rename_name(update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def srv_rename_emoji(update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["srv_rename"]["emoji"] = update.message.text.strip()
+    srv_idx = context.user_data["srv_rename"]["srv_idx"]
+    servers = load_servers()
+    current_country = servers[srv_idx].get("country", "") if srv_idx < len(servers) else ""
+    hint = f" (текущее: {current_country})" if current_country else " (не задано)"
+    await update.message.reply_text(
+        f"Введите название страны на русском (например: Голландия, Финляндия),\n"
+        f"или пробел чтобы оставить текущее{hint}:"
+    )
+    return WAITING_SRV_COUNTRY
+
+
+async def srv_rename_country(update, context: ContextTypes.DEFAULT_TYPE):
     d = context.user_data.pop("srv_rename", {})
-    srv_idx = d.get("srv_idx", 0)
-    new_name  = d.get("name", "").strip()
-    new_emoji = update.message.text.strip()
+    srv_idx     = d.get("srv_idx", 0)
+    new_name    = d.get("name", "").strip()
+    new_emoji   = d.get("emoji", "").strip()
+    new_country = update.message.text.strip()
 
     servers = load_servers()
     if srv_idx >= len(servers):
         await update.message.reply_text("❌ Сервер не найден.")
         return ConversationHandler.END
     srv = servers[srv_idx]
-    if new_name:
-        srv["name"] = new_name
-    if new_emoji:
-        srv["emoji"] = new_emoji
+    if new_name:    srv["name"]    = new_name
+    if new_emoji:   srv["emoji"]   = new_emoji
+    if new_country: srv["country"] = new_country
     servers[srv_idx] = srv
     save_servers(servers)
     await update.message.reply_text(
-        f"✅ Сервер переименован: *{srv['emoji']} {srv['name']}*",
+        f"✅ Сервер обновлён: *{srv['emoji']} {srv['name']}*",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton(BTN_BACK_CARD, callback_data=f"srv_card_{srv_idx}")

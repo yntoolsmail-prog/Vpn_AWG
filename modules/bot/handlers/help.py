@@ -7,7 +7,7 @@ from .common import BTN_BACK_MENU
 async def show_help(query):
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🌐 DNS — почему это важно", callback_data="help_dns")],
-        [InlineKeyboardButton(BTN_BACK_MENU, callback_data="back")],
+        [InlineKeyboardButton(BTN_BACK_MENU, callback_data="settings_menu")],
     ])
     await query.edit_message_text(get_help_main(TMA_URL), reply_markup=kb, parse_mode="Markdown")
 
