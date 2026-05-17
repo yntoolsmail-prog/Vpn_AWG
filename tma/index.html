@@ -1290,6 +1290,7 @@ async function openDeviceDetail(d) {
 
   // Загружаем серверы и обновляем метку выбранного сервера
   _loadServers().then(() => _updateServerLabel());
+  _tw(document.getElementById('modal-device-body'));
 
   document.getElementById('btn-conf').onclick    = () => sendConf(d.name);
   document.getElementById('btn-qr').onclick      = () => showQR(d.name);

@@ -180,14 +180,13 @@ Vpn_AWG/
 - **Shell-скрипты:** вспомогательные функции в `lib/*.sh`, подключаются через `source`
 - **Re-экспорт `awg_core`:** `from awg_core import *` не реэкспортирует функции с `_` префиксом — для них нужен явный импорт из оригинального модуля (`awg_stats`, `awg_clients`, `awg_ssh`)
 - **Кнопки меню:** каждая кнопка на отдельной строке (`[btn]`), не группировать по две в строку
-- **Удалённый функционал:** «Сменить часовой пояс» и «Обновить IP сервера» — убраны из бота полностью (handlers, ConversationHandler, job)
 - **Статистика со slaves:** `get_combined_awg_dump()` в `awg_stats.py` — агрегирует awg dump primary + slaves с кэшем 30 с; `slave_bw_poll_job` каждые 5 с опрашивает slave по SSH для real-time Mbit/s (5 с = тот же интервал что bw_monitor_job, чтобы захватывать пики)
 
 ---
 
 ## Что не трогать
 
-- `modules/tma/tma_server.py` — Flask API (все вызовы get_awg_dump заменены на get_combined_awg_dump — статистика учитывает slaves):
+- `modules/tma/tma_server.py` — Flask API:
   - исключения сайтов хранятся только в `.excl.json` и применяются динамически при генерации конфига
   - `/excl PUT` валидирует домены + запускает `process_domain()` в фоне; IP/CIDR применяются напрямую без DNS
   - создание клиента синкает peer на все slave-серверы через `_sync_new_peer_to_slaves()` в фоновых потоках
@@ -198,6 +197,5 @@ Vpn_AWG/
   - `_selectedSrvRawName` хранит имя сервера без emoji для нейминга; передаётся в `srv_name` при отправке `.conf`
   - `_selectedSrvId` хранит id сервера; передаётся в `srv_id` при генерации vpnlink
   - `_getSelectedEndpoint()` возвращает пустую строку если сервер не выбран; `sendConf`/`showQR`/`showVpnLink` блокируют выполнение с алертом "Выберите сервер"
-  - Twemoji (`twemoji.parse`) применяется для корректного рендера эмодзи (включая флаги) в лейбле сервера и пикере
-- Конфигурационные файлы в `/etc/amnezia/` — создаются при установке
+  - Twemoji (`twemoji.parse`) применяется для корректного рендера эмодзи (включая флаги); вызывать `_tw(el)` после вставки innerHTML содержащего эмодзи
 - `amnezia.gpg.asc` — GPG-ключ для верификации пакетов
