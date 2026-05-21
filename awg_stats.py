@@ -15,17 +15,13 @@ _combined_dump_cache: dict = {}
 _combined_dump_ts: float = 0.0
 _COMBINED_DUMP_TTL: int = 30  # секунд
 
+# Кэш для неблокирующего вычисления CPU% в get_system_stats
+_CPU_PREV_IDLE:  int = 0
+_CPU_PREV_TOTAL: int = 0
 
-def get_combined_awg_dump() -> dict:
-    """Объединённый awg dump: primary + все доступные slaves.
-    Для каждого peer: handshake = max по серверам, rx/tx = sum, endpoint = с сервера с макс. handshake.
-    Дополнительное поле 'server' — метка сервера с последним хендшейком (пусто = primary).
-    Кэшируется на 30 секунд."""
-    global _combined_dump_cache, _combined_dump_ts
-    now = time.time()
-    if now - _combined_dump_ts < _COMBINED_DUMP_TTL and _combined_dump_cache:
-        return _combined_dump_cache
 
+def _build_combined_awg_dump() -> dict:
+    """Сборка объединённого dump — может делать SSH-запросы (блокирующая операция)."""
     from awg_ssh import ssh_get_slave_awg_dump, PARAMIKO_AVAILABLE
     from awg_core import load_servers
 
@@ -54,10 +50,30 @@ def get_combined_awg_dump() -> dict:
                 if slave_dump:
                     label = f"{srv.get('emoji', '')} {srv.get('name', 'Slave')}".strip()
                     _merge(slave_dump, label)
-
-    _combined_dump_cache = merged
-    _combined_dump_ts = now
     return merged
+
+
+def refresh_combined_awg_dump() -> dict:
+    """Принудительное обновление кэша (вызывается в executor из bw_monitor_job)."""
+    global _combined_dump_cache, _combined_dump_ts
+    merged = _build_combined_awg_dump()
+    _combined_dump_cache = merged
+    _combined_dump_ts = time.time()
+    return merged
+
+
+def get_combined_awg_dump() -> dict:
+    """Объединённый awg dump: primary + все доступные slaves.
+    Для каждого peer: handshake = max по серверам, rx/tx = sum, endpoint = с сервера с макс. handshake.
+    Дополнительное поле 'server' — метка сервера с последним хендшейком (пусто = primary).
+    Кэш обновляется фоновым job'ом каждые 5 с; при холодном старте делает синхронный сбор.
+    """
+    global _combined_dump_cache, _combined_dump_ts
+    now = time.time()
+    if _combined_dump_cache and now - _combined_dump_ts < _COMBINED_DUMP_TTL:
+        return _combined_dump_cache
+    # Холодный старт / устаревший кэш — собираем синхронно (первый запрос после рестарта)
+    return refresh_combined_awg_dump()
 
 
 def fmt_bytes(b: int) -> str:
@@ -345,15 +361,24 @@ def get_system_stats() -> dict:
 
     cpu_count = os.cpu_count() or 1
 
+    # CPU% — неблокирующее вычисление через дельту с предыдущим вызовом.
+    # Первый вызов вернёт 0.0; следующие — реальное значение за интервал
+    # между двумя последними обращениями. Не даёт sleep блокировать event loop.
+    global _CPU_PREV_IDLE, _CPU_PREV_TOTAL
     try:
-        def _rs():
-            with open("/proc/stat") as f:
-                v = list(map(int, f.readline().split()[1:]))
-            return v[3] + v[4], sum(v)   # idle, total
-        idle1, tot1 = _rs()
-        time.sleep(0.5)
-        idle2, tot2 = _rs()
-        cpu_pct = round(100 * (1 - (idle2 - idle1) / max(tot2 - tot1, 1)), 1)
+        with open("/proc/stat") as f:
+            v = list(map(int, f.readline().split()[1:]))
+        idle_now  = v[3] + v[4]
+        total_now = sum(v)
+        if _CPU_PREV_TOTAL and total_now > _CPU_PREV_TOTAL:
+            cpu_pct = round(
+                100 * (1 - (idle_now - _CPU_PREV_IDLE) / (total_now - _CPU_PREV_TOTAL)),
+                1,
+            )
+        else:
+            cpu_pct = 0.0
+        _CPU_PREV_IDLE  = idle_now
+        _CPU_PREV_TOTAL = total_now
     except Exception:
         cpu_pct = 0.0
 

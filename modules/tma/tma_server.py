@@ -378,6 +378,7 @@ def api_servers(user_id):
             "id":        srv.get("id", ""),
             "name":      srv.get("name", ""),
             "emoji":     srv.get("emoji", "🖥"),
+            "country":   srv.get("country", ""),
             "is_primary": srv.get("is_primary", False),
             "endpoints": [
                 {

@@ -117,8 +117,6 @@ if not os.path.exists(CONFIG_FILE):
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-_SUBNET_REFRESH_RUNNING = threading.Event()
-
 
 async def show_start_screen(msg, user_id: int, edit: bool = False):
     """Стартовый экран — всегда ведёт на главное меню."""
