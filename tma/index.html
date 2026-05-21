@@ -911,11 +911,13 @@
 <div class="modal-overlay hidden" id="modal-server-picker" onclick="closeModal('modal-server-picker')">
   <div class="modal" onclick="event.stopPropagation()">
     <div class="modal-handle"></div>
-    <div class="modal-title">Выберите сервер</div>
+    <div class="modal-title" id="server-picker-title">Выберите сервер</div>
     <div id="server-picker-body" style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px">
       <span style="color:var(--text-dim);font-size:12px"><span class="spinner"></span> Загрузка…</span>
     </div>
     <div class="modal-actions">
+      <button class="btn btn-ghost" id="server-picker-back" style="display:none"
+              onclick="_showServerCountries()">◀️ Назад</button>
       <button class="btn btn-ghost" onclick="closeModal('modal-server-picker')">Отмена</button>
     </div>
   </div>
@@ -974,7 +976,7 @@
 </div>
 
 <!-- ══ МОДАЛКА: Настройка сайтов ══ -->
-<div class="modal-overlay hidden" id="modal-sites" onclick="closeModal('modal-sites')">
+<div class="modal-overlay hidden" id="modal-sites" onclick="closeModal('modal-sites');_backToDeviceFromSites()">
   <div class="modal" onclick="event.stopPropagation()">
     <div class="modal-handle"></div>
     <div class="modal-title" id="sites-modal-title"></div>
@@ -1009,7 +1011,7 @@
       затем заново загрузите .conf или QR.
     </div>
     <div class="modal-actions">
-      <button class="btn btn-ghost" onclick="closeModal('modal-sites')">Отмена</button>
+      <button class="btn btn-ghost" onclick="closeModal('modal-sites');_backToDeviceFromSites()">Отмена</button>
       <button class="btn btn-green" id="btn-sites-submit" onclick="submitSites()">Сохранить</button>
     </div>
   </div>
@@ -1173,28 +1175,100 @@ function _updateServerLabel() {
 
 function openServerPicker() {
   _loadServers().then(srvs => {
-    const body = document.getElementById('server-picker-body');
-    if (!body) return;
     if (!srvs || !srvs.length) {
-      body.innerHTML = '<span style="color:var(--text-dim);font-size:13px">Нет доступных серверов</span>';
-    } else {
-      body.innerHTML = srvs.map(srv => {
-        const eps = srv.endpoints || [];
-        return eps.map(ep => {
-          const isSel = ep.value === _selectedEndpoint;
-          const typeIcon = ep.type === 'domain' ? '🌐' : '🔢';
-          const vfMark   = ep.verified ? ' ✅' : '';
-          return `<button class="btn ${isSel ? 'btn-green' : 'btn-ghost'}"
-                          style="text-align:left;justify-content:flex-start;gap:8px"
-                          onclick="selectServerEndpoint('${_esc(ep.value)}','${_esc(srv.emoji+' '+ep.value)}','${_esc(srv.name)}','${_esc(srv.id)}','${_esc(srv.emoji)}')">
-                    ${srv.emoji} ${_esc(srv.name)} &nbsp; ${typeIcon} ${_esc(ep.value)}${vfMark}
-                  </button>`;
-        }).join('');
-      }).join('');
+      const body = document.getElementById('server-picker-body');
+      if (body) body.innerHTML = '<span style="color:var(--text-dim);font-size:13px">Нет доступных серверов</span>';
+      openModal('modal-server-picker');
+      return;
     }
-    _tw(body);
+    _showServerCountries();
     openModal('modal-server-picker');
   });
+}
+
+// Экран 1: список серверов как «флаг название страна» — пользователь видит только страну,
+// эндпоинт выбирается автоматически (предпочтительно домен). Аналог _show_server_select в боте.
+function _showServerCountries() {
+  const body = document.getElementById('server-picker-body');
+  const back = document.getElementById('server-picker-back');
+  const title = document.getElementById('server-picker-title');
+  if (!body || !_servers) return;
+  if (title) title.textContent = 'Выберите сервер';
+  if (back)  back.style.display = 'none';
+
+  // Сервер считаем доступным, если у него есть хотя бы один эндпоинт.
+  const usable = _servers.filter(s => (s.endpoints || []).length > 0);
+
+  let html = usable.map(srv => {
+    const country = srv.country ? ' ' + _esc(srv.country) : '';
+    const isSel = _isServerSelected(srv);
+    return `<button class="btn ${isSel ? 'btn-green' : 'btn-ghost'}"
+                    style="text-align:left;justify-content:flex-start;gap:8px"
+                    onclick="_pickServerAuto('${_esc(srv.id)}')">
+              ${srv.emoji} ${_esc(srv.name)}${country}
+            </button>`;
+  }).join('');
+
+  html += `<button class="btn btn-ghost"
+                   style="text-align:left;justify-content:flex-start;gap:8px;margin-top:4px"
+                   onclick="_showServerEndpoints()">🔧 Расширенная настройка</button>`;
+
+  body.innerHTML = html;
+  _tw(body);
+}
+
+// Экран 2: расширенная настройка — плоский список всех эндпоинтов с иконками типа,
+// как _show_ep_select в боте.
+function _showServerEndpoints() {
+  const body = document.getElementById('server-picker-body');
+  const back = document.getElementById('server-picker-back');
+  const title = document.getElementById('server-picker-title');
+  if (!body || !_servers) return;
+  if (title) title.textContent = '🔧 Расширенная настройка';
+  if (back)  back.style.display = '';
+
+  const intro = `
+    <div style="font-size:11px;color:var(--text-dim);line-height:1.5;margin-bottom:8px">
+      🌐 <b>Домен</b> — рекомендуется: работает даже при смене IP сервера.<br>
+      🔢 <b>IP</b> — только если домен не работает: при смене IP потребуется заново скачать конфиг.
+    </div>`;
+
+  const rows = _servers.flatMap(srv => (srv.endpoints || []).map(ep => {
+    const isSel = ep.value === _selectedEndpoint;
+    const typeIcon = ep.type === 'domain' ? '🌐' : '🔢';
+    const vfMark   = ep.verified ? ' ✅' : '';
+    return `<button class="btn ${isSel ? 'btn-green' : 'btn-ghost'}"
+                    style="text-align:left;justify-content:flex-start;gap:8px"
+                    onclick="selectServerEndpoint('${_esc(ep.value)}','${_esc(srv.emoji+' '+ep.value)}','${_esc(srv.name)}','${_esc(srv.id)}','${_esc(srv.emoji)}')">
+              ${typeIcon} ${srv.emoji} ${_esc(ep.value)}${vfMark} &nbsp;
+              <span style="color:var(--text-dim);font-size:11px">(${_esc(srv.name)})</span>
+            </button>`;
+  })).join('');
+
+  body.innerHTML = intro + rows;
+  _tw(body);
+}
+
+function _isServerSelected(srv) {
+  if (!_selectedEndpoint) return false;
+  if (_selectedSrvId && srv.id) return _selectedSrvId === srv.id;
+  return (srv.endpoints || []).some(ep => ep.value === _selectedEndpoint);
+}
+
+// Автовыбор эндпоинта сервера: предпочтение — домен, иначе первый эндпоинт.
+// Аналог поведения в боте при нажатии на сервер (`{action}_auto_{si}_{name}`).
+function _pickServerAuto(srvId) {
+  if (!_servers) return;
+  const srv = _servers.find(s => s.id === srvId);
+  if (!srv || !srv.endpoints || !srv.endpoints.length) return;
+  const ep = srv.endpoints.find(e => e.type === 'domain') || srv.endpoints[0];
+  _selectedEndpoint   = ep.value;
+  _selectedServerName = `${srv.emoji} ${srv.name}` + (srv.country ? ' ' + srv.country : '');
+  _selectedSrvRawName = srv.name || '';
+  _selectedSrvId      = srv.id || '';
+  _selectedSrvEmoji   = srv.emoji || '';
+  closeModal('modal-server-picker');
+  _updateServerLabel();
 }
 
 function selectServerEndpoint(epValue, displayName, srvRawName, srvId, srvEmoji) {
@@ -1445,8 +1519,20 @@ async function submitCreateDevice() {
 
 // ── Сайты: редактирование ──
 let _customDomains = [];
+// Устройство, из карточки которого открыли экран исключений — чтобы вернуться обратно
+let _sitesParentDevice = null;
+
+function _backToDeviceFromSites() {
+  // Возврат в карточку устройства, из которой открыли экран исключений.
+  // Без перезагрузки списка устройств — пользователь продолжает с того же места.
+  const dev = _sitesParentDevice;
+  _sitesParentDevice = null;
+  if (dev) openDeviceDetail(dev);
+}
 
 async function openSitesModal(name) {
+  // Запоминаем устройство, из которого пришли — чтобы Отмена/Сохранить вернули в карточку.
+  _sitesParentDevice = (window._devicesList || []).find(d => d.name === name) || { name };
   closeModal('modal-device');
   if (!_sites) {
     try { const r = await API('/api/sites'); _sites = await r.json(); } catch(e) { _sites = []; }
@@ -1516,6 +1602,7 @@ async function submitSites() {
     if (!resp.ok) { const e = await resp.json(); throw new Error(e.error); }
     closeModal('modal-sites');
     tg?.showAlert?.('✓ Исключения сохранены!\nПри следующей загрузке .conf или QR они будут применены (если включена галочка).');
+    _backToDeviceFromSites();
   } catch(e) {
     tg?.showAlert?.('Ошибка: ' + e.message) || alert('Ошибка: ' + e.message);
   } finally {
