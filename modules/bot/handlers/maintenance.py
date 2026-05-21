@@ -487,43 +487,64 @@ async def do_maint_done(query):
         reply_markup=back_kb()
     )
 
+# Флаг параллельных запусков обновления подсетей.
+# Хранится в модуле maintenance, чтобы не делать дорогой повторный
+# импорт bot.py при первом нажатии кнопки.
+_SUBNET_REFRESH_RUNNING = threading.Event()
+_SUBNET_REFRESH_STARTED_AT: float = 0.0
+# Если прошло больше этого времени — считаем, что прошлый запуск зависший
+# и разрешаем перезапуск, чтобы кнопка не оставалась навсегда «мёртвой».
+_SUBNET_REFRESH_STUCK_AFTER: int = 600  # 10 минут
+
+
 async def do_refresh_subnets(query, context):
     """Запускает полное обновление кэша подсетей в фоне."""
-    try:
-        from bot import _SUBNET_REFRESH_RUNNING
-    except ImportError:
-        import threading
-        _SUBNET_REFRESH_RUNNING = threading.Event()
+    global _SUBNET_REFRESH_STARTED_AT
 
     if _SUBNET_REFRESH_RUNNING.is_set():
-        await query.answer()
-        return
+        elapsed = int(time.time() - _SUBNET_REFRESH_STARTED_AT)
+        if elapsed < _SUBNET_REFRESH_STUCK_AFTER:
+            await query.answer(
+                f"⏳ Обновление уже идёт ({elapsed} с). Дождитесь завершения.",
+                show_alert=True,
+            )
+            return
+        # Прошлый запуск висит подозрительно долго — сбрасываем флаг и продолжаем.
+        logger.warning(
+            "do_refresh_subnets: предыдущий запуск висит %d с, перезапускаем", elapsed
+        )
+        _SUBNET_REFRESH_RUNNING.clear()
 
     _SUBNET_REFRESH_RUNNING.set()
+    _SUBNET_REFRESH_STARTED_AT = time.time()
+
     await query.edit_message_text(
         "🌐 Обновление кэша подсетей запущено в фоне.\n\n"
         "Опрашиваются все домены из базы и исключений пользователей.\n"
-        "Обычно занимает 15–60 секунд.",
+        "Обычно занимает несколько секунд.",
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton(BTN_BACK_MENU, callback_data="settings_menu")
         ]])
     )
     chat_id = query.message.chat_id
-    msg_id  = query.message.message_id
     loop    = asyncio.get_running_loop()
     bot     = context.bot
 
     def _run():
+        started = time.time()
         try:
             run_subnet_daemon()
-            text = "✅ Кэш подсетей обновлён."
+            elapsed = int(time.time() - started)
+            text = f"✅ Кэш подсетей обновлён за {elapsed} с."
         except Exception as e:
             text = f"❌ Ошибка обновления: {e}"
         finally:
             _SUBNET_REFRESH_RUNNING.clear()
+        # Отправляем новым сообщением — пользователь мог уйти в другое меню,
+        # и редактирование старого message_id затёрло бы текущий экран.
         asyncio.run_coroutine_threadsafe(
-            bot.edit_message_text(
-                chat_id=chat_id, message_id=msg_id, text=text,
+            bot.send_message(
+                chat_id=chat_id, text=text,
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton(BTN_BACK_MAINT, callback_data="maintenance")
                 ]])

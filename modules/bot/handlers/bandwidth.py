@@ -7,7 +7,7 @@ from awg_core import (
     get_all_clients, get_awg_dump, get_bw_histogram, get_bw_histogram_day,
     get_bw_top, get_log_days, get_vnstat_monthly,
     load_bw_peak, read_iface_bytes, save_bw_peak, get_host_iface,
-    load_servers,
+    load_servers, refresh_combined_awg_dump,
     ssh_read_slave_awg_bytes, PARAMIKO_AVAILABLE as _PARAMIKO_AVAILABLE,
 )
 from .common import back_kb, BTN_BACK, BTN_BACK_MENU, BTN_CANCEL
@@ -36,6 +36,12 @@ async def bw_monitor_job(context: ContextTypes.DEFAULT_TYPE):
     """
     now       = int(time.time())
     eth_iface = get_host_iface()
+
+    # Прогрев кэша combined awg dump в фоне, чтобы синхронные вызовы из
+    # async-хендлеров (main_menu, _srv_block_primary, status) всегда брали
+    # тёплый кэш и не блокировали event loop SSH-запросами к slave'ам.
+    if _PARAMIKO_AVAILABLE:
+        asyncio.get_event_loop().run_in_executor(None, refresh_combined_awg_dump)
 
     # Читаем оба интерфейса
     eth_r2, eth_t2 = read_iface_bytes(eth_iface)

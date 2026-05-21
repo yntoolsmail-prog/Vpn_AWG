@@ -244,16 +244,25 @@ def _dns_query(domain: str, ns: str, timeout: float = 4.0) -> list:
     return ips
 
 def _collect_ips(domain: str) -> list:
-    """3 раунда × 6 DNS-серверов → уникальные IPv4 для домена."""
+    """3 раунда × 6 DNS-серверов → уникальные IPv4 для домена.
+    Запросы выполняются параллельно: вместо ~72 с в худшем случае
+    весь сбор занимает ~таймаут одного запроса (4 с).
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     ips: set = set()
-    for _ in range(_DNS_ROUNDS):
-        for ns in _DNS_SERVERS:
-            for ip in _dns_query(domain, ns):
-                try:
-                    ipaddress.IPv4Address(ip)
-                    ips.add(ip)
-                except ValueError:
-                    pass
+    tasks = [(domain, ns) for _ in range(_DNS_ROUNDS) for ns in _DNS_SERVERS]
+    with ThreadPoolExecutor(max_workers=len(tasks)) as ex:
+        futs = [ex.submit(_dns_query, d, n) for d, n in tasks]
+        for fut in as_completed(futs):
+            try:
+                for ip in fut.result():
+                    try:
+                        ipaddress.IPv4Address(ip)
+                        ips.add(ip)
+                    except ValueError:
+                        pass
+            except Exception:
+                pass
     return list(ips)
 
 def _ips_to_result(all_ips: list) -> list:
