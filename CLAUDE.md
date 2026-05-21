@@ -318,8 +318,6 @@ Vpn_AWG/
   - `/send` принимает `srv_name` в теле запроса; `_make_conf_filename(name, srv_name)` формирует нейм `User.Server.Device.conf`
   - `/vpnlink` принимает `srv_id` в query; ищет сервер в `load_servers()`, берёт `awg_public_key`/`awg_port` — аналогично боту
   - `/api/servers` отдаёт поле `country` (русское название страны) — фронт показывает «🇳🇱 NLD Голландия»
-- `modules/tma/install.sh` — nginx-конфиг TMA:
-  - `location = /index.html` ставит `Cache-Control: no-cache`, чтобы после `setup.sh --update` Telegram WebView видел свежий HTML без чистки кэша. Не менять на `no-store` (полная загрузка вместо ETag-ревалидации) или убирать — иначе пользователи будут жаловаться, что «накатили обновление, а в TMA ничего не изменилось»
 - `tma/index.html` — фронтенд TMA:
   - `_selectedSrvRawName` хранит имя сервера без emoji для нейминга; передаётся в `srv_name` при отправке `.conf`
   - `_selectedSrvId` хранит id сервера; передаётся в `srv_id` при генерации vpnlink
