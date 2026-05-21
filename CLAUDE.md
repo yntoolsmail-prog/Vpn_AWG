@@ -170,14 +170,15 @@ Vpn_AWG/
 ### awg_stats.py
 | Функция | Назначение |
 |---------|-----------|
-| `get_system_stats()` | CPU/RAM/диск/uptime сервера |
+| `get_system_stats()` | CPU/RAM/диск/uptime сервера. CPU% — неблокирующая дельта против кэшированных `/proc/stat`, без `time.sleep` |
 | `collect_stats_full()` | Полная статистика (для ADMIN) |
 | `collect_stats_basic()` | Урезанная статистика (для юзеров) |
 | `fmt_bytes(n)` | Форматирование трафика (KB/MB/GB) |
 | `get_bw_histogram(days)` | Гистограмма нагрузки |
 | `get_vnstat_monthly()` | Помесячный трафик через vnstat |
 | `load_bw_peak()` / `save_bw_peak(data)` | Пики трафика (combined primary+slaves) |
-| `get_combined_awg_dump()` | AWG dump primary+slaves, кэш 30 с; поле `server` = метка сервера с макс. handshake |
+| `get_combined_awg_dump()` | AWG dump primary+slaves, кэш 30 с; поле `server` = метка сервера с макс. handshake. На холодном кэше делает синхронный SSH к slave'ам |
+| `refresh_combined_awg_dump()` | Принудительно пересобирает кэш (вызывается через executor из `bw_monitor_job`, чтобы async-хендлеры всегда получали тёплый кэш) |
 | `read_iface_bytes(iface)` | Счётчики rx/tx интерфейса из /sys |
 
 ### awg_ssh.py
@@ -197,7 +198,7 @@ Vpn_AWG/
 ### handlers/bandwidth.py
 | Символ | Назначение |
 |--------|-----------|
-| `bw_monitor_job` | Job каждые 5 с: измеряет primary AWG скорость, затем добавляет slaves, пишет в peak |
+| `bw_monitor_job` | Job каждые 5 с: измеряет primary AWG скорость, добавляет slaves, пишет в peak. Параллельно прогревает `_combined_dump_cache` через `run_in_executor(refresh_combined_awg_dump)`, чтобы async-меню не блокировались SSH к slave'ам |
 | `slave_bw_poll_job` | Job каждые 5 с: SSH на каждый slave, обновляет `_slave_bw_detail` и `context.bot_data["slave_bw"]` |
 | `_primary_bw` | Модульный кэш — primary-only Mbit/s (до прибавления slaves). Обновляется в `bw_monitor_job`. |
 | `get_primary_bw()` | Геттер `_primary_bw` — используется в `_srv_block_primary()` |
@@ -300,6 +301,9 @@ Vpn_AWG/
 - **Кнопки меню:** каждая кнопка на отдельной строке (`[btn]`), не группировать по две в строку
 - **Bandwidth кэши:** `_primary_bw` — только основной сервер (до сложения со slaves); `_slave_bw_detail` — per-server dict; `load_bw_peak()["last"]` — combined, для экрана Трафик/пики
 - **Статистика со slaves:** `get_combined_awg_dump()` агрегирует awg dump primary+slaves с кэшем 30 с; `slave_bw_poll_job` каждые 5 с опрашивает slave по SSH; `ssh_get_slave_sys_stats` получает RAM/диск/uptime/AWG-статус одним SSH-подключением
+- **Прогрев кэшей в async:** `bw_monitor_job` каждые 5 с зовёт `refresh_combined_awg_dump()` через `run_in_executor`; синхронные `get_combined_awg_dump()` в `main_menu`/`_srv_block_*`/`status` всегда читают тёплый кэш и не блокируют event loop SSH-запросами
+- **`do_refresh_subnets` (handlers/maintenance.py):** флаг `_SUBNET_REFRESH_RUNNING` живёт на уровне модуля maintenance (не bot.py), запускает `run_subnet_daemon()` в `threading.Thread`. Повторное нажатие во время работы показывает alert с прошедшим временем; если флаг висит >10 мин — авто-сброс. Завершение присылает новое сообщение, чтобы не затирать экран, на который ушёл пользователь
+- **DNS-сбор `_collect_ips` (awg_core.py):** 18 запросов (3 раунда × 6 серверов) идут параллельно через `ThreadPoolExecutor`; результат — тот же `set` уникальных IPv4; `_dns_query` потокобезопасен (свой сокет на вызов)
 - **TMA-кнопка:** `_tma_button()` в common.py → текст `"▶️ ОТКРЫТЬ VPN 🔑"` (пользовательское меню); в admin-меню создаётся отдельно с текстом `"▶️ Веб интерфейс 🔑"`
 
 ---
@@ -313,9 +317,12 @@ Vpn_AWG/
   - `/backups/<name>/restore` валидирует содержимое архива перед восстановлением (наличие `*.conf` + `server.env`)
   - `/send` принимает `srv_name` в теле запроса; `_make_conf_filename(name, srv_name)` формирует нейм `User.Server.Device.conf`
   - `/vpnlink` принимает `srv_id` в query; ищет сервер в `load_servers()`, берёт `awg_public_key`/`awg_port` — аналогично боту
+  - `/api/servers` отдаёт поле `country` (русское название страны) — фронт показывает «🇳🇱 NLD Голландия»
 - `tma/index.html` — фронтенд TMA:
   - `_selectedSrvRawName` хранит имя сервера без emoji для нейминга; передаётся в `srv_name` при отправке `.conf`
   - `_selectedSrvId` хранит id сервера; передаётся в `srv_id` при генерации vpnlink
   - `_getSelectedEndpoint()` возвращает пустую строку если сервер не выбран; `sendConf`/`showQR`/`showVpnLink` блокируют выполнение с алертом "Выберите сервер"
   - Twemoji (`twemoji.parse`) применяется для корректного рендера эмодзи (включая флаги); вызывать `_tw(el)` после вставки innerHTML содержащего эмодзи
+  - **Server picker — две стадии (как в боте):** `_showServerCountries()` рендерит кнопки «🇳🇱 NLD Голландия», `_pickServerAuto(srvId)` подбирает домен (или первый ep). «🔧 Расширенная настройка» → `_showServerEndpoints()` с плоским списком и пояснением 🌐 домен / 🔢 IP; кнопка «◀️ Назад» возвращает на 1-й экран
+  - **Возврат из экрана исключений:** `openSitesModal(name)` сохраняет устройство в `_sitesParentDevice`; Отмена / Сохранить / тап по фону вызывают `_backToDeviceFromSites()`, который заново открывает `openDeviceDetail(d)`. Без этого после закрытия sites-modal пользователь оказывался в общем списке устройств
 - `amnezia.gpg.asc` — GPG-ключ для верификации пакетов
