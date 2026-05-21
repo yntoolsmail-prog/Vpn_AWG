@@ -218,6 +218,14 @@ server {
     ssl_dhparam         /etc/letsencrypt/ssl-dhparams.pem;
     root ${TMA_DIR};
     index index.html;
+    # index.html — без кэша на стороне Telegram WebView, чтобы свежие
+    # деплои (--update) подхватывались сразу. Ревалидация дешёвая:
+    # 304 Not Modified, тело не качается, пока ETag/Last-Modified не меняется.
+    location = /index.html {
+        add_header Cache-Control "no-cache" always;
+        add_header X-Frame-Options        "SAMEORIGIN" always;
+        add_header X-Content-Type-Options "nosniff"    always;
+    }
     location / { try_files \$uri \$uri/ /index.html; }
     location /api/ {
         proxy_pass         http://127.0.0.1:${TMA_PORT};
@@ -244,6 +252,11 @@ server {
     server_name _;
     root ${TMA_DIR};
     index index.html;
+    # index.html — без кэша на стороне Telegram WebView, чтобы свежие
+    # деплои (--update) подхватывались сразу.
+    location = /index.html {
+        add_header Cache-Control "no-cache" always;
+    }
     location / { try_files \$uri \$uri/ /index.html; }
     location /api/ {
         proxy_pass         http://127.0.0.1:${TMA_PORT};
