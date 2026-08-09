@@ -149,8 +149,12 @@ Vpn_AWG/
 |---------|-----------|
 | `load_users()` / `save_users()` | Работа с users.json |
 | `is_approved(user_id)` | Проверка доступа пользователя |
+| `RESERVED_USER_NAMES` | `{"admin","user"}` — запрещены при регистрации: владелец устройства определяется по префиксу имени, заняв «Admin» юзер получил бы устройства админа |
+| `awg_file_lock()` | Межпроцессный `flock` на `.awg.lock` — бот и TMA разные процессы, `threading.Lock` их не разводит |
 | `load_servers()` / `save_servers()` | Список серверов (primary + slaves) |
 | `create_backup()` | Архив всех конфигов |
+| `post_restore_fixup()` | **После распаковки бэкапа**: раскладывает `ssh/awg_admin_key`→`/root/.ssh/`, `modules.conf`→`/root/`, `bot_persistence.pkl`→`/etc/awg-bot/`, `proxy_bot.env`→`/etc/proxy-bot/`; переписывает NAT-интерфейс в PostUp/PostDown под текущий хост, `SERVER_IP` и primary в servers.json под новый VPS, пересобирает `server_public/private.key` из конфига. Без неё переезд на другой ВПС даёт VPN без интернета |
+| `_harden_secret_perms()` | `0600` на конфиги клиентов, бэкапы, users.json, server.env |
 | `build_allowed_ips(keys, domains)` | Split tunneling: AllowedIPs строка |
 | `process_domain(domain)` | DNS-зондирование домена в подсети |
 | `get_allowed_ips_for_client(name)` | AllowedIPs с учётом исключений клиента |
@@ -159,8 +163,9 @@ Vpn_AWG/
 ### awg_clients.py
 | Функция | Назначение |
 |---------|-----------|
-| `create_client(name)` | Создать клиента (ключи + awg конфиг) |
-| `remove_client_from_awg(name)` | Удалить клиента из AWG |
+| `create_client(name)` | Создать клиента (ключи + awg конфиг), под `awg_file_lock()` |
+| `remove_client_from_awg(name)` | Удалить клиента из AWG **и со всех slave** (через `_remove_peer_from_all_slaves`) |
+| `_remove_peer_from_all_slaves(name, pub)` | Фоновые потоки: снимает peer с каждого slave. Вызывается изнутри `remove_client_from_awg`, поэтому покрывает все пути удаления — бот, TMA, kick пользователя |
 | `get_all_clients()` | Список всех клиентов |
 | `get_awg_dump()` | `awg show` dump — трафик и handshake |
 | `make_conf_for_client(name, endpoint)` | Генерация .conf файла для клиента |
@@ -186,6 +191,7 @@ Vpn_AWG/
 |---------|-----------|
 | `ssh_clone_awg_to_slave(server)` | Клонировать AWG-конфиг на slave |
 | `ssh_sync_peer_to_slave(server, ...)` | Добавить peer на slave |
+| `ssh_remove_peer_from_slave(server, name, pub)` | Снять peer со slave: `awg set … remove` + вырезание блока из `awg0.conf` через `sed '/^# Client: name$/,/^AllowedIPs/d'`; бросает исключение, если ключ остался |
 | `ssh_push_admin_key(server)` | Скопировать SSH-ключ на slave |
 | `ssh_sync_mtproxy_secret(server, ...)` | Синхронизировать MTProxy на slave |
 | `ssh_apply_socks5_on_slave(server, ...)` | Настроить SOCKS5 на slave |
@@ -295,7 +301,11 @@ Vpn_AWG/
 - **Комментарии и UI:** русский язык
 - **Форматирование Telegram:** `parse_mode="Markdown"` (не MarkdownV2)
 - **Права:** только `ADMIN_ID` имеет полный доступ; остальные через `is_approved()`
-- **Блокировки:** `_AWG_LOCK` в awg_clients.py защищает одновременное создание клиентов
+- **Паритет slave ↔ primary:** slave — полная копия primary, поэтому ЛЮБАЯ операция с устройством должна доезжать до всех slave. Добавление — `_sync_peer_to_all_slaves` (бот) / `_sync_new_peer_to_slaves` (TMA); удаление — внутри самого `remove_client_from_awg`, чтобы ни один путь удаления не мог его пропустить. Исключения сайтов серверного состояния не имеют (живут в `.conf` клиента) и синка не требуют
+- **Блокировки:** `awg_file_lock()` (flock на `/etc/amnezia/amneziawg/.awg.lock`) защищает `awg0.conf` при создании и удалении клиентов между процессами бота и TMA. `_AWG_LOCK` оставлен только для обратной совместимости
+- **Ответы на callback:** `button_handler` — тонкая обёртка, гасит «часики» ПОСЛЕ `_button_dispatch`. Ранний `query.answer()` съедал ответ, и алерты `show_alert=True` не показывались
+- **Исключения сайтов — только IPv4:** `build_allowed_ips` считает дополнение IPv4-пространства; IPv6-запись роняет `collapse_addresses` с `TypeError`. Валидация в `sites.py` и `tma_server.py` отклоняет IPv6 явно
+- **Никаких приватных ключей на диске вне `CLIENTS_DIR`:** `.conf`/QR отправляются из памяти, qrencode вызывается через stdin→stdout (`-t PNG -o -`)
 - **Shell-скрипты:** вспомогательные функции в `lib/*.sh`, подключаются через `source`
 - **Re-экспорт `awg_core`:** `from awg_core import *` не реэкспортирует функции с `_` префиксом — для них нужен явный импорт из оригинального модуля (`awg_stats`, `awg_clients`, `awg_ssh`)
 - **Кнопки меню:** каждая кнопка на отдельной строке (`[btn]`), не группировать по две в строку

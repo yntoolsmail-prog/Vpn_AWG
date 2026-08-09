@@ -36,7 +36,7 @@ from awg_core import (
     is_approved, load_client_excl, load_users, make_conf_for_client, make_conf_for_client_ep,
     make_vpn_link, make_wg_conf, process_domain,
     remove_client_from_awg, save_client_excl, save_users, set_maintenance,
-    load_servers,
+    load_servers, post_restore_fixup,
 )
 from awg_ssh import PARAMIKO_AVAILABLE, ssh_sync_peer_to_slave
 from awg_stats import _histogram_for_tma
@@ -575,8 +575,15 @@ def _validate_domain_entry(entry: str) -> tuple[bool, str]:
             entry = entry[len(prefix):]
     entry = entry.rstrip("/")
     try:
-        ipaddress.ip_network(entry, strict=False)
+        ipaddress.IPv4Network(entry, strict=False)
         return True, entry
+    except ValueError:
+        pass
+    # Валидный IP, но не IPv4 — отклоняем: build_allowed_ips считает дополнение
+    # IPv4-пространства и на IPv6-записи падает с TypeError
+    try:
+        ipaddress.ip_network(entry, strict=False)
+        return False, f"IPv6 не поддерживается в исключениях: «{entry}»."
     except ValueError:
         pass
     if "." in entry and len(entry) >= 4 and not entry.startswith("."):
@@ -865,6 +872,12 @@ def backup_restore(user_id, filename):
         return jsonify({"error": f"Ошибка при восстановлении: {e}",
                         "auto_backup": os.path.basename(auto_backup)}), 500
 
+    # Раскладываем файлы по местам и чиним привязку к железу старого VPS
+    try:
+        fixes = post_restore_fixup()
+    except Exception as e:
+        fixes = [f"⚠️ Пост-обработка не завершилась: {e}"]
+
     # Поднимаем AWG и перезапускаем бота (через 2 сек, не блокируем ответ)
     subprocess.Popen(
         ["bash", "-c",
@@ -874,6 +887,7 @@ def backup_restore(user_id, filename):
     return jsonify({
         "ok":          True,
         "auto_backup": os.path.basename(auto_backup),
+        "fixes":       fixes,
     })
 
 

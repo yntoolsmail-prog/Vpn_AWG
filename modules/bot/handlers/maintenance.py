@@ -13,7 +13,7 @@ from awg_core import (
     get_admin_pubkey, get_ssh_password_auth_local,
     ssh_toggle_password_auth_all, ssh_regen_admin_key,
     process_domain, run_subnet_daemon,
-    load_servers,
+    load_servers, post_restore_fixup,
 )
 from .common import back_kb, WAITING_RESTORE_FILE, BTN_BACK, BTN_BACK_MENU, BTN_BACK_MAINT, BTN_CANCEL
 
@@ -255,19 +255,20 @@ async def confirm_restore(update: Update, context: ContextTypes.DEFAULT_TYPE):
         os.remove(tmp_path)
         return ConversationHandler.END
 
-    # 3b. Если в бэкапе есть proxy_bot.env — переносим в /etc/proxy-bot/
-    _extracted_mtp = f"/etc/amnezia/amneziawg/proxy_bot.env"
-    if os.path.exists(_extracted_mtp):
-        import shutil as _sh
-        os.makedirs("/etc/proxy-bot", exist_ok=True)
-        _sh.move(_extracted_mtp, "/etc/proxy-bot/proxy_bot.env")
-        os.chmod("/etc/proxy-bot/proxy_bot.env", 0o600)
+    # 3b. Раскладываем файлы по местам и чиним привязку к железу старого VPS
+    #     (SSH-ключ, modules.conf, NAT-интерфейс, SERVER_IP). Без этого переезд
+    #     на другой ВПС даёт VPN без интернета и потерю доступа к slave.
+    try:
+        fixes = post_restore_fixup()
+    except Exception as e:
+        fixes = [f"⚠️ Пост-обработка не завершилась: {e}"]
 
     os.remove(tmp_path)
     context.user_data.pop("restore_path", None)
 
+    fixes_note = ("\n\n" + "\n".join(fixes)) if fixes else ""
     await query.message.reply_text(
-        f"✅ Конфиги восстановлены!\n\n"
+        f"✅ Конфиги восстановлены!{fixes_note}\n\n"
         f"Автобэкап сохранён: `{auto_backup}`\n\n"
         f"⏳ Перезапускаю AWG и бота...",
         parse_mode="Markdown"

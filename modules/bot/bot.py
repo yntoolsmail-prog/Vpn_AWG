@@ -27,7 +27,7 @@ from awg_core import (
     make_vpn_link, read_iface_bytes, remove_client_from_awg, resolve_endpoint,
     save_bw_peak, save_client_excl, save_users,
     load_servers, save_servers, invalidate_servers_cache,
-    process_domain, run_subnet_daemon,
+    process_domain, run_subnet_daemon, RESERVED_USER_NAMES,
     PARAMIKO_AVAILABLE as _PARAMIKO_AVAILABLE,
     ssh_read_slave_env      as _ssh_read_slave_env,
     ssh_clone_awg_to_slave  as _ssh_clone_awg_to_slave,
@@ -165,7 +165,10 @@ async def receive_register_name(update: Update, context: ContextTypes.DEFAULT_TY
     users = load_users()
     taken = [u["name"].lower() for u in users["approved"].values()] + \
             [u["name"].lower() for u in users["pending"].values()]
-    if latin_name.lower() in taken:
+    # Доступ к устройству проверяется по префиксу имени файла (can_access_device),
+    # а имя админа — константа "Admin". Заняв её, пользователь получил бы все
+    # устройства администратора. "User" — фолбэк get_user_name, та же история.
+    if latin_name.lower() in RESERVED_USER_NAMES or latin_name.lower() in taken:
         await update.message.reply_text(
             f"❌ Имя *{latin_name}* уже занято. Попробуйте другое.",
             parse_mode="Markdown"
@@ -196,7 +199,7 @@ async def receive_register_name(update: Update, context: ContextTypes.DEFAULT_TY
         chat_id=ADMIN_ID,
         text=(
             f"🔔 Новый запрос на доступ к VPN\n\n"
-            f"👤 Telegram: {tg_name} (@{update.effective_user.username or '—'})\n"
+            f"👤 Telegram: {_md(tg_name)} (@{_md(update.effective_user.username or '—')})\n"
             f"🆔 ID: `{user_id}`\n"
             f"📝 Имя в системе: *{latin_name}*"
         ),
@@ -322,10 +325,28 @@ async def show_settings_menu(query):
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обёртка над роутером кнопок.
+
+    Раньше здесь стоял безусловный query.answer() ДО обработки. Telegram принимает
+    только один ответ на callback, поэтому все последующие
+    query.answer("⛔ …", show_alert=True) молча терялись — пользователь видел,
+    что «ничего не произошло». Теперь «часики» гасятся после обработки, и если
+    ветка уже показала свой алерт, этот вызов просто ничего не делает.
+    """
+    query = update.callback_query
+    try:
+        await _button_dispatch(update, context)
+    finally:
+        try:
+            await query.answer()
+        except Exception:
+            pass
+
+
+async def _button_dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query   = update.callback_query
     user_id = query.from_user.id
-    await query.answer()
-    data = query.data
+    data    = query.data
 
     # Одобрение/отклонение — только для админа
     if data.startswith("approve_") or data.startswith("reject_"):
@@ -343,7 +364,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             del users["pending"][str(target_id)]
             save_users(users)
             await query.edit_message_text(
-                f"✅ Пользователь *{info['name']}* ({info['display']}) одобрен.",
+                f"✅ Пользователь *{info['name']}* ({_md(info['display'])}) одобрен.",
                 parse_mode="Markdown"
             )
             await context.bot.send_message(
@@ -359,7 +380,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             del users["pending"][str(target_id)]
             save_users(users)
             await query.edit_message_text(
-                f"❌ Пользователь *{info['name']}* ({info['display']}) отклонён.",
+                f"❌ Пользователь *{info['name']}* ({_md(info['display'])}) отклонён.",
                 parse_mode="Markdown"
             )
             await context.bot.send_message(

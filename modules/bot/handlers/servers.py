@@ -688,7 +688,9 @@ async def srv_adddomain_pick(update, context: ContextTypes.DEFAULT_TYPE):
 async def srv_adddomain_receive(update, context: ContextTypes.DEFAULT_TYPE):
     """Получает домен, проверяет DNS, добавляет к серверу."""
     import socket as _sock
-    domain = update.message.text.strip().lower().lstrip("https://").lstrip("http://").split("/")[0]
+    # ВАЖНО: не .lstrip("https://") — lstrip срезает НАБОР символов, а не префикс,
+    # и съедал первые буквы домена: test.ru → est.ru, shop.example.com → op.example.com
+    domain = re.sub(r"^https?://", "", update.message.text.strip().lower()).split("/")[0]
     d = context.user_data.pop("srv_domain", {})
     srv_idx = d.get("srv_idx", 0)
 

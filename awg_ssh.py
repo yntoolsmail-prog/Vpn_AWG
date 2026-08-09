@@ -471,6 +471,48 @@ def ssh_sync_peer_to_slave(server: dict, name: str, pub: str, psk: str, ip: str)
         client.close()
 
 
+def ssh_remove_peer_from_slave(server: dict, name: str, pub: str) -> None:
+    """Удаляет peer клиента со slave-сервера: с живого интерфейса и из awg0.conf.
+
+    Зеркало ssh_sync_peer_to_slave. Без неё удаление устройства не отзывает доступ:
+    slave — полная копия primary, и старый конфиг продолжает на нём работать.
+    Бросает исключение, если после чистки ключ всё ещё остался в конфиге."""
+    if not PARAMIKO_AVAILABLE:
+        raise RuntimeError("paramiko не установлен: pip3 install paramiko")
+    # Блок клиента всегда пишется этим же проектом в фиксированном виде:
+    #   # Client: <name>  /  [Peer]  /  PublicKey  /  PresharedKey  /  AllowedIPs
+    # поэтому диапазон «от комментария до AllowedIPs» вырезает ровно его.
+    name_re = name.replace("\\", "\\\\").replace(".", "\\.").replace("/", "\\/")
+    ssh = server.get("ssh", {})
+    client = _ssh_connect(ssh, timeout=8)
+    try:
+        if pub:
+            _, stdout, stderr = client.exec_command(
+                f"awg set awg0 peer '{pub}' remove", timeout=10
+            )
+            stdout.read(); stderr.read()
+
+        _, stdout, stderr = client.exec_command(
+            f"sed -i '/^# Client: {name_re}$/,/^AllowedIPs/d' "
+            f"/etc/amnezia/amneziawg/awg0.conf",
+            timeout=10
+        )
+        stdout.read(); stderr.read()
+
+        if pub:
+            _, stdout, _ = client.exec_command(
+                f"grep -cF '{pub}' /etc/amnezia/amneziawg/awg0.conf || true",
+                timeout=10
+            )
+            left = stdout.read().decode().strip()
+            if left and left != "0":
+                raise RuntimeError(
+                    "ключ остался в awg0.conf — нужна кнопка «Синхронизировать»"
+                )
+    finally:
+        client.close()
+
+
 def ssh_sync_all_clients_to_slave(server: dict) -> None:
     """Синхронизирует всех существующих клиентов primary → slave через SSH."""
     import re as _re
@@ -518,6 +560,7 @@ def ssh_sync_mtproxy_secret(server: dict, secret: str, port: str) -> tuple[bool,
     if not PARAMIKO_AVAILABLE:
         return False, "paramiko не установлен"
     ssh = server.get("ssh", {})
+    client = None   # иначе finally уронит NameError и затрёт настоящую ошибку
     try:
         client = _ssh_connect(ssh)
         _, stdout, _ = client.exec_command(
@@ -594,7 +637,8 @@ def ssh_sync_mtproxy_secret(server: dict, secret: str, port: str) -> tuple[bool,
     except Exception as e:
         return False, f"❌ {e}"
     finally:
-        client.close()
+        if client:
+            client.close()
 
 
 def ssh_check_mtproxy_installed(server: dict) -> bool:
@@ -701,6 +745,7 @@ def ssh_apply_socks5_on_slave(
     if not PARAMIKO_AVAILABLE:
         return False, "paramiko не установлен"
     ssh = server.get("ssh", {})
+    client = None   # иначе finally уронит NameError и затрёт настоящую ошибку
     try:
         client = _ssh_connect(ssh)
         _, stdout, _ = client.exec_command(
@@ -811,7 +856,8 @@ def ssh_apply_socks5_on_slave(
     except Exception as e:
         return False, f"❌ {e}"
     finally:
-        client.close()
+        if client:
+            client.close()
 
 
 def ssh_remove_socks5_from_slave(server: dict, client_ip: str) -> tuple[bool, str]:
@@ -819,6 +865,7 @@ def ssh_remove_socks5_from_slave(server: dict, client_ip: str) -> tuple[bool, st
     if not PARAMIKO_AVAILABLE:
         return False, "paramiko не установлен"
     ssh = server.get("ssh", {})
+    client = None   # иначе finally уронит NameError и затрёт настоящую ошибку
     try:
         client = _ssh_connect(ssh)
         chain = f"SOCKS5_{client_ip.replace('.', '_')}"
@@ -850,4 +897,5 @@ def ssh_remove_socks5_from_slave(server: dict, client_ip: str) -> tuple[bool, st
     except Exception as e:
         return False, f"❌ {e}"
     finally:
-        client.close()
+        if client:
+            client.close()

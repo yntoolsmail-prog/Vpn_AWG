@@ -246,9 +246,11 @@ EOF2
         (crontab -l 2>/dev/null; echo "0 3 * * * certbot renew --quiet --nginx && systemctl reload nginx") | crontab -
     TMA_URL="https://${TMA_DOMAIN}"
 else
+    # ВАЖНО: nginx НЕ может слушать тот же порт, что Flask (${TMA_PORT}) —
+    # порт занят, а proxy_pass указывал бы сам в себя. Отдаём панель на 80.
     cat > "$NGINX_CONF" << EOF2
 server {
-    listen ${TMA_PORT} default_server;
+    listen 80 default_server;
     server_name _;
     root ${TMA_DIR};
     index index.html;
@@ -266,8 +268,8 @@ server {
 }
 EOF2
     ln -sf "$NGINX_CONF" "$NGINX_ENABLED" 2>/dev/null || true
-    nginx -t -q && systemctl reload nginx
-    TMA_URL="http://${SERVER_IP}:${TMA_PORT}"
+    nginx -t -q && systemctl reload nginx || warn "nginx не принял конфиг — панель может не открыться"
+    TMA_URL="http://${SERVER_IP}"
 fi
 
 # ── Сохраняем TMA_URL в server.env ───────────────────────────────────────────

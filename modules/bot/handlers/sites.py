@@ -185,14 +185,24 @@ async def sites_add_custom_receive(update: Update, context: ContextTypes.DEFAULT
     entry = raw.replace("https://", "").replace("http://", "")
     entry = entry.replace("www.", "").split("/")[0].strip().lower()
 
-    # Проверяем: CIDR или домен
+    # Проверяем: CIDR или домен. Только IPv4 — AllowedIPs строится как дополнение
+    # IPv4-пространства, и IPv6-запись ломает генерацию конфига (см. build_allowed_ips).
     valid = False
     try:
-        _ip.ip_network(entry, strict=False)
+        _ip.IPv4Network(entry, strict=False)
         valid = True
     except ValueError:
-        if "." in entry and len(entry) >= 4 and not entry.startswith("."):
-            valid = True
+        try:
+            _ip.ip_network(entry, strict=False)   # это IP, но не IPv4
+            await update.message.reply_text(
+                "❌ IPv6 не поддерживается в исключениях. "
+                "Укажите домен (`site.ru`) или IPv4/CIDR (`1.2.3.0/24`).",
+                parse_mode="Markdown",
+            )
+            return WAITING_SITES_DOMAIN
+        except ValueError:
+            if "." in entry and len(entry) >= 4 and not entry.startswith("."):
+                valid = True
 
     if not valid:
         await update.message.reply_text(

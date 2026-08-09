@@ -1768,7 +1768,9 @@ async function deleteUser(uid, display) {
 }
 
 // ── Утилиты ──
-function _esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+// Апостроф обязателен: значения подставляются в onclick="fn('...')" —
+// без него имя сервера с ' ломает обработчик кнопки.
+function _esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 function _timeAgo(ts) {
   if (!ts) return '—';
   const d = Math.floor((Date.now()/1000 - ts));

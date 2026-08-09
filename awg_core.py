@@ -5,7 +5,8 @@
 # Version: 1.2
 
 import os, subprocess, logging, json, socket, ipaddress, threading, time
-import tarfile
+import tarfile, fcntl, shutil
+from contextlib import contextmanager
 
 from sites_data import SITES, CATEGORIES, DEFAULT_SELECTED, ALL_SELECTABLE
 
@@ -22,11 +23,34 @@ EXCL_EXT         = ".excl.json"
 SERVERS_FILE     = "/etc/amnezia/amneziawg/servers.json"
 SUBNET_CACHE_FILE = "/etc/amnezia/amneziawg/subnet_cache.json"
 ADMIN_KEY_PATH   = "/root/.ssh/awg_admin_key"
+AWG_LOCK_FILE    = "/etc/amnezia/amneziawg/.awg.lock"
+
+# Имена, которые нельзя занять при регистрации: совпадение с ними даёт доступ
+# к чужим устройствам, т.к. владелец определяется по префиксу имени файла.
+# "Admin" — имя администратора (get_user_name), "User" — фолбэк той же функции.
+RESERVED_USER_NAMES = {"admin", "user"}
 
 logger = logging.getLogger(__name__)
 
 # Lock для атомарного чтения/записи subnet_cache.json
 _CACHE_LOCK = threading.Lock()
+
+
+@contextmanager
+def awg_file_lock():
+    """Межпроцессная блокировка операций с awg0.conf.
+    Бот и TMA — разные процессы, поэтому threading.Lock их не разводит."""
+    os.makedirs(os.path.dirname(AWG_LOCK_FILE), exist_ok=True)
+    f = open(AWG_LOCK_FILE, "w")
+    try:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            pass
+        f.close()
 
 # ── Загрузка конфигов ──────────────────────────────────────────────────────────
 def load_env(path: str) -> dict:
@@ -404,7 +428,9 @@ def build_allowed_ips(selected_keys, extra_domains=None) -> str:
     excl_nets = []
     for s in excluded:
         try:
-            excl_nets.append(ipaddress.ip_network(s, strict=False))
+            # Только IPv4: дополнение считается для 0.0.0.0–255.255.255.255,
+            # а смесь версий роняет collapse_addresses с TypeError
+            excl_nets.append(ipaddress.IPv4Network(s, strict=False))
         except ValueError:
             pass
     if not excl_nets:
@@ -456,6 +482,185 @@ def create_backup(prefix: str = "awg_backup") -> str:
         if os.path.exists(_mtp_conf):
             tar.add(_mtp_conf, arcname="proxy_bot.env")
     return backup_path
+
+# ── Пост-обработка восстановления из бэкапа ────────────────────────────────────
+def post_restore_fixup() -> list:
+    """Доводит распакованный бэкап до рабочего состояния на НОВОМ сервере.
+
+    tar.extractall() кладёт весь архив в /etc/amnezia/amneziawg/, но часть файлов
+    живёт в других местах, а часть настроек привязана к железу старого VPS.
+    Без этой функции переезд «бэкап → другой ВПС» ломается тихо:
+    клиенты подключаются, но интернета нет (MASQUERADE на чужой интерфейс).
+
+    Вызывается ПОСЛЕ распаковки и ДО запуска awg. Возвращает список строк-отчёт.
+    """
+    from awg_stats import get_host_iface, get_real_server_ip
+    base   = "/etc/amnezia/amneziawg"
+    report = []
+
+    # 1. Файлы, которые лежат вне /etc/amnezia/amneziawg — раскладываем по местам
+    def _move(src, dst, mode=None):
+        if not os.path.exists(src):
+            return False
+        try:
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.move(src, dst)
+            if mode is not None:
+                os.chmod(dst, mode)
+            return True
+        except Exception as e:
+            report.append(f"⚠️ {os.path.basename(dst)}: {e}")
+            return False
+
+    if _move(f"{base}/ssh/awg_admin_key", ADMIN_KEY_PATH, 0o600):
+        report.append("🔑 SSH-ключ администратора восстановлен")
+    _move(f"{base}/ssh/awg_admin_key.pub", ADMIN_KEY_PATH + ".pub", 0o644)
+    try:
+        os.rmdir(f"{base}/ssh")
+    except Exception:
+        pass
+
+    # Публичный ключ — в authorized_keys, иначе по нему не зайти на новый сервер
+    try:
+        if os.path.exists(ADMIN_KEY_PATH + ".pub"):
+            with open(ADMIN_KEY_PATH + ".pub") as f:
+                pub = f.read().strip()
+            auth = "/root/.ssh/authorized_keys"
+            existing = ""
+            if os.path.exists(auth):
+                with open(auth) as f:
+                    existing = f.read()
+            if pub and pub not in existing:
+                os.makedirs("/root/.ssh", exist_ok=True)
+                os.chmod("/root/.ssh", 0o700)
+                with open(auth, "a") as f:
+                    f.write(pub + "\n")
+                os.chmod(auth, 0o600)
+    except Exception as e:
+        report.append(f"⚠️ authorized_keys: {e}")
+
+    if _move(f"{base}/modules.conf", "/root/modules.conf"):
+        report.append("🧩 modules.conf восстановлен")
+    _move(f"{base}/bot_persistence.pkl", "/etc/awg-bot/bot_persistence.pkl")
+    if _move(f"{base}/proxy_bot.env", "/etc/proxy-bot/proxy_bot.env", 0o600):
+        report.append("📡 proxy_bot.env восстановлен")
+
+    # 2. PostUp/PostDown в awg-конфиге ссылаются на внешний интерфейс СТАРОГО VPS.
+    #    iptables молча примет правило с несуществующим интерфейсом — NAT просто
+    #    не сработает, и у клиентов будет VPN без интернета.
+    # Имя интерфейса берём из ВОССТАНОВЛЕННОГО server.env: в памяти процесса
+    # лежит значение нового сервера, а конфиг в архиве назван по-старому.
+    iface   = load_env(ENV_FILE).get("VPN_IFACE") or srv.get("VPN_IFACE", "awg0")
+    conf    = f"{base}/{iface}.conf"
+    host_if = get_host_iface()
+    try:
+        with open(conf) as f:
+            text = f.read()
+        import re as _re
+        # Меняем имя интерфейса только в строках PostUp/PostDown и только там,
+        # где оно НЕ равно имени awg-интерфейса (-i awg0 трогать нельзя).
+        out_lines, changed = [], 0
+        for line in text.split("\n"):
+            if line.strip().startswith(("PostUp", "PostDown")):
+                fixed, k = _re.subn(r"(-[oi]\s+)(?!%s\b)[A-Za-z0-9_.@-]+" % _re.escape(iface),
+                                    r"\g<1>" + host_if, line)
+                changed += k
+                out_lines.append(fixed)
+            else:
+                out_lines.append(line)
+        if changed:
+            with open(conf, "w") as f:
+                f.write("\n".join(out_lines))
+            os.chmod(conf, 0o600)
+            report.append(f"🔀 NAT переключён на интерфейс {host_if}")
+    except Exception as e:
+        report.append(f"⚠️ PostUp/PostDown: {e}")
+
+    # 3. SERVER_IP в server.env — от старого сервера. Обновляем на реальный.
+    new_ip = get_real_server_ip()
+    old_ip = ""
+    if new_ip:
+        try:
+            with open(ENV_FILE) as f:
+                lines = f.read().split("\n")
+            out = []
+            for line in lines:
+                if line.startswith("SERVER_IP="):
+                    old_ip = line.split("=", 1)[1].strip()
+                    out.append(f"SERVER_IP={new_ip}")
+                else:
+                    out.append(line)
+            with open(ENV_FILE, "w") as f:
+                f.write("\n".join(out))
+            if old_ip and old_ip != new_ip:
+                report.append(f"🖥 IP сервера обновлён: {old_ip} → {new_ip}")
+        except Exception as e:
+            report.append(f"⚠️ server.env: {e}")
+
+    # 4. servers.json: у primary остаются IP и ip-эндпоинт старого сервера
+    if new_ip and old_ip and old_ip != new_ip:
+        try:
+            invalidate_servers_cache()
+            servers = load_servers()
+            for s in servers:
+                if not s.get("is_primary"):
+                    continue
+                s.setdefault("ssh", {})["ip"] = new_ip
+                for ep in s.get("endpoints", []):
+                    if ep.get("value") == old_ip:
+                        ep["value"] = new_ip
+            save_servers(servers)
+        except Exception as e:
+            report.append(f"⚠️ servers.json: {e}")
+
+    # 5. server_public/private.key — на новом VPS они от свежей установки и больше
+    #    не совпадают с восстановленным конфигом. Пересобираем из конфига.
+    try:
+        priv = ""
+        with open(conf) as f:
+            for line in f:
+                if line.strip().startswith("PrivateKey"):
+                    priv = line.split("=", 1)[1].strip()
+                    break
+        if priv:
+            pub = subprocess.check_output(["awg", "pubkey"], input=priv, text=True).strip()
+            with open(f"{base}/server_private.key", "w") as f:
+                f.write(priv + "\n")
+            os.chmod(f"{base}/server_private.key", 0o600)
+            with open(f"{base}/server_public.key", "w") as f:
+                f.write(pub + "\n")
+    except Exception as e:
+        report.append(f"⚠️ ключи сервера: {e}")
+
+    # 6. Права на восстановленные файлы с секретами
+    _harden_secret_perms()
+
+    return report
+
+
+def _harden_secret_perms():
+    """Закрывает от чтения конфиги клиентов и бэкапы (в них приватные ключи)."""
+    try:
+        if os.path.isdir(CLIENTS_DIR):
+            os.chmod(CLIENTS_DIR, 0o700)
+            for fn in os.listdir(CLIENTS_DIR):
+                try:
+                    os.chmod(os.path.join(CLIENTS_DIR, fn), 0o600)
+                except Exception:
+                    pass
+        if os.path.isdir(BACKUP_DIR):
+            os.chmod(BACKUP_DIR, 0o700)
+            for fn in os.listdir(BACKUP_DIR):
+                try:
+                    os.chmod(os.path.join(BACKUP_DIR, fn), 0o600)
+                except Exception:
+                    pass
+        for p in (USERS_FILE, ENV_FILE):
+            if os.path.exists(p):
+                os.chmod(p, 0o600)
+    except Exception:
+        pass
+
 
 # ── Техобслуживание ─────────────────────────────────────────────────────────────
 def get_maintenance() -> dict:

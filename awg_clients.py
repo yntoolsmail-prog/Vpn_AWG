@@ -7,8 +7,11 @@ logger = logging.getLogger(__name__)
 from awg_core import (
     AWG_CONF, AWG_IFACE, CLIENTS_DIR, EXCL_EXT, VPN_SUBNET,
     SERVER_ENDPOINT, SERVER_PUBLIC, SERVER_PORT, PRIMARY_DNS, SECONDARY_DNS, srv,
+    awg_file_lock,
 )
 
+# Оставлен для обратной совместимости; реальная защита — awg_file_lock(),
+# т.к. бот и TMA работают в разных процессах и threading.Lock их не разводит.
 _AWG_LOCK = threading.Lock()
 
 
@@ -225,24 +228,48 @@ def _remove_peer_from_conf(name: str):
         f.write("\n".join(new_lines))
 
 
+def _remove_peer_from_all_slaves(name: str, pub: str):
+    """Снимает peer со всех slave-серверов в фоне.
+    Slave — полная копия primary, поэтому без этого удалённый конфиг
+    продолжает работать через slave-эндпоинт."""
+    from awg_core import load_servers
+    from awg_ssh import PARAMIKO_AVAILABLE, ssh_remove_peer_from_slave
+    if not PARAMIKO_AVAILABLE:
+        return
+    for srv_item in [s for s in load_servers() if not s.get("is_primary")]:
+        label = f"{srv_item.get('emoji', '')} {srv_item.get('name', 'slave')}".strip()
+
+        def _run(server=srv_item, lbl=label):
+            try:
+                ssh_remove_peer_from_slave(server, name, pub)
+                logger.info(f"remove_client({name}): снят со slave {lbl}")
+            except Exception as e:
+                logger.error(f"remove_client({name}): slave {lbl} — НЕ снят: {e}")
+
+        threading.Thread(target=_run, daemon=True).start()
+
+
 def remove_client_from_awg(name: str):
     conf_path = f"{CLIENTS_DIR}/{name}.conf"
     if not os.path.exists(conf_path):
         return
     pub = get_client_pub(name)
-    if pub:
-        subprocess.run(["awg", "set", AWG_IFACE, "peer", pub, "remove"])
-    _remove_peer_from_conf(name)
-    for ext in [".conf", ".pub", ".vpn", ".vpnlink", EXCL_EXT]:
-        p = f"{CLIENTS_DIR}/{name}{ext}"
-        if os.path.exists(p):
-            os.remove(p)
+    with awg_file_lock():
+        if pub:
+            subprocess.run(["awg", "set", AWG_IFACE, "peer", pub, "remove"])
+        _remove_peer_from_conf(name)
+        for ext in [".conf", ".pub", ".vpn", ".vpnlink", EXCL_EXT]:
+            p = f"{CLIENTS_DIR}/{name}{ext}"
+            if os.path.exists(p):
+                os.remove(p)
+    # Slave'ы — после освобождения лока: SSH долгий, держать блокировку незачем
+    _remove_peer_from_all_slaves(name, pub or "")
 
 
 async def create_client(name: str) -> dict:
     """Создаёт клиента AWG с верификацией и откатом.
-    Использует глобальный _AWG_LOCK для защиты от гонки."""
-    with _AWG_LOCK:
+    awg_file_lock() защищает от гонки между процессами бота и TMA."""
+    with awg_file_lock():
         priv = subprocess.check_output(["awg", "genkey"], text=True).strip()
         pub  = subprocess.check_output(["awg", "pubkey"], input=priv, text=True).strip()
         psk  = subprocess.check_output(["awg", "genpsk"], text=True).strip()
@@ -265,6 +292,12 @@ async def create_client(name: str) -> dict:
             f.write(make_wg_conf(priv, ip, psk, obfs))
         with open(pub_path, "w") as f:
             f.write(pub)
+        # В .conf лежит приватный ключ — закрываем от чтения кем угодно
+        try:
+            os.chmod(CLIENTS_DIR, 0o700)
+            os.chmod(conf_path, 0o600)
+        except Exception:
+            pass
 
         dump    = get_awg_dump()
         peer_ok = pub in dump and dump[pub].get("allowed", "").startswith(ip)

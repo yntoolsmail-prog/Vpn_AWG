@@ -324,17 +324,13 @@ async def do_send_qr(query, name: str, ep_key: str):
     content = (make_conf_for_client(name, ep, allowed_ips) or "").encode()
     ep_label = {"main": "Основной", "backup": "Резервный", "ip": "По IP"}.get(ep_key, ep_key)
 
-    # Пишем во временный файл только для qrencode — сразу удаляем
-    tmp_conf = f"/tmp/qr_{name}_{ep_key}.conf"
-    qr_path  = f"/tmp/qr_{name}_{ep_key}.png"
     excl_note = "" if allowed_ips == "0.0.0.0/0" else "\n🌐 С исключениями сайтов"
     try:
-        with open(tmp_conf, "wb") as f:
-            f.write(content)
-        # Сначала .conf файл, затем QR
+        # Ни конфиг, ни QR на диск не пишем: в конфиге приватный ключ, а /tmp
+        # читается любым процессом. qrencode умеет stdin → stdout.
         safe_name = name.replace(".", "_")
         await query.message.reply_document(
-            document=open(tmp_conf, "rb"),
+            document=content,
             filename=f"{safe_name}_{ep_key}.conf",
             caption=f"📄 .conf для AmneziaWG — *{short}* ({ep_label}){excl_note}",
             parse_mode="Markdown"
@@ -346,9 +342,11 @@ async def do_send_qr(query, name: str, ep_key: str):
                 parse_mode="Markdown"
             )
         else:
-            subprocess.run([QRENCODE_BIN, "-o", qr_path, "-r", tmp_conf], check=True)
+            png = subprocess.check_output(
+                [QRENCODE_BIN, "-t", "PNG", "-s", "6", "-o", "-"], input=content
+            )
             await query.message.reply_photo(
-                photo=open(qr_path, "rb"),
+                photo=png,
                 caption=(
                     f"📱 QR для AmneziaWG — *{short}* ({ep_label})\n"
                     f"🌐 Endpoint: `{ep}:{SERVER_PORT}`{excl_note}"
@@ -357,10 +355,6 @@ async def do_send_qr(query, name: str, ep_key: str):
             )
     except Exception as e:
         await query.message.reply_text(f"❌ Ошибка QR: {e}")
-    finally:
-        for p in [tmp_conf, qr_path]:
-            if os.path.exists(p):
-                os.remove(p)
     await show_device(query, name, query.from_user.id)
 
 # ── Финальная отправка vpn:// (AmneziaVPN) ───────────────────────────────────
@@ -428,14 +422,11 @@ async def do_send_qr_direct(query, name: str, ep: str,
     short   = device_short_name(name)
     prt     = sprt or SERVER_PORT
     content = (make_conf_for_client_ep(name, ep, spub, sprt, allowed_ips) or "").encode()
-    tmp_conf = f"/tmp/qr_{name}_direct.conf"
-    qr_path  = f"/tmp/qr_{name}_direct.png"
     excl_note = "" if allowed_ips == "0.0.0.0/0" else "\n🌐 С исключениями сайтов"
     try:
-        with open(tmp_conf, "wb") as f:
-            f.write(content)
+        # Без временных файлов — в конфиге приватный ключ, а /tmp читаем всеми
         await query.message.reply_document(
-            document=open(tmp_conf, "rb"),
+            document=content,
             filename=_make_conf_filename(name, srv_name),
             caption=f"📄 .conf для AmneziaWG — *{short}*{excl_note}",
             parse_mode="Markdown"
@@ -447,9 +438,11 @@ async def do_send_qr_direct(query, name: str, ep: str,
                 parse_mode="Markdown"
             )
         else:
-            subprocess.run([QRENCODE_BIN, "-o", qr_path, "-r", tmp_conf], check=True)
+            png = subprocess.check_output(
+                [QRENCODE_BIN, "-t", "PNG", "-s", "6", "-o", "-"], input=content
+            )
             await query.message.reply_photo(
-                photo=open(qr_path, "rb"),
+                photo=png,
                 caption=(
                     f"📱 QR для AmneziaWG — *{short}*\n"
                     f"🌐 Endpoint: `{ep}:{prt}`{excl_note}"
@@ -458,10 +451,6 @@ async def do_send_qr_direct(query, name: str, ep: str,
             )
     except Exception as e:
         await query.message.reply_text(f"❌ Ошибка QR: {e}")
-    finally:
-        for p in [tmp_conf, qr_path]:
-            if os.path.exists(p):
-                os.remove(p)
     await show_device(query, name, query.from_user.id)
 
 async def do_send_share_direct(query, name: str, ep: str,

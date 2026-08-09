@@ -15,6 +15,7 @@ from .common import back_kb, BTN_BACK, BTN_BACK_MENU, BTN_CANCEL
 # per-server bandwidth cache для show_servers_list
 _slave_bw_detail: dict = {}   # {server_id: {"awg_down": float, "awg_up": float}}
 _primary_bw: dict      = {}   # {"awg_down": float, "awg_up": float}
+_warm_future           = None # текущая фоновая задача прогрева combined-дампа
 
 
 def get_slave_bw_detail() -> dict:
@@ -40,8 +41,16 @@ async def bw_monitor_job(context: ContextTypes.DEFAULT_TYPE):
     # Прогрев кэша combined awg dump в фоне, чтобы синхронные вызовы из
     # async-хендлеров (main_menu, _srv_block_primary, status) всегда брали
     # тёплый кэш и не блокировали event loop SSH-запросами к slave'ам.
-    if _PARAMIKO_AVAILABLE:
-        asyncio.get_event_loop().run_in_executor(None, refresh_combined_awg_dump)
+    # Не ставим новую задачу, пока не отработала предыдущая: job идёт каждые 5 с,
+    # а сбор дампа ходит по SSH на все slave и может занять дольше — иначе
+    # задачи копятся в пуле потоков.
+    global _warm_future
+    if _PARAMIKO_AVAILABLE and (_warm_future is None or _warm_future.done()):
+        if _warm_future is not None and _warm_future.exception() is not None:
+            pass  # забираем исключение, чтобы не было "never retrieved"
+        _warm_future = asyncio.get_event_loop().run_in_executor(
+            None, refresh_combined_awg_dump
+        )
 
     # Читаем оба интерфейса
     eth_r2, eth_t2 = read_iface_bytes(eth_iface)
@@ -298,18 +307,21 @@ async def show_bw_reset_ask(query):
         parse_mode="Markdown"
     )
 
+_EMPTY_PEAK = {"awg_down": 0, "awg_up": 0, "eth_down": 0, "eth_up": 0}
+
+
 async def do_bw_reset(query):
     """Сброс только пиков"""
     peak = load_bw_peak()
-    peak["all"] = {"total": 0, "rx": 0, "tx": 0}
-    peak["day"]  = {}
+    peak["all"] = dict(_EMPTY_PEAK)
+    peak["day"] = {}
     save_bw_peak(peak)
     await query.answer("✅ Пики сброшены", show_alert=False)
     await show_bandwidth(query)
 
 async def do_bw_reset_all(query):
     """Полный сброс — пики + лог"""
-    peak = {"all": {"total": 0, "rx": 0, "tx": 0}, "day": {}, "last": {}}
+    peak = {"all": dict(_EMPTY_PEAK), "day": {}, "last": {}}
     save_bw_peak(peak)
     try:
         open(BW_LOG_FILE, "w").close()
