@@ -155,6 +155,8 @@ Vpn_AWG/
 | `create_backup()` | Архив всех конфигов |
 | `post_restore_fixup()` | **После распаковки бэкапа**: раскладывает `ssh/awg_admin_key`→`/root/.ssh/`, `modules.conf`→`/root/`, `bot_persistence.pkl`→`/etc/awg-bot/`, `proxy_bot.env`→`/etc/proxy-bot/`; переписывает NAT-интерфейс в PostUp/PostDown под текущий хост, `SERVER_IP` и primary в servers.json под новый VPS, пересобирает `server_public/private.key` из конфига. Без неё переезд на другой ВПС даёт VPN без интернета |
 | `_harden_secret_perms()` | `0600` на конфиги клиентов, бэкапы, users.json, server.env |
+| `is_safe_client_name(name)` | Имя безопасно для подстановки в путь: только `[A-Za-z0-9_.-]`, без `..`, не начинается с `.`/`-`. Пропускает все реальные форматы — `User.Device` (бот), дефисы (TMA), имена без точки (vpn.sh) |
+| `can_access_device(user_id, name)` | Права на устройство. Сначала `is_safe_client_name()` — имя с выходом из каталога отклоняется для всех, включая админа |
 | `build_allowed_ips(keys, domains)` | Split tunneling: AllowedIPs строка |
 | `process_domain(domain)` | DNS-зондирование домена в подсети |
 | `get_allowed_ips_for_client(name)` | AllowedIPs с учётом исключений клиента |
@@ -306,6 +308,7 @@ Vpn_AWG/
 - **Ответы на callback:** `button_handler` — тонкая обёртка, гасит «часики» ПОСЛЕ `_button_dispatch`. Ранний `query.answer()` съедал ответ, и алерты `show_alert=True` не показывались
 - **Исключения сайтов — только IPv4:** `build_allowed_ips` считает дополнение IPv4-пространства; IPv6-запись роняет `collapse_addresses` с `TypeError`. Валидация в `sites.py` и `tma_server.py` отклоняет IPv6 явно
 - **Никаких приватных ключей на диске вне `CLIENTS_DIR`:** `.conf`/QR отправляются из памяти, qrencode вызывается через stdin→stdout (`-t PNG -o -`)
+- **Имя устройства из URL — два барьера:** роуты TMA объявлены как `<string:name>` (конвертер не пропускает слэш), плюс `is_safe_client_name()` внутри `can_access_device`. Не менять на `<path:name>`: имя клеится в `f"{CLIENTS_DIR}/{name}.conf"`, и `Ivan./../../awg0` дал бы QR с приватным ключом сервера
 - **Shell-скрипты:** вспомогательные функции в `lib/*.sh`, подключаются через `source`
 - **Re-экспорт `awg_core`:** `from awg_core import *` не реэкспортирует функции с `_` префиксом — для них нужен явный импорт из оригинального модуля (`awg_stats`, `awg_clients`, `awg_ssh`)
 - **Кнопки меню:** каждая кнопка на отдельной строке (`[btn]`), не группировать по две в строку

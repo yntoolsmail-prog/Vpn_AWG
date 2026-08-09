@@ -331,7 +331,7 @@ def create_device(user_id):
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/devices/<path:name>", methods=["DELETE"])
+@app.route("/api/devices/<string:name>", methods=["DELETE"])
 @require_auth
 def delete_device(user_id, name):
     """Удалить устройство."""
@@ -393,7 +393,7 @@ def api_servers(user_id):
     return jsonify(result)
 
 
-@app.route("/api/devices/<path:name>/qr")
+@app.route("/api/devices/<string:name>/qr")
 @require_auth
 def device_qr(user_id, name):
     """QR-код в виде base64 PNG. Принимает ?endpoint=X для генерации на лету."""
@@ -421,7 +421,7 @@ def device_qr(user_id, name):
         return jsonify({"error": f"qrencode: {e}"}), 500
 
 
-@app.route("/api/devices/<path:name>/vpnlink")
+@app.route("/api/devices/<string:name>/vpnlink")
 @require_auth
 def device_vpnlink(user_id, name):
     """Ссылка vpn:// для AmneziaVPN. Принимает ?endpoint=X&srv_id=Y."""
@@ -452,7 +452,7 @@ def device_vpnlink(user_id, name):
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/devices/<path:name>/send", methods=["POST"])
+@app.route("/api/devices/<string:name>/send", methods=["POST"])
 @require_auth
 def device_send(user_id, name):
     """Отправляет .conf файл в Telegram-чат пользователя через бота."""
@@ -480,7 +480,7 @@ def device_send(user_id, name):
     return jsonify({"error": "Ошибка отправки через Telegram"}), 500
 
 
-@app.route("/api/devices/<path:name>/send_qr", methods=["POST"])
+@app.route("/api/devices/<string:name>/send_qr", methods=["POST"])
 @require_auth
 def device_send_qr(user_id, name):
     """Генерирует QR-код и отправляет PNG в Telegram-чат пользователя."""
@@ -535,7 +535,7 @@ def device_send_qr(user_id, name):
             pass
 
 
-@app.route("/api/devices/<path:name>/sites", methods=["GET"])
+@app.route("/api/devices/<string:name>/sites", methods=["GET"])
 @require_auth
 def device_sites_get(user_id, name):
     """Текущие site exclusions устройства."""
@@ -554,7 +554,7 @@ def device_sites_get(user_id, name):
 
 # ── Исключения клиента (.excl.json) ──────────────────────────────────────────
 
-@app.route("/api/devices/<path:name>/excl", methods=["GET"])
+@app.route("/api/devices/<string:name>/excl", methods=["GET"])
 @require_auth
 def device_excl_get(user_id, name):
     """Возвращает сохранённые исключения клиента."""
@@ -591,7 +591,7 @@ def _validate_domain_entry(entry: str) -> tuple[bool, str]:
     return False, f"Неверный формат: «{entry}». Укажите домен (site.ru) или IP/CIDR (1.2.3.0/24)."
 
 
-@app.route("/api/devices/<path:name>/excl", methods=["PUT"])
+@app.route("/api/devices/<string:name>/excl", methods=["PUT"])
 @require_auth
 def device_excl_put(user_id, name):
     """Сохраняет исключения клиента (не меняет сам .conf — применяется при создании QR/conf)."""

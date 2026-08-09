@@ -4,7 +4,7 @@
 # Не содержит ничего Telegram-специфичного и ничего HTTP-специфичного.
 # Version: 1.2
 
-import os, subprocess, logging, json, socket, ipaddress, threading, time
+import os, re, subprocess, logging, json, socket, ipaddress, threading, time
 import tarfile, fcntl, shutil
 from contextlib import contextmanager
 
@@ -678,8 +678,32 @@ def set_maintenance(enabled: bool, message: str = "", end_time: int = 0) -> dict
 
 # ── Общие хелперы ──────────────────────────────────────────────────────────────
 
+_SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+
+def is_safe_client_name(name: str) -> bool:
+    """Имя клиента безопасно для подстановки в путь файла.
+
+    TMA принимает имя прямо из URL и клеит его в f"{CLIENTS_DIR}/{name}.conf",
+    поэтому слэши и '..' позволили бы выйти из CLIENTS_DIR — например прочитать
+    awg0.conf сервера и получить QR с его приватным ключом.
+
+    Набор символов намеренно широкий: бот делает 'User.Device', TMA разрешает
+    дефис, а vpn.sh создаёт клиентов вообще без точки. Всё это остаётся валидным.
+    """
+    return (
+        bool(name)
+        and ".." not in name
+        and not name.startswith((".", "-"))
+        and bool(_SAFE_NAME_RE.match(name))
+    )
+
+
 def can_access_device(user_id: int, name: str) -> bool:
-    """True если user_id == ADMIN_ID или устройство принадлежит пользователю."""
+    """True если user_id == ADMIN_ID или устройство принадлежит пользователю.
+    Имя с попыткой выхода из каталога отклоняется для всех, включая админа."""
+    if not is_safe_client_name(name):
+        return False
     if user_id == ADMIN_ID:
         return True
     return name.startswith(get_user_name(user_id) + ".")
