@@ -11,13 +11,24 @@ run_diagnostics() {
     echo -e "  ${CYAN}Собираю данные, подождите...${NC}"
     echo ""
 
-    local TS FILE
+    local TS FILE IS_SLAVE ROLE
     TS=$(date +"%Y%m%d_%H%M%S")
     FILE="${DIAG_DIR}/diag_${TS}.txt"
+
+    # Маркер создаётся setup.sh --slave. На слейве нет ни бота, ни users.json,
+    # ни конфигов клиентов — общий набор проверок давал бы ложные тревоги.
+    IS_SLAVE=0
+    [[ -f /etc/awg-slave ]] && IS_SLAVE=1
+    if [[ "$IS_SLAVE" -eq 1 ]]; then
+        ROLE="СЛЕЙВ (копия основного сервера)"
+    else
+        ROLE="ОСНОВНОЙ"
+    fi
 
     {
         echo "════════════════════════════════════════════════════════════════"
         echo "  AmneziaWG — Диагностический отчёт"
+        echo "  Роль сервера: ${ROLE}"
         echo "  Дата: $(date '+%d.%m.%Y %H:%M:%S')"
         echo "════════════════════════════════════════════════════════════════"
         echo ""
@@ -114,20 +125,119 @@ run_diagnostics() {
 
         local AWG_DUMP
         AWG_DUMP=$(awg show "$VPN_IFACE" dump 2>/dev/null)
+        # Счётчики только через awk: grep -c при нуле совпадений печатает 0 И
+        # возвращает код 1, из-за чего "|| echo 0" дописывал второй ноль
         local PEER_COUNT_AWG
-        PEER_COUNT_AWG=$(echo "$AWG_DUMP" | tail -n +2 | grep -c "." || echo 0)
+        PEER_COUNT_AWG=$(echo "$AWG_DUMP" | tail -n +2 | awk 'NF{n++} END{print n+0}')
         local FILE_COUNT
         FILE_COUNT=$(ls "$CLIENTS_DIR"/*.conf 2>/dev/null | wc -l)
 
+        # Пиры, записанные в awg0.conf: "имя<TAB>публичный ключ<TAB>allowed ip"
+        local CONF_PEERS PEER_COUNT_CONF NAMED_COUNT
+        CONF_PEERS=$(awk '
+            /^# Client:/  { name = substr($0, index($0, ":") + 2); next }
+            /^PublicKey/  { pub = $3 }
+            /^AllowedIPs/ { printf "%s\t%s\t%s\n", (name == "" ? "—" : name), pub, $3
+                            name = ""; pub = "" }
+        ' "$AWG_CONF" 2>/dev/null)
+        PEER_COUNT_CONF=$(awk '/^\[Peer\]/{n++}   END{print n+0}' "$AWG_CONF" 2>/dev/null)
+        NAMED_COUNT=$(awk    '/^# Client:/{n++}   END{print n+0}' "$AWG_CONF" 2>/dev/null)
+        PEER_COUNT_CONF=${PEER_COUNT_CONF:-0}
+        NAMED_COUNT=${NAMED_COUNT:-0}
+
         echo "--- Сводка клиентов ---"
-        echo "Пиров в AWG:          ${PEER_COUNT_AWG}"
-        echo "Файлов .conf:         ${FILE_COUNT}"
-        if [[ "$PEER_COUNT_AWG" != "$FILE_COUNT" ]]; then
-            echo "⚠️  РАСХОЖДЕНИЕ! Возможны висячие пиры или файлы без пира."
+        echo "Пиров на интерфейсе (awg show):   ${PEER_COUNT_AWG}"
+        echo "Пиров в конфиге (awg0.conf):      ${PEER_COUNT_CONF}"
+        echo "Из них с именем (# Client:):      ${NAMED_COUNT}"
+        if [[ "$IS_SLAVE" -eq 0 ]]; then
+            echo "Файлов .conf:                     ${FILE_COUNT}"
+            if [[ "$PEER_COUNT_AWG" != "$FILE_COUNT" ]]; then
+                echo "⚠️  РАСХОЖДЕНИЕ! Возможны висячие пиры или файлы без пира."
+            else
+                echo "✅ Количество совпадает"
+            fi
         else
-            echo "✅ Количество совпадает"
+            echo "Файлов .conf:                     нет (норма для слейва — они только на основном)"
         fi
         echo ""
+
+        # ── Сверка «живой интерфейс ↔ конфиг на диске» ────────────────────────
+        # Главная проверка удаления устройства: снять пир командой мало, надо
+        # ещё вырезать блок из awg0.conf — иначе он вернётся при перезапуске AWG.
+        echo "--- Сверка: интерфейс ↔ awg0.conf ---"
+        local LIVE_PUBS CONF_PUBS ONLY_LIVE ONLY_CONF
+        LIVE_PUBS=$(echo "$AWG_DUMP" | tail -n +2 | awk 'NF{print $1}' | sort -u)
+        CONF_PUBS=$(echo "$CONF_PEERS" | awk -F'\t' 'NF{print $2}' | sort -u)
+        ONLY_CONF=$(comm -13 <(echo "$LIVE_PUBS") <(echo "$CONF_PUBS") | awk 'NF{n++} END{print n+0}')
+        ONLY_LIVE=$(comm -23 <(echo "$LIVE_PUBS") <(echo "$CONF_PUBS") | awk 'NF{n++} END{print n+0}')
+        if [[ "$ONLY_CONF" == "0" && "$ONLY_LIVE" == "0" ]]; then
+            echo "  ✅ Полное совпадение — после перезапуска AWG состав пиров не изменится"
+        fi
+        if [[ "$ONLY_CONF" != "0" ]]; then
+            echo "  ⚠️  В конфиге есть ${ONLY_CONF} пир(ов), которых нет на интерфейсе."
+            echo "      ВЕРНУТСЯ при перезапуске AWG. Если устройство удалялось —"
+            echo "      удаление доехало не полностью:"
+            comm -13 <(echo "$LIVE_PUBS") <(echo "$CONF_PUBS") | while read -r P; do
+                [[ -z "$P" ]] && continue
+                echo "        $(echo "$CONF_PEERS" | awk -F'\t' -v k="$P" '$2==k{print $1" ("$3")"; exit}')"
+            done
+        fi
+        if [[ "$ONLY_LIVE" != "0" ]]; then
+            echo "  ⚠️  На интерфейсе есть ${ONLY_LIVE} пир(ов), которых нет в конфиге."
+            echo "      ИСЧЕЗНУТ при перезапуске AWG:"
+            comm -23 <(echo "$LIVE_PUBS") <(echo "$CONF_PUBS") | while read -r P; do
+                [[ -z "$P" ]] && continue
+                echo "        ${P}  $(echo "$AWG_DUMP" | awk -v k="$P" '$1==k{print $4}')"
+            done
+        fi
+        echo ""
+
+        echo "--- Проверка дублей IP ---"
+        local DUP_IPS
+        DUP_IPS=$(echo "$CONF_PEERS" | awk -F'\t' 'NF{print $3}' | sort | uniq -d)
+        if [[ -z "$DUP_IPS" ]]; then
+            echo "  ✅ Дублей AllowedIPs нет"
+        else
+            echo "  ⚠️  Один адрес выдан нескольким клиентам:"
+            echo "$DUP_IPS" | while read -r D; do
+                [[ -z "$D" ]] && continue
+                echo "        ${D} → $(echo "$CONF_PEERS" | awk -F'\t' -v ip="$D" '$3==ip{printf "%s ", $1}')"
+            done
+        fi
+        echo ""
+
+        if [[ "$IS_SLAVE" -eq 1 ]]; then
+            # На слейве нет файлов клиентов — таблицу строим из awg0.conf
+            echo "--- Клиенты слейва (из awg0.conf + awg show) ---"
+            printf "%-30s %-16s %-22s %s\n" "ИМЯ" "IP" "ХЕНДШЕЙК" "ТРАФИК"
+            echo "────────────────────────────────────────────────────────────────────"
+            local NOW_S
+            NOW_S=$(date +%s)
+            echo "$CONF_PEERS" | while IFS=$'\t' read -r CNAME CPUB CIP; do
+                [[ -z "$CPUB" ]] && continue
+                local PLINE HS RX TX HS_FMT TRAFFIC STATUS
+                PLINE=$(echo "$AWG_DUMP" | awk -v k="$CPUB" '$1==k')
+                HS=$(echo "$PLINE" | awk '{print $5}')
+                RX=$(echo "$PLINE" | awk '{print $6}')
+                TX=$(echo "$PLINE" | awk '{print $7}')
+                HS_FMT=$(fmt_handshake "${HS:-0}")
+                [[ -n "$RX" ]] && TRAFFIC="↓$(numfmt --to=iec ${RX:-0} 2>/dev/null) ↑$(numfmt --to=iec ${TX:-0} 2>/dev/null)" || TRAFFIC="нет данных"
+                if [[ -z "$HS" || "$HS" == "0" ]]; then
+                    STATUS="⚫ не подключался к этому серверу"
+                elif (( NOW_S - HS < 180 )); then
+                    STATUS="🟢 онлайн"
+                else
+                    STATUS="⚫ оффлайн"
+                fi
+                printf "%-30s %-16s %-22s %-20s %s\n" "$CNAME" "${CIP%%/*}" "$HS_FMT" "$TRAFFIC" "$STATUS"
+            done
+            echo ""
+            echo "  Примечание: пир без хендшейка — норма. Клиент подключается к тому"
+            echo "  серверу, чей эндпоинт выбран в его конфиге; остальные его просто ждут."
+            echo ""
+        fi
+
+        if [[ "$IS_SLAVE" -eq 0 ]]; then
         echo "--- Детали клиентов (имя / IP / хендшейк / трафик) ---"
         printf "%-30s %-16s %-20s %s\n" "ИМЯ" "IP" "ХЕНДШЕЙК" "ТРАФИК"
         echo "────────────────────────────────────────────────────────────────────"
@@ -163,10 +273,13 @@ run_diagnostics() {
             printf "%-30s %-16s %-20s %-20s %s\n" "$CNAME" "$CLIENT_IP" "$HS_FMT" "$TRAFFIC" "$STATUS"
         done
         echo ""
+        fi   # конец блока «только основной сервер»
 
         # ── ЦЕЛОСТНОСТЬ ДАННЫХ ────────────────────────────────────────────────
         echo "━━━ ЦЕЛОСТНОСТЬ ДАННЫХ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo ""
+
+        if [[ "$IS_SLAVE" -eq 0 ]]; then
         echo "--- Проверка .pub файлов ---"
         local PUB_MISSING=0
         for CONF in "$CLIENTS_DIR"/*.conf; do
@@ -194,6 +307,7 @@ run_diagnostics() {
         done
         [[ "$ORPHAN" == "0" ]] && echo "  ✅ Все клиенты есть в awg.conf"
         echo ""
+        fi   # конец блока «только основной сервер»
 
         echo "--- Проверка SERVER_PUBLIC ---"
         local CONF_PUB
@@ -207,6 +321,16 @@ run_diagnostics() {
         fi
         echo ""
 
+        if [[ "$IS_SLAVE" -eq 1 ]]; then
+            echo "--- Обфускация (должна совпадать с основным сервером) ---"
+            grep -E '^(Jc|Jmin|Jmax|S1|S2|H1|H2|H3|H4|i1|ListenPort)\s*=' "$AWG_CONF" 2>/dev/null \
+                | sed 's/^/  /' || echo "  не найдена"
+            echo ""
+            echo "  Если эти значения или SERVER_PUBLIC выше разошлись с основным —"
+            echo "  конфиги клиентов на этом сервере работать не будут."
+            echo "  Лечится кнопкой «Синхронизировать» в карточке сервера в боте."
+            echo ""
+        else
         echo "--- users.json ---"
         if [[ -f "$USERS_FILE" ]]; then
             local APPROVED PENDING
@@ -217,8 +341,17 @@ run_diagnostics() {
             echo "  ⚠️  users.json не найден"
         fi
         echo ""
+        fi
 
         # ── БОТ ──────────────────────────────────────────────────────────────
+        if [[ "$IS_SLAVE" -eq 1 ]]; then
+        echo "━━━ TELEGRAM БОТ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "  Не применимо: бот ставится только на основной сервер."
+        echo ""
+        echo "--- Последние 20 строк лога AWG сервиса ---"
+        journalctl -u "awg-quick@${VPN_IFACE}" -n 20 --no-pager 2>/dev/null
+        echo ""
+        else
         echo "━━━ TELEGRAM БОТ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo "Статус сервиса: $(systemctl is-active ${BOT_SERVICE})"
         echo "python-telegram-bot: $(pip3 show python-telegram-bot 2>/dev/null | grep Version | awk '{print $2}')"
@@ -233,10 +366,12 @@ run_diagnostics() {
         echo "--- Последние 20 строк лога AWG сервиса ---"
         journalctl -u "awg-quick@${VPN_IFACE}" -n 20 --no-pager 2>/dev/null
         echo ""
+        fi   # конец блока «только основной сервер»
 
         # ── ПРОИЗВОДИТЕЛЬНОСТЬ ────────────────────────────────────────────────
         echo "━━━ ПРОИЗВОДИТЕЛЬНОСТЬ И ТРАФИК ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo ""
+        if [[ "$IS_SLAVE" -eq 0 ]]; then
         echo "--- Пики из bw_peak.json ---"
         if [[ -f "$BW_PEAK_FILE" ]]; then
             python3 -c "
@@ -260,6 +395,11 @@ print(f'  Абс. пик:    {allp.get(\"load\",0)} Mbit/s  ↓{allp.get(\"rx\",
             echo "  лог не найден"
         fi
         echo ""
+        else
+            echo "  Пики и поминутный лог ведёт бот на основном сервере —"
+            echo "  на слейве их нет. Трафик этого сервера — в vnstat ниже."
+            echo ""
+        fi
         echo "--- vnstat (текущий месяц) ---"
         local HOST_IFACE
         HOST_IFACE=$(ip route get 8.8.8.8 2>/dev/null | awk '/dev/{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -1)
@@ -273,6 +413,9 @@ print(f'  Абс. пик:    {allp.get(\"load\",0)} Mbit/s  ↓{allp.get(\"rx\",
             for F in "${BFILES[@]}"; do
                 echo "  $(basename $F)  $(du -sh $F | cut -f1)  $(date -r $F '+%d.%m.%Y %H:%M')"
             done
+        elif [[ "$IS_SLAVE" -eq 1 ]]; then
+            echo "  Бэкапов нет — норма для слейва."
+            echo "  Бэкап делается на основном сервере и содержит всю инфраструктуру."
         else
             echo "  Бэкапов нет"
         fi
