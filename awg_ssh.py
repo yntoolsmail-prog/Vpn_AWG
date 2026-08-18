@@ -457,7 +457,11 @@ def ssh_sync_peer_to_slave(server: dict, name: str, pub: str, psk: str, ip: str)
             f"printf '{conf_line}' >> /etc/amnezia/amneziawg/awg0.conf",
             timeout=10
         )
-        stdout.read(); stderr.read()
+        stdout.read()
+        err = stderr.read().decode().strip()
+        if stdout.channel.recv_exit_status() != 0:
+            raise RuntimeError(f"запись в awg0.conf не удалась: {err or 'ошибка записи'}")
+
         transport = client.get_transport()
         chan = transport.open_session()
         chan.exec_command(
@@ -465,8 +469,28 @@ def ssh_sync_peer_to_slave(server: dict, name: str, pub: str, psk: str, ip: str)
         )
         chan.sendall(psk.encode())
         chan.shutdown_write()
-        chan.recv_exit_status()
+        rc = chan.recv_exit_status()
         chan.close()
+        if rc != 0:
+            raise RuntimeError(
+                f"awg set вернул код {rc} — проверьте, что AWG на слейве запущен"
+            )
+
+        # Контроль результата. Без него функция сообщала об успехе всегда, когда
+        # прошло само SSH-подключение: коды возврата отбрасывались, и устройство
+        # молча не доезжало до слейва.
+        _, stdout, _ = client.exec_command(
+            f"grep -cF '{pub}' /etc/amnezia/amneziawg/awg0.conf; "
+            f"awg show awg0 2>/dev/null | grep -cF '{pub}'",
+            timeout=10
+        )
+        nums = stdout.read().decode().split()
+        in_conf  = nums[0] if len(nums) > 0 else "0"
+        on_iface = nums[1] if len(nums) > 1 else "0"
+        if in_conf == "0" or on_iface == "0":
+            raise RuntimeError(
+                f"проверка не прошла: в конфиге={in_conf}, на интерфейсе={on_iface}"
+            )
     finally:
         client.close()
 

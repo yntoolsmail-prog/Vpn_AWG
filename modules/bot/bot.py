@@ -73,7 +73,7 @@ from handlers.clients import (
 )
 from handlers.servers import (
     show_servers_list, srv_deldomain_list, srv_deldomain_confirm, srv_deldomain_ok,
-    show_server_card, _sync_peer_to_all_slaves, _check_endpoint_dns,
+    show_server_card, _sync_peer_to_all_slaves, _check_endpoint_dns, _check_slaves_sync,
     srv_checkdns, srv_del_confirm, srv_del_ok, srv_sync_now,
     srv_rename_start, srv_rename_name, srv_rename_emoji, srv_rename_country,
     srv_adddomain_start, srv_adddomain_pick, srv_adddomain_receive,
@@ -815,6 +815,9 @@ def main():
     app.job_queue.run_repeating(check_repo_updates, interval=86400, first=20)
     # Проверка DNS эндпоинтов — каждые 12 часов, первая через 5 минут после старта
     app.job_queue.run_repeating(_check_endpoint_dns, interval=43200, first=300)
+    # Сверка синхронизации со slave-серверами — каждые 30 минут, первая через 3 минуты.
+    # Пишет админу сама, чтобы о рассинхроне не приходилось узнавать из меню.
+    app.job_queue.run_repeating(_check_slaves_sync, interval=1800, first=180)
 
     logger.info(f"Бот запущен. Admin ID: {ADMIN_ID}")
     print(f"\n\033[0;32m✓ Бот запущен! Admin ID: {ADMIN_ID}\033[0m\n")

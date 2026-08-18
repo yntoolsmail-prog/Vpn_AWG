@@ -192,7 +192,7 @@ Vpn_AWG/
 | Функция | Назначение |
 |---------|-----------|
 | `ssh_clone_awg_to_slave(server)` | Клонировать AWG-конфиг на slave |
-| `ssh_sync_peer_to_slave(server, ...)` | Добавить peer на slave |
+| `ssh_sync_peer_to_slave(server, ...)` | Добавить peer на slave. Проверяет коды возврата и контрольно грепает ключ в `awg0.conf` и в `awg show`; бросает исключение при провале — раньше коды отбрасывались и молчаливый несинк был не виден |
 | `ssh_remove_peer_from_slave(server, name, pub)` | Снять peer со slave: `awg set … remove` + вырезание блока из `awg0.conf` через `sed '/^# Client: name$/,/^AllowedIPs/d'`; бросает исключение, если ключ остался |
 | `ssh_push_admin_key(server)` | Скопировать SSH-ключ на slave |
 | `ssh_sync_mtproxy_secret(server, ...)` | Синхронизировать MTProxy на slave |
@@ -222,7 +222,8 @@ Vpn_AWG/
 | `_srv_block_slave(srv, idx)` | Async блок статистики slave: SSH с timeout 8 с через `asyncio.wait_for` |
 | `show_server_card(query, idx)` | Карточка сервера: метка _(Основной)_/_(Слейв)_, только domain-эндпоинты |
 | `srv_rename_start/name/emoji/country` | 3-шаговый диалог: name → emoji → country (WAITING_SRV_COUNTRY) |
-| `_sync_peer_to_all_slaves()` | Async синк нового пира на все slave-серверы |
+| `_sync_peer_to_all_slaves()` | Async синк нового пира на все slave-серверы; возвращает список ошибок — их показывают пользователю и шлют админу, а не только пишут в лог |
+| `_check_slaves_sync(context)` | Job раз в 30 мин: сверяет число пиров primary ↔ каждый slave, шлёт админу алерт с кнопкой «Синхронизировать» при появлении расхождения и «восстановлено» при устранении. Состояние в `_slave_sync_state` — сообщение только на смену состояния, без спама; «нет связи» игнорируется |
 
 ### handlers/clients.py
 | Функция | Назначение |

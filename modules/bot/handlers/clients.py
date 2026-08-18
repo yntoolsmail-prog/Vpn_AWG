@@ -620,8 +620,29 @@ async def receive_device_name(update: Update, context: ContextTypes.DEFAULT_TYPE
     sync_errors = await _sync_peer_to_all_slaves(
         full_name, keys["pub"], keys["psk"], keys["ip"]
     )
+    # Раньше ошибка синка уходила только в лог — устройство молча не появлялось
+    # на слейве, и узнать об этом было неоткуда.
+    sync_note = ""
     if sync_errors:
         logger.warning(f"receive_device_name: slave sync errors: {sync_errors}")
+        sync_note = (
+            f"\n\n⚠️ Устройство не доехало до {len(sync_errors)} сервер(ов) — "
+            f"через них подключиться не получится. Администратор уведомлён."
+        )
+        try:
+            await context.bot.send_message(
+                ADMIN_ID,
+                f"⚠️ *Устройство не синхронизировалось*\n\n"
+                f"`{full_name}` создано на основном сервере, но не доехало:\n"
+                + "\n".join(f"• {_md(e)}" for e in sync_errors)
+                + "\n\nПочините связь и нажмите «Синхронизировать» в карточке сервера.",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🖥 Серверы", callback_data="servers")
+                ]]),
+            )
+        except Exception:
+            pass
 
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("📋 Перейти к устройству", callback_data=f"device_{full_name}")],
@@ -635,7 +656,8 @@ async def receive_device_name(update: Update, context: ContextTypes.DEFAULT_TYPE
         f"• 📤 *Поделиться кодом* — для AmneziaVPN\n\n"
         f"Для каждого варианта можно выбрать канал и настроить исключения сайтов.\n\n"
         f"💡 Первый раз? Загляните в 📖 *Инструкцию* в главном меню — "
-        f"там есть важный раздел про настройку DNS на устройстве.",
+        f"там есть важный раздел про настройку DNS на устройстве."
+        f"{sync_note}",
         reply_markup=kb,
         parse_mode="Markdown"
     )

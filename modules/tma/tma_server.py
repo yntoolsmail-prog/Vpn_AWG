@@ -181,11 +181,17 @@ def _sync_new_peer_to_slaves(name: str, keys: dict) -> None:
     psk = keys["psk"]
     ip  = keys["ip"]  # без /32, ssh_sync_peer_to_slave добавляет сам
     for srv in slaves:
-        threading.Thread(
-            target=ssh_sync_peer_to_slave,
-            args=(srv, name, pub, psk, ip),
-            daemon=True,
-        ).start()
+        label = f"{srv.get('emoji', '')} {srv.get('name', 'slave')}".strip()
+
+        # Раньше target был самой ssh_sync_peer_to_slave: исключение умирало
+        # внутри потока, и устройство молча не появлялось на слейве.
+        def _run(server=srv, lbl=label):
+            try:
+                ssh_sync_peer_to_slave(server, name, pub, psk, ip)
+            except Exception as e:
+                logging.error("TMA: peer %s не доехал до slave %s: %s", name, lbl, e)
+
+        threading.Thread(target=_run, daemon=True).start()
 
 
 def _resolve_allowed_ips(name: str, use_excl: bool) -> str:

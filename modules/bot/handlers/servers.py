@@ -16,7 +16,7 @@ from awg_core import (
     ssh_get_slave_peer_count as _ssh_get_slave_peer_count,
     ssh_get_slave_sys_stats as _ssh_get_slave_sys_stats,
 )
-from .common import back_kb, WAITING_SRV_DOMAIN, WAITING_SRV_EDIT_NAME, WAITING_SRV_EDIT_EMOJI, WAITING_SRV_COUNTRY, BTN_BACK, BTN_BACK_MENU, BTN_CANCEL, BTN_BACK_CARD
+from .common import _md, back_kb, WAITING_SRV_DOMAIN, WAITING_SRV_EDIT_NAME, WAITING_SRV_EDIT_EMOJI, WAITING_SRV_COUNTRY, BTN_BACK, BTN_BACK_MENU, BTN_CANCEL, BTN_BACK_CARD
 
 
 def _count_peers_in_conf(conf_text: str) -> int:
@@ -357,6 +357,75 @@ async def _dns_check_all_servers() -> tuple[list, bool]:
     if changed:
         save_servers(servers)
     return results, changed
+
+
+# Последнее известное состояние синка по каждому слейву: {srv_id: "ok" | "bad"}
+_slave_sync_state: dict = {}
+
+
+async def _check_slaves_sync(context):
+    """Фоновая сверка числа пиров primary ↔ каждый slave.
+
+    Расхождение означает, что часть устройств через этот слейв не работает.
+    Раньше увидеть его можно было, только зайдя в Настройки → Серверы, — теперь
+    бот сам пишет админу при появлении расхождения и при его устранении.
+    """
+    if not _PARAMIKO_AVAILABLE:
+        return
+    try:
+        with open(AWG_CONF) as f:
+            primary_peers = _count_peers_in_conf(f.read())
+    except Exception:
+        return
+    if primary_peers == 0:
+        return
+
+    loop = asyncio.get_event_loop()
+    for idx, srv in enumerate(load_servers()):
+        if srv.get("is_primary"):
+            continue
+        sid   = srv.get("id") or srv.get("name", "")
+        label = f"{srv.get('emoji', '')} {srv.get('name', 'Слейв')}".strip()
+        try:
+            cnt = await asyncio.wait_for(
+                loop.run_in_executor(None, _ssh_get_slave_peer_count, srv),
+                timeout=15.0,
+            )
+        except Exception:
+            cnt = None
+        # Нет связи — не спамим: это видно в карточке сервера и в статусе
+        if cnt is None:
+            continue
+
+        state = "ok" if cnt == primary_peers else "bad"
+        prev  = _slave_sync_state.get(sid)
+        _slave_sync_state[sid] = state
+        if state == prev:
+            continue
+
+        if state == "bad":
+            diff = abs(primary_peers - cnt)
+            await context.bot.send_message(
+                ADMIN_ID,
+                f"⚠️ *Рассинхрон со слейвом*\n\n"
+                f"*{_md(label)}*\n"
+                f"На основном: {primary_peers} устройств\n"
+                f"На слейве:   {cnt}\n\n"
+                f"Расхождение в {diff} — эти устройства через данный сервер "
+                f"работать не будут.\n"
+                f"Синхронизация перезальёт конфиг с основного сервера.",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Синхронизировать", callback_data=f"srv_sync_{idx}")],
+                    [InlineKeyboardButton("🖥 Серверы", callback_data="servers")],
+                ]),
+            )
+        elif prev == "bad":
+            await context.bot.send_message(
+                ADMIN_ID,
+                f"✅ *{_md(label)}* снова синхронизирован — {cnt} устройств.",
+                parse_mode="Markdown",
+            )
 
 
 async def _check_endpoint_dns(context):
