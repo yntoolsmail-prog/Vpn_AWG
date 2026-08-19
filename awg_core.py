@@ -512,29 +512,43 @@ def post_restore_fixup() -> list:
             report.append(f"⚠️ {os.path.basename(dst)}: {e}")
             return False
 
-    if _move(f"{base}/ssh/awg_admin_key", ADMIN_KEY_PATH, 0o600):
-        report.append("🔑 SSH-ключ администратора восстановлен")
-    _move(f"{base}/ssh/awg_admin_key.pub", ADMIN_KEY_PATH + ".pub", 0o644)
+    # SSH-ключ администратора. Критичен: у slave-серверов после добавления
+    # ssh.auth="key" и пароль стёрт, поэтому ключ из бэкапа — единственный путь
+    # к ним с нового сервера. setup.sh на новом VPS уже сгенерировал свой ключ —
+    # перезаписываем его ключом из бэкапа, тем самым, который знают слейвы.
+    if os.path.exists(f"{base}/ssh/awg_admin_key"):
+        _move(f"{base}/ssh/awg_admin_key", ADMIN_KEY_PATH, 0o600)
+        _move(f"{base}/ssh/awg_admin_key.pub", ADMIN_KEY_PATH + ".pub", 0o644)
+        report.append("🔑 SSH-ключ администратора восстановлен из бэкапа")
+    else:
+        report.append(
+            "⚠️ В бэкапе нет SSH-ключа администратора!\n"
+            "   Slave-серверы пускают только по ключу — управление ими не поднимется.\n"
+            "   Добавьте новый ключ на slave через консоль провайдера."
+        )
     try:
         os.rmdir(f"{base}/ssh")
     except Exception:
         pass
 
-    # Публичный ключ — в authorized_keys, иначе по нему не зайти на новый сервер
+    # Публичный ключ — в authorized_keys, иначе по нему не зайти на новый сервер.
+    # Заодно убираем ключ, который setup.sh сгенерировал при установке: его
+    # приватная половина только что перезаписана, в файле он мёртвый груз.
     try:
         if os.path.exists(ADMIN_KEY_PATH + ".pub"):
             with open(ADMIN_KEY_PATH + ".pub") as f:
                 pub = f.read().strip()
-            auth = "/root/.ssh/authorized_keys"
-            existing = ""
+            auth  = "/root/.ssh/authorized_keys"
+            lines = []
             if os.path.exists(auth):
                 with open(auth) as f:
-                    existing = f.read()
-            if pub and pub not in existing:
+                    lines = [l for l in f.read().splitlines() if "awg-admin" not in l]
+            if pub:
                 os.makedirs("/root/.ssh", exist_ok=True)
                 os.chmod("/root/.ssh", 0o700)
-                with open(auth, "a") as f:
-                    f.write(pub + "\n")
+                lines.append(pub)
+                with open(auth, "w") as f:
+                    f.write("\n".join(lines) + "\n")
                 os.chmod(auth, 0o600)
     except Exception as e:
         report.append(f"⚠️ authorized_keys: {e}")
@@ -634,6 +648,22 @@ def post_restore_fixup() -> list:
 
     # 6. Права на восстановленные файлы с секретами
     _harden_secret_perms()
+
+    # 7. Состояние входа по паролю. sshd_config в бэкап намеренно не входит —
+    #    переносить его между провайдерами опасно (порт, PermitRootLogin,
+    #    ключи хоста). Поэтому на новом сервере остаётся то, что оставил
+    #    провайдер, и админу нужно знать, что именно.
+    try:
+        from awg_ssh import get_ssh_password_auth_local
+        if get_ssh_password_auth_local():
+            report.append(
+                "🔓 Вход по паролю SSH ВКЛЮЧЁН (настройка sshd в бэкап не входит).\n"
+                "   Проверьте вход по ключу и выключите его: Настройки → SSH-доступ."
+            )
+        else:
+            report.append("🔒 Вход по паролю SSH выключен")
+    except Exception:
+        pass
 
     return report
 

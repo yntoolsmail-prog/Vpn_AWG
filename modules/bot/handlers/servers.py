@@ -361,6 +361,11 @@ async def _dns_check_all_servers() -> tuple[list, bool]:
 
 # Последнее известное состояние синка по каждому слейву: {srv_id: "ok" | "bad"}
 _slave_sync_state: dict = {}
+# Сколько проверок подряд слейв не отвечает: {srv_id: int}
+_slave_unreachable: dict = {}
+# Порог, после которого сообщаем о потере связи (3 × 30 мин ≈ 1.5 часа) —
+# короткие сетевые моргания так не превращаются в поток сообщений
+_UNREACHABLE_ALERT_AFTER = 3
 
 
 async def _check_slaves_sync(context):
@@ -393,9 +398,33 @@ async def _check_slaves_sync(context):
             )
         except Exception:
             cnt = None
-        # Нет связи — не спамим: это видно в карточке сервера и в статусе
+        # Нет связи. Одиночные пропуски игнорируем, но затяжная потеря — это
+        # и есть симптом «ключ не подошёл» (например, после восстановления из
+        # бэкапа, снятого до пересоздания ключа). Молчать про такое нельзя.
         if cnt is None:
+            miss = _slave_unreachable.get(sid, 0) + 1
+            _slave_unreachable[sid] = miss
+            if miss == _UNREACHABLE_ALERT_AFTER:
+                await context.bot.send_message(
+                    ADMIN_ID,
+                    f"🔌 *Нет связи со слейвом*\n\n"
+                    f"*{_md(label)}* не отвечает уже {miss} проверки подряд.\n\n"
+                    f"VPN на нём при этом работает — недоступно только управление.\n"
+                    f"Обычная причина: не подошёл SSH-ключ (после переезда или "
+                    f"пересоздания ключа) либо сервер выключен.",
+                    parse_mode="Markdown",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("🖥 Серверы", callback_data="servers")
+                    ]]),
+                )
             continue
+
+        if _slave_unreachable.get(sid, 0) >= _UNREACHABLE_ALERT_AFTER:
+            await context.bot.send_message(
+                ADMIN_ID, f"🔌 Связь со слейвом *{_md(label)}* восстановлена.",
+                parse_mode="Markdown",
+            )
+        _slave_unreachable[sid] = 0
 
         state = "ok" if cnt == primary_peers else "bad"
         prev  = _slave_sync_state.get(sid)

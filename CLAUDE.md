@@ -153,7 +153,7 @@ Vpn_AWG/
 | `awg_file_lock()` | Межпроцессный `flock` на `.awg.lock` — бот и TMA разные процессы, `threading.Lock` их не разводит |
 | `load_servers()` / `save_servers()` | Список серверов (primary + slaves) |
 | `create_backup()` | Архив всех конфигов |
-| `post_restore_fixup()` | **После распаковки бэкапа**: раскладывает `ssh/awg_admin_key`→`/root/.ssh/`, `modules.conf`→`/root/`, `bot_persistence.pkl`→`/etc/awg-bot/`, `proxy_bot.env`→`/etc/proxy-bot/`; переписывает NAT-интерфейс в PostUp/PostDown под текущий хост, `SERVER_IP` и primary в servers.json под новый VPS, пересобирает `server_public/private.key` из конфига. Без неё переезд на другой ВПС даёт VPN без интернета |
+| `post_restore_fixup()` | **После распаковки бэкапа**: раскладывает `ssh/awg_admin_key`→`/root/.ssh/`, `modules.conf`→`/root/`, `bot_persistence.pkl`→`/etc/awg-bot/`, `proxy_bot.env`→`/etc/proxy-bot/`; переписывает NAT-интерфейс в PostUp/PostDown под текущий хост, `SERVER_IP` и primary в servers.json под новый VPS, пересобирает `server_public/private.key` из конфига. Ключ из бэкапа заменяет сгенерированный установщиком и прописывается в `authorized_keys` вместо него (строки с `awg-admin` чистятся, чужие ключи не трогаются); при отсутствии ключа в архиве — явное предупреждение, т.к. slave'ы пускают только по ключу. Отдельной строкой сообщает состояние `PasswordAuthentication`: `sshd_config` в бэкап не входит намеренно. Без всей функции переезд на другой ВПС даёт VPN без интернета и потерю управления slave'ами |
 | `_harden_secret_perms()` | `0600` на конфиги клиентов, бэкапы, users.json, server.env |
 | `is_safe_client_name(name)` | Имя безопасно для подстановки в путь: только `[A-Za-z0-9_.-]`, без `..`, не начинается с `.`/`-`. Пропускает все реальные форматы — `User.Device` (бот), дефисы (TMA), имена без точки (vpn.sh) |
 | `can_access_device(user_id, name)` | Права на устройство. Сначала `is_safe_client_name()` — имя с выходом из каталога отклоняется для всех, включая админа |
@@ -223,7 +223,7 @@ Vpn_AWG/
 | `show_server_card(query, idx)` | Карточка сервера: метка _(Основной)_/_(Слейв)_, только domain-эндпоинты |
 | `srv_rename_start/name/emoji/country` | 3-шаговый диалог: name → emoji → country (WAITING_SRV_COUNTRY) |
 | `_sync_peer_to_all_slaves()` | Async синк нового пира на все slave-серверы; возвращает список ошибок — их показывают пользователю и шлют админу, а не только пишут в лог |
-| `_check_slaves_sync(context)` | Job раз в 30 мин: сверяет число пиров primary ↔ каждый slave, шлёт админу алерт с кнопкой «Синхронизировать» при появлении расхождения и «восстановлено» при устранении. Состояние в `_slave_sync_state` — сообщение только на смену состояния, без спама; «нет связи» игнорируется |
+| `_check_slaves_sync(context)` | Job раз в 30 мин: сверяет число пиров primary ↔ каждый slave, шлёт админу алерт с кнопкой «Синхронизировать» при появлении расхождения и «восстановлено» при устранении. Состояние в `_slave_sync_state` — сообщение только на смену состояния, без спама. Потеря связи (`_slave_unreachable`) сообщается после 3 неудач подряд (~1.5 ч) и один раз: это главный симптом «SSH-ключ не подошёл» после восстановления из бэкапа |
 
 ### handlers/clients.py
 | Функция | Назначение |
