@@ -431,7 +431,10 @@ def ssh_clone_awg_to_slave(server: dict) -> None:
         )
         stdout.read(); stderr.read()
 
+        # Помечаем роль: сервер, добавленный слейвом через бота, маркера от
+        # setup.sh --slave не имеет, и диагностика на нём считала себя основной
         _, stdout, stderr = client.exec_command(
+            "touch /etc/awg-slave; "
             "awg-quick down awg0 2>/dev/null; awg-quick up /etc/amnezia/amneziawg/awg0.conf",
             timeout=20
         )
