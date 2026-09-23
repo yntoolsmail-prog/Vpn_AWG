@@ -201,6 +201,7 @@ Vpn_AWG/
 | `ssh_get_slave_sys_stats(server)` | Системные метрики slave за одно SSH-подключение: `{awg_ok, uptime, ram_pct, disk_pct, rx_bytes, tx_bytes}` |
 | `ssh_get_slave_awg_dump(server)` | AWG dump со slave по SSH |
 | `ssh_read_slave_awg_bytes(server)` | Счётчики rx/tx AWG-интерфейса со slave |
+| `upgrade_all_servers()` | Обновление пакетов на primary (локально, `upgrade_packages_local`) и всех slave (`ssh_upgrade_packages`) параллельно. Общий `_UPGRADE_SCRIPT`: `apt-get upgrade --with-new-pkgs` (без флага новые ядра остаются «kept back»), `DEBIAN_FRONTEND=noninteractive` + `--force-confold` (иначе вопрос dpkg вешает обновление), `NEEDRESTART_MODE=l`, `DPkg::Lock::Timeout`. Вывод apt — в `/var/log/awg-upgrade.log`, наружу итог `KEY=VALUE`: код, число пакетов, нужна ли перезагрузка, версии утилит awg и модуля (загружен / на диске). Возвращает `[{label, primary, ok, upgraded, reboot, tools, mod_loaded, mod_disk, error}]`, primary первым |
 | `PARAMIKO_AVAILABLE` | Флаг доступности paramiko |
 
 ### handlers/bandwidth.py
@@ -213,6 +214,12 @@ Vpn_AWG/
 | `_slave_bw_detail` | Модульный кэш — per-server `{id: {awg_down, awg_up}}`. Обновляется в `slave_bw_poll_job`. |
 | `get_slave_bw_detail()` | Геттер `_slave_bw_detail` — используется в `_srv_block_slave()` |
 | `load_bw_peak()["last"]` | **Combined** (primary+slaves) — используется на экране Трафик/пики |
+
+### handlers/maintenance.py
+| Функция | Назначение |
+|---------|-----------|
+| `do_maint_upgrade(query)` | «💿 Бэкап + обновление всех серверов»: бэкап, затем `upgrade_all_servers()` в фоне (`_UPGRADE_TASK`, повторное нажатие блокирует `_UPGRADE_RUNNING`). Отчёт по каждому серверу: пакеты, версии AWG «загружен → после перезагрузки», нужна ли перезагрузка, предупреждение о разных версиях модуля. Серверы бот не перезагружает (клиенты отключились бы) — только советует порядок: слейв → проверка → остальные → основной. Всё прошло — `log_maintenance_done()`; пакеты на основном менялись — перезапуск бота уже после отчёта |
+| `maintenance_reminder` | Раз в 6 месяцев напоминает обновить пакеты на всех серверах |
 
 ### handlers/servers.py
 | Функция | Назначение |

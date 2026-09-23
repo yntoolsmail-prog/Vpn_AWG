@@ -999,3 +999,119 @@ def ssh_remove_socks5_from_slave(server: dict, client_ip: str) -> tuple[bool, st
     finally:
         if client:
             client.close()
+
+
+# ── Обновление пакетов на всех серверах ───────────────────────────────────────
+# Один скрипт выполняется на primary локально и на каждом slave по SSH. Слейвы
+# обновлялись только вручную, и версии amneziawg расходились: у слейва мог
+# оказаться модуль ядра 3.x, у основного — 2.0.
+#
+# --with-new-pkgs: без него apt-get upgrade держит «kept back» всё, что тянет
+#   новые пакеты, — прежде всего новые ядра.
+# noninteractive + confold: вопрос dpkg про изменённый конфиг иначе вешает
+#   обновление навсегда (stdin у бота — /dev/null).
+# NEEDRESTART_MODE=l: needrestart только перечисляет службы, а не перезапускает
+#   их посреди обновления — бот перезапускается сам, после отчёта.
+# Вывод apt уходит в /var/log/awg-upgrade.log, наружу — только итог KEY=VALUE.
+_UPGRADE_TIMEOUT = 1800
+_UPGRADE_SCRIPT = r"""
+export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=l
+APT="apt-get -q -y -o DPkg::Lock::Timeout=600 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold"
+LOG=/var/log/awg-upgrade.log
+{ $APT update && $APT upgrade --with-new-pkgs; } >"$LOG" 2>&1
+RC=$?
+echo "RC=$RC"
+echo "UPGRADED=$(awk '/ upgraded, .* newly installed/{print $1; exit}' "$LOG")"
+echo "REBOOT=$([ -f /var/run/reboot-required ] && echo yes || echo no)"
+echo "TOOLS=$(awg --version 2>/dev/null | grep -oE 'v[0-9][0-9.]*' | head -1)"
+echo "MOD_LOADED=$(cat /sys/module/amneziawg/version 2>/dev/null)"
+echo "MOD_DISK=$(modinfo -F version amneziawg 2>/dev/null)"
+if [ "$RC" -ne 0 ]; then tail -n 3 "$LOG" | sed 's/^/ERR=/'; fi
+exit 0
+"""
+
+
+def _parse_upgrade_output(out: str) -> dict:
+    res = {"ok": False, "upgraded": None, "reboot": False,
+           "tools": "", "mod_loaded": "", "mod_disk": "", "error": ""}
+    errs, seen_rc = [], False
+    for line in out.splitlines():
+        key, sep, val = line.partition("=")
+        if not sep:
+            continue
+        val = val.strip()
+        if key == "RC":
+            seen_rc = True
+            res["ok"] = val == "0"
+        elif key == "UPGRADED":
+            res["upgraded"] = int(val) if val.isdigit() else None
+        elif key == "REBOOT":
+            res["reboot"] = val == "yes"
+        elif key == "TOOLS":
+            res["tools"] = val
+        elif key == "MOD_LOADED":
+            res["mod_loaded"] = val
+        elif key == "MOD_DISK":
+            res["mod_disk"] = val
+        elif key == "ERR" and val:
+            errs.append(val)
+    if not seen_rc:
+        res["error"] = "скрипт обновления не выполнился"
+    elif not res["ok"]:
+        res["error"] = "; ".join(errs) or "apt-get завершился с ошибкой"
+    return res
+
+
+def upgrade_packages_local() -> dict:
+    """apt update + upgrade на этом сервере (primary). Итог — см. _parse_upgrade_output."""
+    import subprocess
+    try:
+        r = subprocess.run(["bash", "-c", _UPGRADE_SCRIPT],
+                           capture_output=True, text=True, timeout=_UPGRADE_TIMEOUT)
+        return _parse_upgrade_output(r.stdout)
+    except subprocess.TimeoutExpired:
+        return {**_parse_upgrade_output(""),
+                "error": f"не уложилось в {_UPGRADE_TIMEOUT // 60} мин, см. /var/log/awg-upgrade.log"}
+    except Exception as e:
+        return {**_parse_upgrade_output(""), "error": str(e)}
+
+
+def ssh_upgrade_packages(server: dict) -> dict:
+    """То же на slave по SSH. Скрипт идёт через stdin `bash -s` — без экранирования."""
+    if not PARAMIKO_AVAILABLE:
+        return {**_parse_upgrade_output(""), "error": "paramiko не установлен"}
+    try:
+        client = _ssh_connect(server.get("ssh", {}))
+    except Exception as e:
+        return {**_parse_upgrade_output(""), "error": f"нет SSH-связи: {e}"}
+    try:
+        # apt пишет в лог, по каналу до самого конца тишина — без keepalive
+        # NAT по пути может закрыть «простаивающее» соединение
+        client.get_transport().set_keepalive(30)
+        stdin, stdout, _ = client.exec_command("bash -s", timeout=_UPGRADE_TIMEOUT)
+        stdin.write(_UPGRADE_SCRIPT)
+        stdin.channel.shutdown_write()
+        return _parse_upgrade_output(stdout.read().decode(errors="replace"))
+    except Exception as e:
+        return {**_parse_upgrade_output(""), "error": f"обновление прервалось: {e}"}
+    finally:
+        client.close()
+
+
+def upgrade_all_servers() -> list:
+    """Обновляет пакеты на primary и всех slave параллельно.
+    Возвращает [{"label", "primary", **итог}, ...], primary первым."""
+    from concurrent.futures import ThreadPoolExecutor
+    jobs = []
+    for srv in load_servers():
+        label = f"{srv.get('emoji', '🖥')} {srv.get('name', 'Сервер')}"
+        if srv.get("is_primary"):
+            jobs.insert(0, (f"{label} (основной)", True, upgrade_packages_local))
+        else:
+            jobs.append((label, False, lambda s=srv: ssh_upgrade_packages(s)))
+    if not any(primary for _, primary, _ in jobs):
+        jobs.insert(0, ("🖥 Основной", True, upgrade_packages_local))
+    with ThreadPoolExecutor(max_workers=len(jobs)) as ex:
+        futures = [(label, primary, ex.submit(fn)) for label, primary, fn in jobs]
+        return [{"label": label, "primary": primary, **f.result()}
+                for label, primary, f in futures]

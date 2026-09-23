@@ -13,7 +13,7 @@ from awg_core import (
     get_admin_pubkey, get_ssh_password_auth_local,
     ssh_toggle_password_auth_all, ssh_regen_admin_key,
     process_domain, run_subnet_daemon,
-    load_servers, post_restore_fixup,
+    load_servers, post_restore_fixup, upgrade_all_servers,
 )
 from .common import back_kb, WAITING_RESTORE_FILE, BTN_BACK, BTN_BACK_MENU, BTN_BACK_MAINT, BTN_CANCEL
 
@@ -438,30 +438,119 @@ async def show_maintenance(query):
         f"🖥 Система: {ubuntu}\n"
         f"⚙️ Ядро: {kernel}\n"
         f"🐍 python-telegram-bot: {ptb_ver}\n\n"
-        f"Рекомендуется проводить раз в 6 месяцев."
+        f"Рекомендуется проводить раз в 6 месяцев.\n"
+        f"Пакеты обновляются сразу на основном и всех слейвах — "
+        f"версии, в том числе AmneziaWG, остаются одинаковыми."
     )
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("💾 Создать бэкап",               callback_data="backup")],
         [InlineKeyboardButton("📥 Восстановить из бэкапа",      callback_data="restore")],
         [InlineKeyboardButton("🔍 Диагностика конфигов",        callback_data="diagnostics")],
-        [InlineKeyboardButton("💿 Бэкап + apt upgrade",         callback_data="maint_upgrade")],
+        [InlineKeyboardButton("💿 Бэкап + обновление всех серверов", callback_data="maint_upgrade")],
         [InlineKeyboardButton("📦 Проверить версию библиотеки", callback_data="maint_ptb")],
         [InlineKeyboardButton("✅ Отмечено — всё ок",            callback_data="maint_done")],
         [InlineKeyboardButton(BTN_BACK_MENU,                       callback_data="settings_menu")],
     ])
     await query.edit_message_text(text, reply_markup=kb)
 
+# Обновление пакетов идёт минутами — в фоне, с защитой от повторного нажатия.
+# Ссылка на задачу держится в модуле: иначе asyncio может собрать её сборщиком.
+_UPGRADE_RUNNING = threading.Event()
+_UPGRADE_TASK = None
+
+
 async def do_maint_upgrade(query):
-    """Бэкап + apt upgrade + перезапуск бота"""
-    from .bandwidth import do_backup
-    await do_backup(query)
-    await query.message.reply_text(
-        "⏳ Запускаю apt upgrade...\n\nЭто займёт пару минут. Бот перезапустится автоматически."
-    )
-    subprocess.Popen(
-        ["bash", "-c", f"apt-get update -qq && apt-get upgrade -y -qq && systemctl restart {BOT_SERVICE}"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-    )
+    """Бэкап + обновление пакетов на основном и всех слейвах, затем отчёт.
+
+    Раньше обновлялся только основной, вслепую (Popen без результата), а слейвы —
+    никогда: версии amneziawg на серверах расходились."""
+    global _UPGRADE_TASK
+    if _UPGRADE_RUNNING.is_set():
+        await query.answer("⏳ Обновление уже идёт — отчёт придёт по завершении.", show_alert=True)
+        return
+    _UPGRADE_RUNNING.set()
+    try:
+        from .bandwidth import do_backup
+        await do_backup(query)
+        n = len(load_servers()) or 1
+        await query.message.reply_text(
+            f"⏳ Обновляю пакеты на всех серверах ({n}) — основной и слейвы параллельно.\n\n"
+            "Обычно это 2–10 минут. Отчёт придёт сюда, после него бот перезапустится."
+        )
+    except Exception:
+        _UPGRADE_RUNNING.clear()
+        raise
+    _UPGRADE_TASK = asyncio.get_running_loop().create_task(_run_upgrade_all(query.message))
+
+
+def _format_upgrade_report(results: list) -> tuple:
+    """Текст отчёта + (все ли серверы обновились, менялись ли пакеты на основном)."""
+    lines = ["📦 Обновление пакетов — итог", ""]
+    all_ok, primary_changed = True, False
+    need_reboot, mod_versions = [], set()
+    for r in results:
+        if not r.get("ok"):
+            all_ok = False
+            lines.append(f"❌ {r['label']}: {r.get('error') or 'ошибка'}")
+            continue
+        n = r.get("upgraded")
+        lines.append(f"✅ {r['label']}: обновлено пакетов — {n if n is not None else '?'}")
+        if r.get("primary") and n:
+            primary_changed = True
+        loaded, disk = r.get("mod_loaded"), r.get("mod_disk")
+        if loaded and disk and loaded != disk:
+            lines.append(f"   AWG: модуль {loaded} → {disk} после перезагрузки, утилиты {r.get('tools') or '?'}")
+        elif loaded or disk:
+            lines.append(f"   AWG: модуль {loaded or disk}, утилиты {r.get('tools') or '?'}")
+        if disk or loaded:
+            mod_versions.add(disk or loaded)
+        if r.get("reboot"):
+            need_reboot.append(r["label"])
+            lines.append("   ⚠️ нужна перезагрузка")
+    lines.append("")
+    if len(mod_versions) > 1:
+        lines.append(
+            "⚠️ Модуль AWG на серверах разных версий: " + ", ".join(sorted(mod_versions)) +
+            ". Держите их одинаковыми — повторите обновление там, где оно не прошло."
+        )
+        lines.append("")
+    if need_reboot:
+        lines.append(
+            "🔄 Перезагрузка нужна: " + ", ".join(need_reboot) + ".\n"
+            "Новое ядро и модуль AWG заработают только после неё. Бот не перезагружает "
+            "серверы сам: на это время клиенты сервера отключаются. Порядок: один слейв → "
+            "проверить подключение клиента → остальные слейвы → основной."
+        )
+        lines.append("")
+    if all_ok:
+        lines.append("✅ Техобслуживание отмечено.")
+    else:
+        lines.append(
+            "Техобслуживание не отмечено: не все серверы обновились. "
+            "Журнал apt — /var/log/awg-upgrade.log на сервере."
+        )
+    if primary_changed:
+        lines.append("🔄 Бот перезапускается…")
+    return "\n".join(lines), all_ok, primary_changed
+
+
+async def _run_upgrade_all(message):
+    try:
+        results = await asyncio.get_running_loop().run_in_executor(None, upgrade_all_servers)
+        text, all_ok, primary_changed = _format_upgrade_report(results)
+        if all_ok:
+            log_maintenance_done()
+        await message.reply_text(text)
+    except Exception as e:
+        logger.exception("Обновление пакетов на серверах прервалось")
+        await message.reply_text(f"❌ Обновление прервалось: {e}")
+        return
+    finally:
+        _UPGRADE_RUNNING.clear()
+    # Перезапуск — после отчёта: systemctl restart убивает и сам процесс бота
+    if primary_changed:
+        subprocess.Popen(["systemctl", "restart", BOT_SERVICE],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 async def do_maint_ptb(query):
     ptb_ver = get_ptb_version()
@@ -471,7 +560,7 @@ async def do_maint_ptb(query):
         f"Список релизов и Breaking Changes:\n"
         f"https://github.com/python-telegram-bot/python-telegram-bot/releases\n\n"
         f"Если мажорная версия не изменилась (например всё ещё 20.x) — "
-        f"достаточно нажать «Бэкап + apt upgrade».\n\n"
+        f"достаточно нажать «Бэкап + обновление всех серверов».\n\n"
         f"Если мажорная версия выросла (20.x → 21.x) — загляните в Breaking Changes. "
         f"Скорее всего потребуется небольшая правка bot.py."
     )
@@ -572,7 +661,8 @@ async def maintenance_reminder(context: ContextTypes.DEFAULT_TYPE):
         text=(
             "🔔 Напоминание о техобслуживании\n\n"
             "Прошло 6 месяцев с последнего обслуживания.\n"
-            "Рекомендуется сделать бэкап и обновить систему."
+            "Рекомендуется сделать бэкап и обновить пакеты — "
+            "сразу на основном и всех слейвах."
         ),
         reply_markup=kb
     )
