@@ -36,9 +36,15 @@ AmneziaWG нативно в kernelspace (300+ мбит) с управление�
 
 ## Установка
 
+Первым делом установщик спросит ветку репозитория — выберите ту же, что в ссылке.
+
+### Основной сервер (бот + AWG)
+
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/Test/setup.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/claude/project-audit-errors-security-4prpuc/setup.sh)
 ```
+
+Без флага установщик спросит роль: `1` — основной, `2` — слейв.
 
 Установщик автоматически:
 1. Проверит и при необходимости обновит ядро
@@ -48,6 +54,21 @@ bash <(curl -fsSL https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/Tes
 5. Установит vnstat и mtr для мониторинга и диагностики сети
 6. Установит Telegram бота и настроит автозапуск
 7. Настроит автозапуск панели управления при SSH-подключении
+
+### Слейв-сервер (дополнительная точка подключения)
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/claude/project-audit-errors-security-4prpuc/setup.sh) --slave
+```
+
+Слейв — копия основного сервера на другом VPS: те же ключи, обфускация и клиенты, поэтому один профиль работает с обоими. Ставится только AWG (MTProxy/SOCKS5 — по желанию), без бота: слейвом управляет бот основного.
+
+После установки:
+1. На **основном** один раз включите модуль управления слейвами: `bash /root/setup.sh --modules` → `slave_servers`.
+2. В боте: `⚙️ Настройки` → `🖥 Серверы` → `➕ Добавить сервер` — IP, SSH-порт, логин и пароль слейва. Бот скопирует на него конфиг основного и переключится на вход по SSH-ключу.
+3. Клиенты выбирают сервер при скачивании конфига.
+
+Перед покупкой или установкой проверьте, что IP нового сервера доступен из России: [check-host.net](https://check-host.net) → `TCP port` → `IP:22` → строки узлов `Russia`.
 
 ---
 
@@ -70,7 +91,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/Tes
 - **🧹 Очистить мусор** — удалить висячие пиры из AWG которых нет в конфиге
 - **💾 Бэкап** — архив конфигов, ключей и данных пользователей
 - **📥 Восстановить из бэкапа** — перенос на новый сервер
-- **🔧 Техобслуживание** — обновление системы, смена IP, смена часового пояса (список или ручной ввод), проверка версии библиотеки, напоминание раз в 6 месяцев
+- **🔧 Техобслуживание** — обновление пакетов на всех серверах, смена IP, смена часового пояса (список или ручной ввод), проверка версии библиотеки, напоминание раз в 6 месяцев
 
 ### Регистрация пользователей
 
@@ -209,20 +230,11 @@ systemctl restart awg-bot
 <details>
 <summary><sub>Обновление</sub></summary>
 
-**Проще всего** — через Telegram бота: `🔧 Техобслуживание` → `💾 Бэкап + apt upgrade`. Там же можно обновить python-telegram-bot и проверить версии.
+**Пакеты системы** — через Telegram бота: `🔧 Техобслуживание` → `💿 Бэкап + обновление всех серверов`. Обновляет пакеты сразу на основном и всех слейвах, чтобы версии AmneziaWG совпадали, и присылает отчёт: какие серверы нужно перезагрузить. Там же — проверка версии python-telegram-bot.
 
-**Из терминала:**
+**Файлы проекта** (бот, скрипты):
 ```bash
-bash /root/vpn.sh  # → Обновление
-```
-
-**Вручную (из ветки `main`):**
-```bash
-curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/bot.py -o /root/bot.py
-curl -s https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/vpn.sh -o /root/vpn.sh
-chmod +x /root/vpn.sh && systemctl restart awg-bot
-
-apt-get update && apt-get upgrade -y && systemctl restart awg-bot
+bash /root/setup.sh --update   # или bash /root/vpn.sh → Обновление
 ```
 
 Конфиги, ключи и данные клиентов не затрагиваются.
