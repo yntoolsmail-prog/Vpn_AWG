@@ -1018,9 +1018,6 @@ log "IP форвардинг..."
 echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-awg-forward.conf
 sysctl -p /etc/sysctl.d/99-awg-forward.conf
 
-log "Запуск AWG интерфейса ${VPN_IFACE}..."
-awg-quick up "/etc/amnezia/amneziawg/${VPN_IFACE}.conf"
-
 log "Автозапуск AWG..."
 cat > /etc/systemd/system/awg-quick@.service << 'EOF'
 [Unit]
@@ -1038,7 +1035,11 @@ ExecStop=/usr/bin/awg-quick down /etc/amnezia/amneziawg/%i.conf
 WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
-systemctl enable "awg-quick@${VPN_IFACE}"
+# Поднимаем через systemd, а не голым awg-quick up: иначе служба до первой
+# перезагрузки числилась inactive — бот показывал «AWG: не работает» при живом
+# интерфейсе, а «Перезапустить AWG» падал на «awg0 already exists».
+log "Запуск AWG интерфейса ${VPN_IFACE}..."
+systemctl enable --now "awg-quick@${VPN_IFACE}"
 
 # ── Шаг 8: Часовой пояс ──────────────────────────────────────────────────────
 echo ""

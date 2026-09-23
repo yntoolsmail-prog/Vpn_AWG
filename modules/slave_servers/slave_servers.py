@@ -40,6 +40,28 @@ def _back_kb(target: str = "back") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[InlineKeyboardButton("◀️ В меню", callback_data=target)]])
 
 
+# «Enter = 22» не работало: Telegram не отправляет пустое сообщение. Значение по
+# умолчанию — кнопка под вопросом, её нажатие читается как пустой ввод.
+# (Модуль не зависит от handlers бота, поэтому своя копия помощника из common.py.)
+_SKIP_CB = "srv_add_skip"
+
+
+def _skip_kb(label: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton(label, callback_data=_SKIP_CB)]])
+
+
+async def _read_text_or_skip(update) -> str:
+    query = update.callback_query
+    if query:
+        await query.answer()
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        return ""
+    return (update.message.text or "").strip()
+
+
 # ── Шаги диалога ──────────────────────────────────────────────────────────────
 
 async def srv_add_start(update, context: ContextTypes.DEFAULT_TYPE):
@@ -57,17 +79,18 @@ async def srv_add_ip(update, context: ContextTypes.DEFAULT_TYPE):
     ip = update.message.text.strip()
     context.user_data["srv_add"]["ip"] = ip
     await update.message.reply_text(
-        f"IP: `{ip}`\n\nВведите SSH-порт (Enter = 22):",
-        parse_mode="Markdown"
+        f"IP: `{ip}`\n\nВведите SSH-порт:",
+        parse_mode="Markdown",
+        reply_markup=_skip_kb("22 (стандартный)"),
     )
     return WAITING_SRV_PORT
 
 
 async def srv_add_port(update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
+    text = await _read_text_or_skip(update)
     port = int(text) if text.isdigit() else 22
     context.user_data["srv_add"]["port"] = port
-    await update.message.reply_text("Введите логин SSH:")
+    await update.effective_chat.send_message(f"Порт: {port}\n\nВведите логин SSH:")
     return WAITING_SRV_LOGIN
 
 
@@ -122,23 +145,24 @@ async def srv_add_password(update, context: ContextTypes.DEFAULT_TYPE):
 async def srv_add_name(update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["srv_add"]["name"] = update.message.text.strip()
     await update.message.reply_text(
-        "Введите эмодзи/флаг (например: 🇩🇪 🇫🇮 🇷🇺), или Enter для 🖥:"
+        "Введите эмодзи/флаг (например: 🇩🇪 🇫🇮 🇷🇺):",
+        reply_markup=_skip_kb("🖥 Без флага"),
     )
     return WAITING_SRV_EMOJI
 
 
 async def srv_add_emoji(update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
+    text = await _read_text_or_skip(update)
     context.user_data["srv_add"]["emoji"] = text if text else "🖥"
-    await update.message.reply_text(
-        "Введите название страны на русском (например: Голландия, Финляндия),\n"
-        "или Enter чтобы пропустить:"
+    await update.effective_chat.send_message(
+        "Введите название страны на русском (например: Голландия, Финляндия):",
+        reply_markup=_skip_kb("Пропустить"),
     )
     return WAITING_SRV_COUNTRY
 
 
 async def srv_add_country(update, context: ContextTypes.DEFAULT_TYPE):
-    country = update.message.text.strip()
+    country = await _read_text_or_skip(update)
     d = context.user_data.pop("srv_add", {})
 
     servers = load_servers()
@@ -162,7 +186,7 @@ async def srv_add_country(update, context: ContextTypes.DEFAULT_TYPE):
     save_servers(servers)
 
     srv_label = f"*{d.get('emoji', '🖥')} {d.get('name', 'Сервер')}*"
-    await update.message.reply_text(
+    await update.effective_chat.send_message(
         f"✅ Сервер {srv_label} добавлен!\n\n"
         f"IP `{d.get('ip', '')}` добавлен как первый эндпоинт.\n"
         f"Откройте карточку сервера чтобы добавить домены.",
@@ -173,7 +197,7 @@ async def srv_add_country(update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     if PARAMIKO_AVAILABLE:
-        clone_msg = await update.message.reply_text(
+        clone_msg = await update.effective_chat.send_message(
             "🔄 Клонирую конфиг AWG на slave (ключи + клиенты)…"
         )
         try:
@@ -203,7 +227,7 @@ async def srv_add_country(update, context: ContextTypes.DEFAULT_TYPE):
                     s["ssh"]["password"] = ""
                     break
             save_servers(servers_upd)
-            await update.message.reply_text(
+            await update.effective_chat.send_message(
                 "🔑 SSH-ключ администратора установлен на slave.\n"
                 "Подключение бота переключено на key-auth."
             )
@@ -229,12 +253,15 @@ def register_handlers(app) -> None:
         entry_points=[CallbackQueryHandler(srv_add_start, pattern="^srv_add$")],
         states={
             WAITING_SRV_IP:       [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_add_ip)],
-            WAITING_SRV_PORT:     [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_add_port)],
+            WAITING_SRV_PORT:     [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_add_port),
+                                   CallbackQueryHandler(srv_add_port, pattern=f"^{_SKIP_CB}$")],
             WAITING_SRV_LOGIN:    [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_add_login)],
             WAITING_SRV_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_add_password)],
             WAITING_SRV_NAME:     [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_add_name)],
-            WAITING_SRV_EMOJI:    [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_add_emoji)],
-            WAITING_SRV_COUNTRY:  [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_add_country)],
+            WAITING_SRV_EMOJI:    [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_add_emoji),
+                                   CallbackQueryHandler(srv_add_emoji, pattern=f"^{_SKIP_CB}$")],
+            WAITING_SRV_COUNTRY:  [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_add_country),
+                                   CallbackQueryHandler(srv_add_country, pattern=f"^{_SKIP_CB}$")],
         },
         fallbacks=[
             CommandHandler("cancel", srv_add_cancel),

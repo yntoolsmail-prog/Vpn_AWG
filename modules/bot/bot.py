@@ -783,8 +783,10 @@ def main():
         entry_points=[CallbackQueryHandler(srv_rename_start, pattern="^srv_rename_\\d+$")],
         states={
             WAITING_SRV_EDIT_NAME:  [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_rename_name)],
-            WAITING_SRV_EDIT_EMOJI: [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_rename_emoji)],
-            WAITING_SRV_COUNTRY:    [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_rename_country)],
+            WAITING_SRV_EDIT_EMOJI: [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_rename_emoji),
+                                     CallbackQueryHandler(srv_rename_emoji, pattern="^srv_rename_skip$")],
+            WAITING_SRV_COUNTRY:    [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_rename_country),
+                                     CallbackQueryHandler(srv_rename_country, pattern="^srv_rename_skip$")],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         per_chat=True,

@@ -308,7 +308,9 @@ def ssh_get_slave_sys_stats(server: dict) -> dict:
         client = _ssh_connect(ssh, timeout=8)
         try:
             cmd = (
-                f"systemctl is-active awg-quick@{AWG_IFACE} 2>/dev/null; echo ---SEP---;"
+                # Живой интерфейс, а не состояние службы: поднятый вручную
+                # (setup.sh до исправления, awg-quick up) числится inactive
+                f"test -d /sys/class/net/{AWG_IFACE} && echo active; echo ---SEP---;"
                 "uptime -p 2>/dev/null; echo ---SEP---;"
                 "free -m 2>/dev/null | awk 'NR==2{print $2, $7}'; echo ---SEP---;"
                 "df / 2>/dev/null | awk 'NR==2{print $5}'; echo ---SEP---;"
@@ -475,10 +477,15 @@ def ssh_clone_awg_to_slave(server: dict) -> None:
 
         # Помечаем роль: сервер, добавленный слейвом через бота, маркера от
         # setup.sh --slave не имеет, и диагностика на нём считала себя основной
+        # Перезапуск через systemd, чтобы служба знала о поднятом интерфейсе.
+        # stop гасит поднятый службой, down — поднятый вручную; голый awg-quick up
+        # — только если службы нет (слейв поставлен не нашим setup.sh).
         _, stdout, stderr = client.exec_command(
             "touch /etc/awg-slave; "
-            "awg-quick down awg0 2>/dev/null; awg-quick up /etc/amnezia/amneziawg/awg0.conf",
-            timeout=20
+            "systemctl stop awg-quick@awg0 2>/dev/null; awg-quick down awg0 2>/dev/null; "
+            "systemctl enable --now awg-quick@awg0 2>/dev/null "
+            "|| awg-quick up /etc/amnezia/amneziawg/awg0.conf",
+            timeout=30
         )
         stdout.read()
         err = stderr.read().decode().strip()

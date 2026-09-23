@@ -37,6 +37,26 @@ def back_kb(target="back"):
     return InlineKeyboardMarkup([[InlineKeyboardButton(BTN_BACK_MENU, callback_data=target)]])
 
 
+# Шаги диалогов «нажмите Enter, чтобы пропустить» не работали: Telegram не
+# отправляет пустое сообщение (и сообщение из одних пробелов). Поэтому значение
+# по умолчанию — inline-кнопка под вопросом, а её нажатие читается как пустой ввод.
+def skip_kb(label: str, callback: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton(label, callback_data=callback)]])
+
+
+async def read_text_or_skip(update) -> str:
+    """Текст ответа в диалоге или "" — если нажата кнопка из skip_kb()."""
+    query = update.callback_query
+    if query:
+        await query.answer()
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        return ""
+    return (update.message.text or "").strip()
+
+
 def _tma_button() -> InlineKeyboardButton | None:
     """Возвращает кнопку открытия TMA или None если URL не настроен."""
     if not TMA_URL:

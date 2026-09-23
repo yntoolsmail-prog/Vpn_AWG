@@ -1,6 +1,6 @@
-import asyncio, re, time
+import asyncio, os, re, time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes
+from telegram.ext import ContextTypes, ConversationHandler
 from awg_core import (
     ADMIN_ID, AWG_IFACE, AWG_CONF, SERVER_IP, SERVER_PORT, SERVER_PUBLIC,
     SERVER_ENDPOINT, SERVER_ENDPOINT_BACKUP,
@@ -16,7 +16,7 @@ from awg_core import (
     ssh_get_slave_peer_count as _ssh_get_slave_peer_count,
     ssh_get_slave_sys_stats as _ssh_get_slave_sys_stats,
 )
-from .common import _md, back_kb, WAITING_SRV_DOMAIN, WAITING_SRV_EDIT_NAME, WAITING_SRV_EDIT_EMOJI, WAITING_SRV_COUNTRY, BTN_BACK, BTN_BACK_MENU, BTN_CANCEL, BTN_BACK_CARD
+from .common import _md, back_kb, skip_kb, read_text_or_skip, WAITING_SRV_DOMAIN, WAITING_SRV_EDIT_NAME, WAITING_SRV_EDIT_EMOJI, WAITING_SRV_COUNTRY, BTN_BACK, BTN_BACK_MENU, BTN_CANCEL, BTN_BACK_CARD
 
 
 def _count_peers_in_conf(conf_text: str) -> int:
@@ -47,8 +47,10 @@ def _srv_block_primary() -> str:
     awg_down = bw.get("awg_down", 0)
     awg_up   = bw.get("awg_up", 0)
 
+    # Раньше строка была зашита «🟢 работает» и не менялась, даже если AWG лёг
+    awg_ok = os.path.isdir(f"/sys/class/net/{AWG_IFACE}")
     lines = [
-        f"🟢 AWG: работает",
+        f"{'🟢' if awg_ok else '🔴'} AWG: {'работает' if awg_ok else 'не работает'}",
         f"🖥 IP: {SERVER_IP}:{SERVER_PORT}",
         f"⏱ Uptime: {sys_s['uptime']}",
         "",
@@ -636,20 +638,21 @@ async def srv_rename_start(update, context: ContextTypes.DEFAULT_TYPE):
 async def srv_rename_name(update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["srv_rename"]["name"] = update.message.text.strip()
     await update.message.reply_text(
-        "Введите эмодзи/флаг (например: 🇳🇱), или отправьте пробел чтобы оставить текущий:"
+        "Введите эмодзи/флаг (например: 🇳🇱):",
+        reply_markup=skip_kb("Оставить текущий", "srv_rename_skip"),
     )
     return WAITING_SRV_EDIT_EMOJI
 
 
 async def srv_rename_emoji(update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["srv_rename"]["emoji"] = update.message.text.strip()
+    context.user_data["srv_rename"]["emoji"] = await read_text_or_skip(update)
     srv_idx = context.user_data["srv_rename"]["srv_idx"]
     servers = load_servers()
     current_country = servers[srv_idx].get("country", "") if srv_idx < len(servers) else ""
     hint = f" (текущее: {current_country})" if current_country else " (не задано)"
-    await update.message.reply_text(
-        f"Введите название страны на русском (например: Голландия, Финляндия),\n"
-        f"или пробел чтобы оставить текущее{hint}:"
+    await update.effective_chat.send_message(
+        f"Введите название страны на русском (например: Голландия, Финляндия){hint}:",
+        reply_markup=skip_kb("Оставить текущее", "srv_rename_skip"),
     )
     return WAITING_SRV_COUNTRY
 
@@ -659,11 +662,11 @@ async def srv_rename_country(update, context: ContextTypes.DEFAULT_TYPE):
     srv_idx     = d.get("srv_idx", 0)
     new_name    = d.get("name", "").strip()
     new_emoji   = d.get("emoji", "").strip()
-    new_country = update.message.text.strip()
+    new_country = await read_text_or_skip(update)
 
     servers = load_servers()
     if srv_idx >= len(servers):
-        await update.message.reply_text("❌ Сервер не найден.")
+        await update.effective_chat.send_message("❌ Сервер не найден.")
         return ConversationHandler.END
     srv = servers[srv_idx]
     if new_name:    srv["name"]    = new_name
@@ -671,7 +674,7 @@ async def srv_rename_country(update, context: ContextTypes.DEFAULT_TYPE):
     if new_country: srv["country"] = new_country
     servers[srv_idx] = srv
     save_servers(servers)
-    await update.message.reply_text(
+    await update.effective_chat.send_message(
         f"✅ Сервер обновлён: *{srv['emoji']} {srv['name']}*",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([[
