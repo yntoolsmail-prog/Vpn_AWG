@@ -12,16 +12,28 @@
 # Version: 3.2
 
 set -e
+# lib/*.sh ищем рядом со скриптом (клон репозитория), затем в /root/lib
+# (установленная копия). При чистой установке через bash <(curl …) нет ни того,
+# ни другого: $0 — это /dev/fd/63, а /root/lib ещё не создан. Раньше установщик
+# падал здесь же, на source. Теперь до выбора ветки обходимся минимальными
+# цветами и log/warn/err, а полные lib/*.sh скачиваются из выбранной ветки ниже.
 _LIB="$(dirname "$0")/lib"
 [[ ! -f "$_LIB/colors.sh" ]] && _LIB="/root/lib"
-# shellcheck source=lib/colors.sh
-source "$_LIB/colors.sh"
-# shellcheck source=lib/utils.sh
-source "$_LIB/utils.sh"
-# shellcheck source=lib/modules_setup.sh
-source "$_LIB/modules_setup.sh"
-# shellcheck source=lib/ssh_setup.sh
-source "$_LIB/ssh_setup.sh"
+if [[ -f "$_LIB/colors.sh" && -f "$_LIB/utils.sh" ]]; then
+    # shellcheck source=lib/colors.sh
+    source "$_LIB/colors.sh"
+    # shellcheck source=lib/utils.sh
+    source "$_LIB/utils.sh"
+    _LIB_READY=1
+else
+    RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
+    log()  { echo -e "${GREEN}[+]${NC} $1"; }
+    ok()   { echo -e "${GREEN}[✓]${NC} $1"; }
+    warn() { echo -e "${YELLOW}[!]${NC} $1"; }
+    err()  { echo -e "${RED}[✗]${NC} $1"; exit 1; }
+    info() { echo -e "${CYAN}[i]${NC} $1"; }
+    _LIB_READY=0
+fi
 
 # Ждёт освобождения dpkg-блокировки перед apt-get
 _wait_apt_lock() {
@@ -132,6 +144,27 @@ if [[ "$REPO_BRANCH" != "main" && -z "$_REEXEC_BRANCH" ]]; then
         warn "Не удалось загрузить setup.sh из ветки. Продолжаю с текущей версией."
     fi
 fi
+
+# ── lib/*.sh ──────────────────────────────────────────────────────────────────
+# Ветка известна. Если в начале lib/ не нашлась (чистая установка), скачиваем её
+# из этой ветки в /root/lib — там же её потом ищут vpn.sh и повторные запуски.
+if [[ "$_LIB_READY" -ne 1 ]]; then
+    info "Загружаю вспомогательные скрипты (ветка ${REPO_BRANCH})..."
+    mkdir -p /root/lib
+    for _f in colors.sh utils.sh diagnostics.sh ssh_setup.sh modules_setup.sh; do
+        curl -fsSL --max-time 30 "${REPO_RAW}/lib/${_f}" -o "/root/lib/${_f}.new" \
+            && mv "/root/lib/${_f}.new" "/root/lib/${_f}" \
+            || { rm -f "/root/lib/${_f}.new"
+                 err "Нет lib/${_f} в ветке ${REPO_BRANCH} — перезапустите установщик и выберите другую ветку"; }
+    done
+    _LIB="/root/lib"
+    source "$_LIB/colors.sh"
+    source "$_LIB/utils.sh"
+fi
+# shellcheck source=lib/modules_setup.sh
+source "$_LIB/modules_setup.sh"
+# shellcheck source=lib/ssh_setup.sh
+source "$_LIB/ssh_setup.sh"
 
 # ── Режим ─────────────────────────────────────────────────────────────────────
 # SLAVE_MODE=1 → устанавливаем только AWG + модули, без бота/TMA/Python
@@ -1089,13 +1122,19 @@ printf "REPO_BRANCH=%s\n" "$REPO_BRANCH" \
     >> /etc/amnezia/amneziawg/server.env
 
 # ── Шаг 10: Скачиваем скрипты ─────────────────────────────────────────────────
-log "Загрузка скриптов управления (ветка: ${REPO_BRANCH})..."
-curl -fsSL "${REPO_RAW}/vpn.sh"                    -o /root/vpn.sh                    || err "Не удалось скачать vpn.sh"
-mkdir -p /root/modules/bot
-curl -fsSL "${REPO_RAW}/modules/bot/bot.py"        -o /root/modules/bot/bot.py        || err "Не удалось скачать bot.py"
-curl -fsSL "${REPO_RAW}/awg_core.py"               -o /root/awg_core.py               || err "Не удалось скачать awg_core.py"
-curl -fsSL "${REPO_RAW}/sites_data.py"    -o /root/sites_data.py    || err "Не удалось скачать sites_data.py"
-curl -fsSL "${REPO_RAW}/module_loader.py" -o /root/module_loader.py || err "Не удалось скачать module_loader.py"
+log "Загрузка файлов проекта (ветка: ${REPO_BRANCH})..."
+# Тот же список, что у --update. Раньше здесь качалась лишь часть файлов — без
+# awg_clients/awg_stats/awg_ssh, обработчиков бота и lib/, — и на чистом сервере
+# бот падал при импорте: работали только серверы, обновлённые через --update.
+mkdir -p /root/lib /root/modules/bot/handlers
+for entry in "${PROJECT_FILES[@]}"; do
+    src_file="${entry%%:*}"
+    dst_file="${entry##*:}"
+    # TMA и slave_servers — отдельные модули, их ставит меню модулей
+    [[ "$src_file" == modules/tma/* || "$src_file" == tma/* \
+       || "$src_file" == modules/slave_servers/* ]] && continue
+    curl -fsSL "${REPO_RAW}/${src_file}" -o "$dst_file" || err "Не удалось скачать ${src_file}"
+done
 curl -fsSL "${REPO_RAW}/modules.conf"     -o /root/modules.conf     || err "Не удалось скачать modules.conf"
 
 # ── Модули: создаём структуру каталогов и манифесты ──────────────────────────
