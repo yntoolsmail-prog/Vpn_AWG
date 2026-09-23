@@ -187,12 +187,17 @@ run_diagnostics() {
         # ── Обфускация: что реально применено к интерфейсу ────────────────────
         # Пакет клиента с заголовком H1, которого сервер не ждёт, отбрасывается
         # молча: ни ошибки, ни строки в логе — просто нет хендшейка. Поэтому
-        # сверяем интерфейс с конфигом, а H1–H4 = 1–4 считаем тревогой отдельно:
-        # это стандартные заголовки WireGuard, а setup.sh всегда генерирует свои —
-        # с ними выпущены конфиги клиентов.
+        # сверяем интерфейс с awg0.conf, а на основном — ещё и с server.env:
+        # из него gen_obfs() собирает конфиги клиентов. На слейве server.env
+        # остаётся от его собственной установки и эталоном не является.
         echo "--- Обфускация: awg0.conf ↔ интерфейс ---"
-        local OBF_KEY OBF_CONF OBF_LIVE OBF_DEF OBF_MISMATCH=0 OBF_DEFAULT_H=1 OBF_ABSENT=0
-        printf "  %-6s %-24s %s\n" "ПАРАМ" "awg0.conf" "ИНТЕРФЕЙС"
+        local OBF_KEY OBF_CONF OBF_LIVE OBF_DEF OBF_ENV OBF_ENV_NAME
+        local OBF_MISMATCH=0 OBF_ENV_MISMATCH=0 OBF_DEFAULT_H=1 OBF_ABSENT=0
+        if [[ "$IS_SLAVE" -eq 0 ]]; then
+            printf "  %-6s %-22s %-22s %s\n" "ПАРАМ" "awg0.conf" "server.env" "ИНТЕРФЕЙС"
+        else
+            printf "  %-6s %-22s %s\n" "ПАРАМ" "awg0.conf" "ИНТЕРФЕЙС"
+        fi
         for OBF_KEY in Jc Jmin Jmax S1 S2 H1 H2 H3 H4; do
             case "$OBF_KEY" in
                 H1) OBF_DEF=1 ;; H2) OBF_DEF=2 ;; H3) OBF_DEF=3 ;; H4) OBF_DEF=4 ;;
@@ -217,8 +222,20 @@ run_diagnostics() {
                 OBF_DEFAULT_H=0
             fi
             [[ -z "$OBF_CONF" ]] && OBF_ABSENT=1
-            # printf выравнивает по байтам, поэтому в колонке только ASCII
-            printf "  %-6s %-24s %s%s\n" "$OBF_KEY" "${OBF_CONF:--}" "${OBF_LIVE:-?}" "$OBF_MARK"
+            # printf выравнивает по байтам, поэтому в колонках только ASCII
+            if [[ "$IS_SLAVE" -eq 0 ]]; then
+                # JC/JMIN/…/H4 — переменные из server.env, его подключает vpn.sh
+                OBF_ENV_NAME="${OBF_KEY^^}"
+                OBF_ENV=$(_diag_norm_range "${!OBF_ENV_NAME}")
+                if [[ -n "$OBF_ENV" && "$OBF_ENV" != "$OBF_LIVE" ]]; then
+                    OBF_ENV_MISMATCH=1
+                    OBF_MARK="  ⚠️"
+                fi
+                printf "  %-6s %-22s %-22s %s%s\n" "$OBF_KEY" "${OBF_CONF:--}" "${OBF_ENV:--}" \
+                    "${OBF_LIVE:-?}" "$OBF_MARK"
+            else
+                printf "  %-6s %-22s %s%s\n" "$OBF_KEY" "${OBF_CONF:--}" "${OBF_LIVE:-?}" "$OBF_MARK"
+            fi
         done
         if [[ "$OBF_ABSENT" -eq 1 ]]; then
             echo "  (- = не задан в awg0.conf: действует значение по умолчанию —"
@@ -228,15 +245,26 @@ run_diagnostics() {
             echo "  ⚠️  Интерфейс работает НЕ с теми параметрами, что записаны в awg0.conf."
             echo "      Клиенты с параметрами из конфига не пройдут хендшейк. Частая"
             echo "      причина — утилиты и модуль разных версий (см. «Версии AmneziaWG»)."
-        elif [[ "$OBF_DEFAULT_H" -eq 1 ]]; then
-            echo "  ⚠️  H1–H4 = 1–4 — стандартные заголовки WireGuard, обфускации заголовков нет."
-            echo "      Конфиги клиентов выпущены со случайными H1–H4 — их пакеты этот"
-            echo "      сервер молча отбрасывает. Сверьте с основным: awg show awg0 | head -16"
-            if [[ "$IS_SLAVE" -eq 1 ]]; then
-                echo "      Лечится кнопкой «Синхронизировать» в карточке сервера в боте."
+        fi
+        if [[ "$OBF_ENV_MISMATCH" -eq 1 ]]; then
+            echo "  ⚠️  server.env расходится с интерфейсом: конфиги клиентов собираются"
+            echo "      из server.env, поэтому новые и перевыпущенные не пройдут хендшейк."
+        fi
+        if [[ "$OBF_MISMATCH" -eq 0 && "$OBF_ENV_MISMATCH" -eq 0 ]]; then
+            if [[ "$IS_SLAVE" -eq 0 ]]; then
+                echo "  ✅ Интерфейс работает с параметрами из awg0.conf и server.env"
+            else
+                echo "  ✅ Интерфейс работает с параметрами из awg0.conf"
+                echo "     (сверьте с основным: там должны быть те же значения)"
             fi
-        else
-            echo "  ✅ Интерфейс работает с параметрами из awg0.conf"
+        fi
+        # 1–4 — не поломка: так ставил setup.sh 13 апреля, и клиенты тех установок
+        # выпущены с ними же. Но хендшейк тогда — обычный WireGuard-пакет, и
+        # маскируют его только junk-пакеты (Jc), что DPI распознаёт легче.
+        if [[ "$OBF_DEFAULT_H" -eq 1 ]]; then
+            echo "  ℹ️  H1–H4 = 1–4 — стандартные заголовки WireGuard: хендшейк маскируют"
+            echo "      только junk-пакеты (Jc). Работает, если у клиентов тоже 1–4,"
+            echo "      но DPI такой трафик распознаёт легче, чем со случайными H1–H4."
         fi
         echo ""
 
