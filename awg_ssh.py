@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # awg_ssh.py — SSH-управление slave-серверами: AWG, MTProxy, SOCKS5
-import os, logging
+import os, re, logging
 
 logger = logging.getLogger(__name__)
 
@@ -384,6 +384,30 @@ def ssh_read_slave_env(ip: str, port: int, login: str, password: str) -> None:
         raise ValueError("AmneziaWG не установлен — /etc/amnezia/amneziawg/awg0.conf не найден")
 
 
+# Параметры обфускации, которые сверяются после клонирования: слейв с чужими
+# H1–H4 молча отбрасывает пакеты клиентов, и хендшейка просто нет
+_OBFS_PARAMS = ("jc", "jmin", "jmax", "s1", "s2", "h1", "h2", "h3", "h4")
+
+
+def _norm_obfs(value: str) -> str:
+    """«5-5» и «5» — одно значение: awg 3.x печатает H1–H4 диапазоном, старые — числом."""
+    lo, sep, hi = value.strip().partition("-")
+    return lo if sep and lo == hi else value.strip()
+
+
+def _local_obfs() -> list:
+    import subprocess
+    out = []
+    for p in _OBFS_PARAMS:
+        try:
+            r = subprocess.run(["awg", "show", AWG_IFACE, p],
+                               capture_output=True, text=True, timeout=5)
+            out.append(_norm_obfs(r.stdout) if r.returncode == 0 else "")
+        except Exception:
+            out.append("")
+    return out
+
+
 def ssh_clone_awg_to_slave(server: dict) -> None:
     """Клонирует AWG-конфиг с primary на slave: одинаковые ключи, обфускация, все клиенты.
     Slave становится точной копией primary — клиентские конфиги совместимы с обоими серверами."""
@@ -404,6 +428,22 @@ def ssh_clone_awg_to_slave(server: dict) -> None:
             timeout=5
         )
         slave_post_lines = stdout.read().decode().strip().splitlines()
+        if not slave_post_lines:
+            # Конфига на слейве нет или он пуст — без PostUp AWG поднимется без
+            # NAT: хендшейк есть, интернета нет. Правила — под его внешний интерфейс
+            _, stdout, _ = client.exec_command(
+                "ip -4 route show default | awk '{for(i=1;i<NF;i++) if($i==\"dev\"){print $(i+1); exit}}'",
+                timeout=5
+            )
+            wan = stdout.read().decode().strip()
+            if not re.fullmatch(r"[A-Za-z0-9_.-]{1,15}", wan):
+                wan = "eth0"
+            slave_post_lines = [
+                f"PostUp = iptables -A FORWARD -i awg0 -j ACCEPT; iptables -A FORWARD -o awg0 -j ACCEPT; "
+                f"iptables -t nat -A POSTROUTING -o {wan} -j MASQUERADE",
+                f"PostDown = iptables -D FORWARD -i awg0 -j ACCEPT; iptables -D FORWARD -o awg0 -j ACCEPT; "
+                f"iptables -t nat -D POSTROUTING -o {wan} -j MASQUERADE",
+            ]
 
         # Заменяем PostUp/PostDown в конфиге primary на slave-версию
         new_conf_lines = []
@@ -421,8 +461,10 @@ def ssh_clone_awg_to_slave(server: dict) -> None:
         chan.exec_command("cat > /etc/amnezia/amneziawg/awg0.conf")
         chan.sendall(new_conf.encode())
         chan.shutdown_write()
-        chan.recv_exit_status()
+        rc = chan.recv_exit_status()
         chan.close()
+        if rc != 0:
+            raise RuntimeError(f"запись awg0.conf на слейве не удалась (код {rc})")
 
         _, stdout, stderr = client.exec_command(
             f"sed -i 's|^SERVER_PUBLIC=.*|SERVER_PUBLIC={SERVER_PUBLIC}|' "
@@ -438,7 +480,38 @@ def ssh_clone_awg_to_slave(server: dict) -> None:
             "awg-quick down awg0 2>/dev/null; awg-quick up /etc/amnezia/amneziawg/awg0.conf",
             timeout=20
         )
-        stdout.read(); stderr.read()
+        stdout.read()
+        err = stderr.read().decode().strip()
+        if stdout.channel.recv_exit_status() != 0:
+            last = err.splitlines()[-1] if err else "без вывода"
+            raise RuntimeError(f"awg-quick up на слейве не прошёл: {last}")
+
+        # Контроль результата: слейв должен отвечать ключом и обфускацией primary.
+        # Раньше успех рапортовался всегда, а клиенты при расхождении молча не
+        # проходили хендшейк — например, когда утилиты awg и модуль ядра на
+        # слейве из разных версий и H1–H4 не применяются.
+        cmd = "awg show awg0 public-key 2>/dev/null || echo; " + "; ".join(
+            f"awg show awg0 {p} 2>/dev/null || echo" for p in _OBFS_PARAMS
+        )
+        _, stdout, _ = client.exec_command(cmd, timeout=10)
+        lines = stdout.read().decode().splitlines()
+        lines += [""] * (1 + len(_OBFS_PARAMS) - len(lines))
+        remote_pub = lines[0].strip()
+        if remote_pub != SERVER_PUBLIC:
+            raise RuntimeError(
+                f"ключ сервера на слейве не совпал с primary: {remote_pub or 'AWG не отвечает'}"
+            )
+        remote = [_norm_obfs(v) for v in lines[1:1 + len(_OBFS_PARAMS)]]
+        diff = [
+            f"{p}: primary={a} слейв={b}"
+            for p, a, b in zip(_OBFS_PARAMS, _local_obfs(), remote)
+            if a and b and a != b
+        ]
+        if diff:
+            raise RuntimeError(
+                "обфускация на слейве не применилась (" + "; ".join(diff) + "). "
+                "Сверьте версии: awg --version и cat /sys/module/amneziawg/version"
+            )
     finally:
         client.close()
 

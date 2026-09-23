@@ -4,6 +4,16 @@
 # =============================================================================
 # Используется из vpn.sh. Переменные (SERVER_IP, VPN_IFACE, и др.) — из родительского скрипта.
 
+# Диапазон «5-5» и число «5» — одно значение: awg 3.x печатает H1–H4
+# диапазоном, старые утилиты — числом
+_diag_norm_range() {
+    local v="$1"
+    if [[ "$v" =~ ^([0-9]+)-([0-9]+)$ && "${BASH_REMATCH[1]}" == "${BASH_REMATCH[2]}" ]]; then
+        v="${BASH_REMATCH[1]}"
+    fi
+    echo "$v"
+}
+
 run_diagnostics() {
     show_header
     echo -e "${BOLD}  Полная диагностика системы${NC}"
@@ -20,13 +30,15 @@ run_diagnostics() {
     #
     # Маркер /etc/awg-slave создаёт только `setup.sh --slave`. Слейв, добавленный
     # через бота (клонированием конфига по SSH), и слейв, поставленный до
-    # появления маркера, его не имеют — поэтому есть запасной признак: бот и
+    # появления маркера, его не имеют — поэтому есть запасной признак: bot.env и
     # users.json существуют исключительно на основном сервере. Определив роль по
     # нему, ставим маркер, чтобы дальше он определялся сразу.
+    # bot.py признаком не является: setup.sh скачивает его в /root/modules/bot/
+    # в обеих ролях, и с ним слейв без маркера всегда считал себя основным.
     IS_SLAVE=0
     if [[ -f /etc/awg-slave ]]; then
         IS_SLAVE=1
-    elif [[ ! -f /root/modules/bot/bot.py && ! -f "$USERS_FILE" ]]; then
+    elif [[ ! -f "$BOT_ENV" && ! -f "$USERS_FILE" ]]; then
         IS_SLAVE=1
         touch /etc/awg-slave 2>/dev/null || true
     fi
@@ -119,10 +131,24 @@ run_diagnostics() {
         echo "--- Таблица маршрутов ---"
         ip route show
         echo ""
+        # -S, а не -L -n: без -v список не показывает интерфейсы, и по нему не
+        # понять, к awg0/какому внешнему интерфейсу относится правило
         echo "--- iptables (FORWARD и NAT для AWG) ---"
-        iptables -L FORWARD --line-numbers -n 2>/dev/null | grep -E "awg|ACCEPT|DROP" | head -20 || echo "нет правил"
+        iptables -S FORWARD 2>/dev/null | head -20 || echo "нет правил"
         echo ""
-        iptables -t nat -L POSTROUTING --line-numbers -n 2>/dev/null | grep -E "awg|MASQUERADE" | head -10 || echo "нет правил NAT"
+        iptables -t nat -S POSTROUTING 2>/dev/null | head -10 || echo "нет правил NAT"
+        local IPT_DUPS
+        IPT_DUPS=$( { iptables -S FORWARD; iptables -t nat -S POSTROUTING; } 2>/dev/null \
+            | grep -v '^-P' | sort | uniq -d | wc -l)
+        if [[ "$IPT_DUPS" -gt 0 ]]; then
+            echo "  ⚠️  Повторяющихся правил: ${IPT_DUPS} — PostUp срабатывал без PostDown"
+        fi
+        echo ""
+        echo "--- Входящий трафик (INPUT / ufw) ---"
+        iptables -S INPUT 2>/dev/null | head -25
+        if command -v ufw &>/dev/null; then
+            ufw status 2>/dev/null | head -15
+        fi
         echo ""
 
         # ── AWG ──────────────────────────────────────────────────────────────
@@ -132,6 +158,86 @@ run_diagnostics() {
         echo ""
         echo "--- awg show ---"
         awg show "$VPN_IFACE" 2>/dev/null || echo "⚠️  AWG не отвечает"
+        echo ""
+
+        # ── Версии: утилиты ↔ модуль ядра ─────────────────────────────────────
+        # AWG 3 передаёт H1–H4 в netlink другим типом (u64 вместо строки), и
+        # утилиты 1.0.x/2.0 с модулем 3.x не могут их ни задать, ни прочитать.
+        # Модуль из DKMS пересобирается под новое ядро и подхватывается только
+        # при перезагрузке — поэтому такая поломка обычно «случается» после ребута.
+        echo "--- Версии AmneziaWG ---"
+        local TOOLS_VER MOD_LOADED MOD_DISK
+        TOOLS_VER=$(awg --version 2>/dev/null | grep -oE 'v[0-9][0-9.]*' | head -1)
+        MOD_LOADED=$(cat /sys/module/amneziawg/version 2>/dev/null)
+        MOD_DISK=$(modinfo -F version amneziawg 2>/dev/null)
+        echo "Утилиты awg:               ${TOOLS_VER:-не определить}"
+        echo "Модуль ядра (загружен):    ${MOD_LOADED:-не загружен}"
+        echo "Модуль ядра (на диске):    ${MOD_DISK:-нет для ядра $(uname -r)}"
+        dpkg -l 'amneziawg*' 2>/dev/null | awk '/^ii/{printf "Пакет %-20s %s\n", $2, $3}'
+        if [[ -n "$MOD_LOADED" && -n "$MOD_DISK" && "$MOD_LOADED" != "$MOD_DISK" ]]; then
+            echo "  ⚠️  Загружен не тот модуль, что установлен: новый подхватится при"
+            echo "      следующей перезагрузке, и поведение AWG может смениться вместе с ним."
+        fi
+        if [[ "${TOOLS_VER#v}" =~ ^[12]\. && "$MOD_LOADED" =~ ^[3-9]\. ]]; then
+            echo "  ⚠️  Утилиты awg старше модуля ядра (AWG 3): H1–H4 не применятся."
+            echo "      Обновите утилиты: apt install --only-upgrade amneziawg-tools"
+        fi
+        echo ""
+
+        # ── Обфускация: что реально применено к интерфейсу ────────────────────
+        # Пакет клиента с заголовком H1, которого сервер не ждёт, отбрасывается
+        # молча: ни ошибки, ни строки в логе — просто нет хендшейка. Поэтому
+        # сверяем интерфейс с конфигом, а H1–H4 = 1–4 считаем тревогой отдельно:
+        # это стандартные заголовки WireGuard, а setup.sh всегда генерирует свои —
+        # с ними выпущены конфиги клиентов.
+        echo "--- Обфускация: awg0.conf ↔ интерфейс ---"
+        local OBF_KEY OBF_CONF OBF_LIVE OBF_DEF OBF_MISMATCH=0 OBF_DEFAULT_H=1 OBF_ABSENT=0
+        printf "  %-6s %-24s %s\n" "ПАРАМ" "awg0.conf" "ИНТЕРФЕЙС"
+        for OBF_KEY in Jc Jmin Jmax S1 S2 H1 H2 H3 H4; do
+            case "$OBF_KEY" in
+                H1) OBF_DEF=1 ;; H2) OBF_DEF=2 ;; H3) OBF_DEF=3 ;; H4) OBF_DEF=4 ;;
+                *)  OBF_DEF=0 ;;
+            esac
+            OBF_CONF=$(awk -v k="$OBF_KEY" '
+                /^\[Peer\]/ { exit }
+                index($0, "=") {
+                    key = substr($0, 1, index($0, "=") - 1); gsub(/[ \t]/, "", key)
+                    if (tolower(key) == tolower(k)) {
+                        v = substr($0, index($0, "=") + 1); gsub(/[ \t\r]/, "", v)
+                        print v; exit
+                    }
+                }' "$AWG_CONF" 2>/dev/null)
+            OBF_LIVE=$(_diag_norm_range "$(awg show "$VPN_IFACE" "${OBF_KEY,,}" 2>/dev/null)")
+            local OBF_MARK=""
+            if [[ "$OBF_LIVE" != "$(_diag_norm_range "${OBF_CONF:-$OBF_DEF}")" ]]; then
+                OBF_MISMATCH=1
+                OBF_MARK="  ⚠️"
+            fi
+            if [[ "$OBF_KEY" == H* && "$OBF_LIVE" != "$OBF_DEF" ]]; then
+                OBF_DEFAULT_H=0
+            fi
+            [[ -z "$OBF_CONF" ]] && OBF_ABSENT=1
+            # printf выравнивает по байтам, поэтому в колонке только ASCII
+            printf "  %-6s %-24s %s%s\n" "$OBF_KEY" "${OBF_CONF:--}" "${OBF_LIVE:-?}" "$OBF_MARK"
+        done
+        if [[ "$OBF_ABSENT" -eq 1 ]]; then
+            echo "  (- = не задан в awg0.conf: действует значение по умолчанию —"
+            echo "   0 для Jc/Jmin/Jmax/S1/S2, 1/2/3/4 для H1–H4)"
+        fi
+        if [[ "$OBF_MISMATCH" -eq 1 ]]; then
+            echo "  ⚠️  Интерфейс работает НЕ с теми параметрами, что записаны в awg0.conf."
+            echo "      Клиенты с параметрами из конфига не пройдут хендшейк. Частая"
+            echo "      причина — утилиты и модуль разных версий (см. «Версии AmneziaWG»)."
+        elif [[ "$OBF_DEFAULT_H" -eq 1 ]]; then
+            echo "  ⚠️  H1–H4 = 1–4 — стандартные заголовки WireGuard, обфускации заголовков нет."
+            echo "      Конфиги клиентов выпущены со случайными H1–H4 — их пакеты этот"
+            echo "      сервер молча отбрасывает. Сверьте с основным: awg show awg0 | head -16"
+            if [[ "$IS_SLAVE" -eq 1 ]]; then
+                echo "      Лечится кнопкой «Синхронизировать» в карточке сервера в боте."
+            fi
+        else
+            echo "  ✅ Интерфейс работает с параметрами из awg0.conf"
+        fi
         echo ""
 
         local AWG_DUMP
@@ -169,6 +275,34 @@ run_diagnostics() {
             fi
         else
             echo "Файлов .conf:                     нет (норма для слейва — они только на основном)"
+        fi
+        echo ""
+
+        # ── Хендшейки ─────────────────────────────────────────────────────────
+        # Ни одного хендшейка у всех пиров за долгую работу интерфейса — это не
+        # «никто не пришёл», а почти всегда «пакеты не доходят или отбрасываются».
+        echo "--- Хендшейки ---"
+        local HS_NOW HS_EVER HS_RECENT AWG_MONO AWG_UP_MIN=""
+        HS_NOW=$(date +%s)
+        HS_EVER=$(echo "$AWG_DUMP" | tail -n +2 | awk 'NF && $5 > 0 {n++} END{print n+0}')
+        HS_RECENT=$(echo "$AWG_DUMP" | tail -n +2 \
+            | awk -v now="$HS_NOW" 'NF && $5 > 0 && now - $5 < 180 {n++} END{print n+0}')
+        # Монотонное время, а не ActiveEnterTimestamp: тот печатается с
+        # аббревиатурой пояса (MSK), которую date -d не разбирает
+        AWG_MONO=$(systemctl show -p ActiveEnterTimestampMonotonic --value "awg-quick@${VPN_IFACE}" 2>/dev/null)
+        if [[ "$AWG_MONO" =~ ^[0-9]+$ && "$AWG_MONO" -gt 0 ]]; then
+            AWG_UP_MIN=$(awk -v m="$AWG_MONO" '{printf "%d", ($1 - m / 1000000) / 60}' /proc/uptime)
+        fi
+        echo "Онлайн (хендшейк < 3 мин):        ${HS_RECENT}"
+        echo "Был хендшейк с запуска AWG:       ${HS_EVER} из ${PEER_COUNT_AWG}"
+        [[ -n "$AWG_UP_MIN" ]] && echo "AWG поднят:                       ${AWG_UP_MIN} мин назад"
+        if [[ "$PEER_COUNT_AWG" -gt 0 && "$HS_EVER" -eq 0 && "${AWG_UP_MIN:-0}" -ge 30 ]]; then
+            echo "  ⚠️  Ни один клиент не прошёл хендшейк за ${AWG_UP_MIN} мин."
+            echo "      Если клиенты выбирали этот сервер, их пакеты либо не доходят"
+            echo "      (блокировка, файрвол провайдера), либо отбрасываются (ключ сервера"
+            echo "      или обфускация не совпали с конфигами клиентов — см. выше)."
+            echo "      Отличить: tcpdump -ni ${HOST_IFACE:-eth0} -c 20 udp port ${SERVER_PORT}"
+            echo "      во время попытки подключения."
         fi
         echo ""
 
