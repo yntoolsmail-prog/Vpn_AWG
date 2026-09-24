@@ -193,6 +193,7 @@ PROJECT_FILES=(
     "modules/bot/handlers/sites.py:/root/modules/bot/handlers/sites.py"
     "modules/bot/handlers/updates.py:/root/modules/bot/handlers/updates.py"
     "modules/bot/handlers/users.py:/root/modules/bot/handlers/users.py"
+    "modules/bot/handlers/support.py:/root/modules/bot/handlers/support.py"
     # Shell-скрипты
     "vpn.sh:/root/vpn.sh"
     "lib/colors.sh:/root/lib/colors.sh"

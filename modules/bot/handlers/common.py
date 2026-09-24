@@ -23,6 +23,11 @@ WAITING_SRV_DOMAIN     = 26
 WAITING_SRV_EDIT_NAME  = 27
 WAITING_SRV_EDIT_EMOJI = 28
 WAITING_SRV_COUNTRY    = 29
+# Связь с пользователями (handlers/support.py)
+WAITING_BROADCAST_MSG     = 30   # админ пишет рассылку
+WAITING_BROADCAST_CONFIRM = 31   # подтверждение рассылки
+WAITING_SUPPORT_MSG       = 32   # пользователь пишет админу
+WAITING_SUPPORT_REPLY     = 33   # админ отвечает пользователю
 
 IMG_BASE = "https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/main/.images"
 

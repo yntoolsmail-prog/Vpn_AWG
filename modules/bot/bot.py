@@ -51,6 +51,7 @@ from handlers.common import (
     WAITING_REGISTER_NAME, WAITING_DEVICE_NAME, WAITING_RESTORE_FILE,
     WAITING_SITES_DOMAIN, WAITING_SRV_DOMAIN,
     WAITING_SRV_EDIT_NAME, WAITING_SRV_EDIT_EMOJI, WAITING_SRV_COUNTRY,
+    WAITING_BROADCAST_MSG, WAITING_BROADCAST_CONFIRM, WAITING_SUPPORT_MSG, WAITING_SUPPORT_REPLY,
     IMG_BASE, back_kb, _tma_button, sites_keyboard, _md,
 )
 from handlers.bandwidth import (
@@ -58,6 +59,11 @@ from handlers.bandwidth import (
     show_bw_reset_ask, do_bw_reset, do_bw_reset_all, do_backup,
 )
 from handlers.help import show_help, show_help_dns
+from handlers.support import (
+    show_help_menu, notify_start, notify_receive, notify_send, notify_cancel,
+    support_start, support_receive, support_cancel,
+    support_reply_start, support_reply_receive, support_reply_cancel,
+)
 from handlers.users import show_manage_users, do_kick_user, confirm_kick_user
 from handlers.sites import (
     show_sites_menu, toggle_site_handler, toggle_category_handler,
@@ -283,7 +289,7 @@ async def main_menu(msg, user_id: int, edit=False):
         kb.append([InlineKeyboardButton(BTN_MY_DEVICES,      callback_data="my_devices")])
         kb.append([InlineKeyboardButton("🧲 Добавить устройство",  callback_data="add")])
         kb.append([InlineKeyboardButton("📊 Статус сервера",       callback_data="status")])
-        kb.append([InlineKeyboardButton("📖 Инструкция",           callback_data="help")])
+        kb.append([InlineKeyboardButton("🆘 Помощь",               callback_data="help_menu")])
         kb.extend(_modules.get_user_menu_buttons(user_id))
 
     if edit:
@@ -314,6 +320,7 @@ async def show_settings_menu(query):
         [InlineKeyboardButton("🔧 Техобслуживание",           callback_data="maintenance")],
         [InlineKeyboardButton("🔑 SSH-доступ",                callback_data="ssh_admin")],
         [InlineKeyboardButton("♻️ Обновить IP исключений",    callback_data="refresh_subnets")],
+        [InlineKeyboardButton("📣 Уведомления",               callback_data="notify_start")],
         [InlineKeyboardButton("📖 Инструкция",                callback_data="help")],
         [InlineKeyboardButton(BTN_BACK_MENU,                  callback_data="back")],
     ]
@@ -515,6 +522,8 @@ async def _button_dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"⏭ Пропущено. Коммит `{sha[:7]}` отмечен как известный.",
             parse_mode="Markdown",
         )
+    elif data == "help_menu":
+        await show_help_menu(query)
     elif data == "help":
         await show_help(query)
     elif data == "help_dns":
@@ -794,12 +803,66 @@ def main():
         allow_reentry=True,
     )
 
+    # Связь с пользователями (handlers/support.py). Регистрируются после прочих
+    # диалогов: если админ бросил, например, добавление устройства на полпути,
+    # его следующий текст уйдёт туда, а не станет черновиком рассылки. Таймаут
+    # снимает забытое ожидание, иначе любой следующий текст ушёл бы в диалог.
+    notify_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(notify_start, pattern="^notify_start$")],
+        states={
+            WAITING_BROADCAST_MSG: [
+                MessageHandler(~filters.COMMAND, notify_receive),
+                CallbackQueryHandler(notify_cancel, pattern="^notify_cancel$"),
+            ],
+            WAITING_BROADCAST_CONFIRM: [
+                CallbackQueryHandler(notify_send, pattern="^notify_send$"),
+                CallbackQueryHandler(notify_cancel, pattern="^notify_cancel$"),
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+        per_chat=True,
+        per_message=False,
+        allow_reentry=True,
+        conversation_timeout=900,
+    )
+    support_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(support_start, pattern="^support_(start|again)$")],
+        states={
+            WAITING_SUPPORT_MSG: [
+                MessageHandler(~filters.COMMAND, support_receive),
+                CallbackQueryHandler(support_cancel, pattern="^support_cancel$"),
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+        per_chat=True,
+        per_message=False,
+        allow_reentry=True,
+        conversation_timeout=900,
+    )
+    support_reply_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(support_reply_start, pattern="^support_reply_\\d+$")],
+        states={
+            WAITING_SUPPORT_REPLY: [
+                MessageHandler(~filters.COMMAND, support_reply_receive),
+                CallbackQueryHandler(support_reply_cancel, pattern="^support_reply_cancel$"),
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+        per_chat=True,
+        per_message=False,
+        allow_reentry=True,
+        conversation_timeout=900,
+    )
+
     app.add_handler(reg_conv)
     app.add_handler(add_conv)
     app.add_handler(restore_conv)
     app.add_handler(sites_custom_conv)  # до общего button_handler
     app.add_handler(srv_domain_conv)
     app.add_handler(srv_rename_conv)
+    app.add_handler(notify_conv)
+    app.add_handler(support_conv)
+    app.add_handler(support_reply_conv)
     _modules.register_bot_handlers(app)  # модули регистрируются до общего button_handler
     app.add_handler(CommandHandler("panel",  cmd_panel))
     app.add_handler(CommandHandler("bot",    cmd_bot))
