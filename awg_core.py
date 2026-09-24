@@ -61,7 +61,12 @@ def load_env(path: str) -> dict:
                 line = line.strip()
                 if "=" in line and not line.startswith("#"):
                     k, v = line.split("=", 1)
-                    env[k.strip()] = v.strip()
+                    v = v.strip()
+                    # server.env подключает и bash (source): значения с пробелами
+                    # и < > — теги I1 AWG 3.1 — пишутся в кавычках
+                    if len(v) >= 2 and v[0] == v[-1] and v[0] in "'\"":
+                        v = v[1:-1]
+                    env[k.strip()] = v
     except FileNotFoundError:
         pass
     return env
@@ -662,6 +667,24 @@ def post_restore_fixup() -> list:
             )
         else:
             report.append("🔒 Вход по паролю SSH выключен")
+    except Exception:
+        pass
+
+    # 8. Бэкап с сервера на AWG 3.1 на новом VPS со старыми пакетами: awg-quick
+    #    не разберёт конфиг («Line unrecognized») и интерфейс не поднимется
+    try:
+        from awg_clients import conf_awg_params, is_awg3
+        from awg_ssh import awg31_blockers, awg_versions_local
+        with open(AWG_CONF) as f:
+            restored_awg3 = is_awg3(conf_awg_params(f.read()))
+        if restored_awg3:
+            blockers = awg31_blockers(awg_versions_local())
+            if blockers:
+                report.append(
+                    "⚠️ Бэкап — с сервера на AWG 3.1, а пакеты здесь старше: "
+                    + "; ".join(blockers) + ".\n   AWG не поднимется, пока не обновить "
+                    "amneziawg и amneziawg-tools (и перезагрузиться при новом модуле)."
+                )
     except Exception:
         pass
 

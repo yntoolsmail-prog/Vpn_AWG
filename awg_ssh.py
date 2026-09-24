@@ -387,14 +387,95 @@ def ssh_read_slave_env(ip: str, port: int, login: str, password: str) -> None:
 
 
 # Параметры обфускации, которые сверяются после клонирования: слейв с чужими
-# H1–H4 молча отбрасывает пакеты клиентов, и хендшейка просто нет
-_OBFS_PARAMS = ("jc", "jmin", "jmax", "s1", "s2", "h1", "h2", "h3", "h4")
+# H1–H4 молча отбрасывает пакеты клиентов, и хендшейка просто нет. S3/S4, ключ
+# защиты заголовков и RandomTrailers ломают хендшейк так же. Старые утилиты
+# этих имён не знают — пустой ответ из сверки выпадает (см. `if a and b`)
+_OBFS_PARAMS = ("jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "h1", "h2", "h3", "h4",
+                "header-protection-key", "random-trailers")
+
+
+_NO_HPK = "A" * 43 + "="
 
 
 def _norm_obfs(value: str) -> str:
-    """«5-5» и «5» — одно значение: awg 3.x печатает H1–H4 диапазоном, старые — числом."""
-    lo, sep, hi = value.strip().partition("-")
-    return lo if sep and lo == hi else value.strip()
+    """«5-5» и «5» — одно значение: awg 3.x печатает H1–H4 диапазоном, старые — числом.
+    Ключа защиты заголовков нет: модуль ядра печатает (none), amneziawg-go — нули."""
+    value = value.strip()
+    if value == _NO_HPK:
+        return "(none)"
+    lo, sep, hi = value.partition("-")
+    return lo if sep and lo == hi else value
+
+
+def _mask_obfs(param: str, value: str) -> str:
+    """Ключ защиты заголовков в тексте ошибки — только началом."""
+    return f"{value[:6]}…" if param == "header-protection-key" and len(value) > 8 else value
+
+
+# ── Версии AmneziaWG ──────────────────────────────────────────────────────────
+# Формат KEY=VALUE — тот же, что в итоге _UPGRADE_SCRIPT
+_VERSIONS_SCRIPT = (
+    "echo \"TOOLS=$(awg --version 2>/dev/null | grep -oE 'v[0-9][0-9.]*' | head -1)\"; "
+    "echo \"MOD_LOADED=$(cat /sys/module/amneziawg/version 2>/dev/null)\"; "
+    "echo \"MOD_DISK=$(modinfo -F version amneziawg 2>/dev/null)\""
+)
+
+
+def _parse_versions(out: str) -> dict:
+    names = {"TOOLS": "tools", "MOD_LOADED": "mod_loaded", "MOD_DISK": "mod_disk"}
+    res = dict.fromkeys(names.values(), "")
+    for line in out.splitlines():
+        key, sep, val = line.partition("=")
+        if sep and key in names:
+            res[names[key]] = val.strip()
+    return res
+
+
+def awg_versions_local() -> dict:
+    """{tools, mod_loaded, mod_disk} этого сервера."""
+    import subprocess
+    try:
+        r = subprocess.run(["bash", "-c", _VERSIONS_SCRIPT],
+                           capture_output=True, text=True, timeout=15)
+        return _parse_versions(r.stdout)
+    except Exception:
+        return _parse_versions("")
+
+
+def ssh_get_awg_versions(server: dict) -> dict:
+    """{tools, mod_loaded, mod_disk} слейва. Без SSH-связи бросает исключение."""
+    if not PARAMIKO_AVAILABLE:
+        raise RuntimeError("paramiko не установлен: pip3 install paramiko")
+    client = _ssh_connect(server.get("ssh", {}))
+    try:
+        _, stdout, _ = client.exec_command(_VERSIONS_SCRIPT, timeout=15)
+        return _parse_versions(stdout.read().decode(errors="replace"))
+    finally:
+        client.close()
+
+
+def _ver(value: str) -> tuple:
+    m = re.search(r"(\d+)\.(\d+)", value or "")
+    return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+
+
+def awg31_blockers(v: dict) -> list:
+    """Что мешает поднять интерфейс с параметрами AWG 3.1; пустой список — ничего.
+    HeaderProtectionKey появился в 3.0, RandomTrailers/DisableCookies — в 3.1:
+    утилиты старше не разберут конфиг (awg-quick up падает на «Line unrecognized»),
+    модуль старше не примет параметры по netlink."""
+    errs = []
+    if _ver(v.get("tools")) < (3, 1):
+        errs.append(f"утилиты awg {v.get('tools') or 'не найдены'} — нужны 3.1+")
+    loaded, disk = v.get("mod_loaded", ""), v.get("mod_disk", "")
+    if loaded and _ver(loaded) < (3, 1):
+        if _ver(disk) >= (3, 1):
+            errs.append(f"загружен модуль ядра {loaded}, установлен {disk} — нужна перезагрузка")
+        else:
+            errs.append(f"модуль ядра {loaded} — нужен 3.1+")
+    elif not loaded and _ver(disk) < (3, 1):
+        errs.append(f"модуль ядра {disk or 'не установлен'} — нужен 3.1+")
+    return errs
 
 
 def _local_obfs() -> list:
@@ -421,9 +502,24 @@ def ssh_clone_awg_to_slave(server: dict) -> None:
     except Exception as e:
         raise ValueError(f"Не удалось прочитать конфиг primary: {e}")
 
+    from awg_clients import conf_awg_params, is_awg3
+
     ssh = server.get("ssh", {})
     client = _ssh_connect(ssh)
     try:
+        # Конфиг 3.1 на слейве со старыми пакетами не поднимется, а прежний
+        # интерфейс ниже уже будет остановлен — слейв лёг бы целиком. Проверяем
+        # до того, как что-либо трогать
+        if is_awg3(conf_awg_params(primary_conf)):
+            _, stdout, _ = client.exec_command(_VERSIONS_SCRIPT, timeout=15)
+            blockers = awg31_blockers(_parse_versions(stdout.read().decode(errors="replace")))
+            if blockers:
+                raise RuntimeError(
+                    "слейв не готов к AWG 3.1: " + "; ".join(blockers) + ". Обновите на нём "
+                    "пакеты (Техобслуживание → обновление всех серверов) и перезагрузите — "
+                    "рабочий конфиг слейва не тронут"
+                )
+
         # Читаем PostUp/PostDown со slave (у него свой сетевой интерфейс)
         _, stdout, _ = client.exec_command(
             "grep -E '^Post(Up|Down)' /etc/amnezia/amneziawg/awg0.conf 2>/dev/null",
@@ -510,7 +606,7 @@ def ssh_clone_awg_to_slave(server: dict) -> None:
             )
         remote = [_norm_obfs(v) for v in lines[1:1 + len(_OBFS_PARAMS)]]
         diff = [
-            f"{p}: primary={a} слейв={b}"
+            f"{p}: primary={_mask_obfs(p, a)} слейв={_mask_obfs(p, b)}"
             for p, a, b in zip(_OBFS_PARAMS, _local_obfs(), remote)
             if a and b and a != b
         ]

@@ -1,6 +1,6 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from strings import get_help_main, HELP_DNS
-from awg_core import TMA_URL, ADMIN_ID
+from awg_core import TMA_URL, ADMIN_ID, gen_obfs, is_awg3
 from .common import BTN_BACK, BTN_BACK_MENU
 
 
@@ -14,7 +14,7 @@ async def show_help(query):
         [InlineKeyboardButton("🌐 DNS — почему это важно", callback_data="help_dns")],
         [back],
     ])
-    await query.edit_message_text(get_help_main(TMA_URL), reply_markup=kb, parse_mode="Markdown")
+    await query.edit_message_text(get_help_main(TMA_URL, is_awg3(gen_obfs())), reply_markup=kb, parse_mode="Markdown")
 
 
 async def show_help_dns(query):

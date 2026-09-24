@@ -18,6 +18,8 @@ DIAG_DIR="/etc/amnezia/amneziawg/diagnostics"
 USERS_FILE="/etc/amnezia/amneziawg/users.json"
 BW_PEAK_FILE="/etc/amnezia/amneziawg/bw_peak.json"
 BW_LOG_FILE="/var/log/awg-bw.log"
+# Каталог vpn.sh — там же awg_core.py и прочие модули Python
+PY_DIR="$(dirname "$(readlink -f "$0")")"
 
 [[ $EUID -ne 0 ]] && echo -e "${RED}Запускать от root: sudo bash vpn.sh${NC}" && exit 1
 [[ ! -f "$ENV_FILE" ]] && echo -e "${RED}Сначала запустите setup.sh${NC}" && exit 1
@@ -143,22 +145,25 @@ add_client() {
     CLIENT_PSK=$(awg genpsk)
     CLIENT_IP="${VPN_SUBNET}.$(next_ip)"
 
+    # Конфиг собирает тот же make_wg_conf(), что у бота и TMA: набор параметров
+    # зависит от протокола (2.0 или 3.1), дублировать его здесь — разъедется.
+    # Собираем до того, как трогать awg0.conf, чтобы при ошибке не осталось пира
+    local CLIENT_CONF
+    if ! CLIENT_CONF=$(PYTHONPATH="$PY_DIR" python3 -c '
+import sys
+from awg_core import make_wg_conf, gen_obfs
+sys.stdout.write(make_wg_conf(sys.argv[1], sys.argv[2], sys.argv[3], gen_obfs()))
+' "$CLIENT_PRIVATE" "$CLIENT_IP" "$CLIENT_PSK"); then
+        echo -e "${RED}  ✗ Не удалось собрать конфиг клиента (awg_core.py в ${PY_DIR}?)${NC}"
+        press_enter; return
+    fi
+
     printf "\n# Client: %s\n[Peer]\nPublicKey = %s\nPresharedKey = %s\nAllowedIPs = %s/32\n" \
         "$NAME" "$CLIENT_PUBLIC" "$CLIENT_PSK" "$CLIENT_IP" >> "$AWG_CONF"
     echo "$CLIENT_PSK" | awg set "$VPN_IFACE" peer "$CLIENT_PUBLIC" \
         preshared-key /dev/stdin allowed-ips "${CLIENT_IP}/32"
 
-    {
-        printf "[Interface]\nPrivateKey = %s\nAddress = %s/32\nDNS = %s, %s\n" \
-            "$CLIENT_PRIVATE" "$CLIENT_IP" "$PRIMARY_DNS" "$SECONDARY_DNS"
-        printf "Jc = %s\nJmin = %s\nJmax = %s\nS1 = %s\nS2 = %s\n" \
-            "$JC" "$JMIN" "$JMAX" "$S1" "$S2"
-        printf "H1 = %s\nH2 = %s\nH3 = %s\nH4 = %s\n" "$H1" "$H2" "$H3" "$H4"
-        [[ -n "$I1" ]] && printf "i1 = %s\n" "$I1"
-        printf "\n[Peer]\nPublicKey = %s\nPresharedKey = %s\n" "$SERVER_PUBLIC" "$CLIENT_PSK"
-        printf "Endpoint = %s:%s\nAllowedIPs = 0.0.0.0/0\nPersistentKeepalive = 25\n" \
-            "$SERVER_ENDPOINT" "$SERVER_PORT"
-    } > "$CLIENTS_DIR/${NAME}.conf"
+    ( umask 077; printf '%s\n' "$CLIENT_CONF" > "$CLIENTS_DIR/${NAME}.conf" )
 
     # Сохраняем pub файл
     echo "$CLIENT_PUBLIC" > "$CLIENTS_DIR/${NAME}.pub"
@@ -815,6 +820,19 @@ manage_updates() {
 # ДИАГНОСТИКА — АНАЛИЗ КОНФИГОВ
 # =============================================================================
 
+# Значение ключа из секции [Interface] конфига AWG (регистр ключа не важен)
+_iface_val() {
+    awk -v k="$2" '
+        /^\[Peer\]/ { exit }
+        index($0, "=") {
+            key = substr($0, 1, index($0, "=") - 1); gsub(/[ \t]/, "", key)
+            if (tolower(key) == tolower(k)) {
+                v = substr($0, index($0, "=") + 1); sub(/^[ \t]+/, "", v); sub(/[ \t\r]+$/, "", v)
+                print v; exit
+            }
+        }' "$1" 2>/dev/null
+}
+
 analyze_configs() {
     show_header
     echo -e "${BOLD}  Анализ конфигов клиентов${NC}"
@@ -837,7 +855,16 @@ analyze_configs() {
     SRV_H2=$(awk   '/^\[Interface\]/,/^\[Peer\]/' "$AWG_CONF" | grep "^H2 "   | awk '{print $3}')
     SRV_H3=$(awk   '/^\[Interface\]/,/^\[Peer\]/' "$AWG_CONF" | grep "^H3 "   | awk '{print $3}')
     SRV_H4=$(awk   '/^\[Interface\]/,/^\[Peer\]/' "$AWG_CONF" | grep "^H4 "   | awk '{print $3}')
-    SRV_I1=$(awk   '/^\[Interface\]/,/^\[Peer\]/' "$AWG_CONF" | grep "^i1 "   | awk '{print $3}')
+    # I1 живёт только в конфигах клиентов (его шлёт инициатор хендшейка), эталон —
+    # server.env; «i1 = <число>» старых установок без тегов не работал и не сверяется
+    SRV_I1=""
+    [[ "$I1" == *"<"*">"* ]] && SRV_I1="$I1"
+    # Параметры AWG 3.x: регистр ключа не важен, значение может содержать пробелы
+    local SRV_S3 SRV_S4 SRV_HPK SRV_TRAIL
+    SRV_S3=$(_iface_val "$AWG_CONF" S3)
+    SRV_S4=$(_iface_val "$AWG_CONF" S4)
+    SRV_HPK=$(_iface_val "$AWG_CONF" HeaderProtectionKey)
+    SRV_TRAIL=$(_iface_val "$AWG_CONF" RandomTrailers)
     SRV_PORT=$(grep "^ListenPort" "$AWG_CONF" | awk '{print $3}')
     SRV_PUB="$SERVER_PUBLIC"
 
@@ -887,7 +914,11 @@ analyze_configs() {
         echo "  H2:          ${SRV_H2}"
         echo "  H3:          ${SRV_H3}"
         echo "  H4:          ${SRV_H4}"
-        [[ -n "$SRV_I1" ]] && echo "  i1:          ${SRV_I1}"
+        [[ -n "$SRV_S3" ]]    && echo "  S3:          ${SRV_S3}"
+        [[ -n "$SRV_S4" ]]    && echo "  S4:          ${SRV_S4}"
+        [[ -n "$SRV_HPK" ]]   && echo "  HPK:         ${SRV_HPK:0:6}... (AWG 3.x, защита заголовков)"
+        [[ -n "$SRV_TRAIL" ]] && echo "  Trailers:    ${SRV_TRAIL}"
+        [[ -n "$SRV_I1" ]]    && echo "  I1:          ${SRV_I1}"
         echo "  Endpoint(s): ${SERVER_ENDPOINT}:${SERVER_PORT}"
         [[ -n "$SERVER_ENDPOINT_BACKUP" ]] && echo "  Резерв:      ${SERVER_ENDPOINT_BACKUP}:${SERVER_PORT}"
         echo ""
@@ -911,7 +942,13 @@ analyze_configs() {
             C_H2=$(awk       '/^H2 /{print $3}'            "$CONF")
             C_H3=$(awk       '/^H3 /{print $3}'            "$CONF")
             C_H4=$(awk       '/^H4 /{print $3}'            "$CONF")
-            C_I1=$(awk       '/^i1 /{print $3}'            "$CONF")
+            C_I1=$(_iface_val "$CONF" I1)
+            local C_S3 C_S4 C_HPK C_TRAIL C_MTU
+            C_S3=$(_iface_val "$CONF" S3)
+            C_S4=$(_iface_val "$CONF" S4)
+            C_HPK=$(_iface_val "$CONF" HeaderProtectionKey)
+            C_TRAIL=$(_iface_val "$CONF" RandomTrailers)
+            C_MTU=$(_iface_val "$CONF" MTU)
             C_SRVPUB=$(awk   '/^PublicKey/{print $3}'      "$CONF")
             C_EP=$(awk       '/^Endpoint/{print $3}'       "$CONF")
             C_AIPS=$(awk     '/^AllowedIPs/{print $3}'     "$CONF")
@@ -939,7 +976,16 @@ analyze_configs() {
             cmp_val       "H2"             "$C_H2"       "$SRV_H2"
             cmp_val       "H3"             "$C_H3"       "$SRV_H3"
             cmp_val       "H4"             "$C_H4"       "$SRV_H4"
-            [[ -n "$SRV_I1" ]] && cmp_val "i1"          "$C_I1"       "$SRV_I1"
+            if [[ -n "$SRV_S3$C_S3" ]];  then cmp_val "S3" "$C_S3" "$SRV_S3"; fi
+            if [[ -n "$SRV_S4$C_S4" ]];  then cmp_val "S4" "$C_S4" "$SRV_S4"; fi
+            if [[ -n "$SRV_HPK$C_HPK" ]]; then
+                # Ключ целиком в отчёт не пишем — только совпал или нет
+                cmp_val "HPK" "${C_HPK:0:6}..." "${SRV_HPK:0:6}..."
+                [[ "$C_HPK" != "$SRV_HPK" ]] && echo "  ⚠️  КЛЮЧ ЗАЩИТЫ ЗАГОЛОВКОВ НЕ СОВПАДАЕТ — хендшейка не будет"
+            fi
+            if [[ -n "$SRV_TRAIL$C_TRAIL" ]]; then cmp_val "RandomTrailers" "$C_TRAIL" "$SRV_TRAIL"; fi
+            [[ -n "$SRV_I1" ]] && cmp_val "I1"          "$C_I1"       "$SRV_I1"
+            [[ -n "$C_MTU" ]]  && cmp_val_noref "MTU"   "$C_MTU"
             cmp_val       "ServerPublicKey" "$C_SRVPUB"  "$SRV_PUB"
             cmp_val_noref "Endpoint"       "$C_EP"
             cmp_val_noref "AllowedIPs"     "$C_AIPS"
@@ -1089,6 +1135,112 @@ check_peer_integrity() {
 # ГЛАВНОЕ МЕНЮ
 # =============================================================================
 
+# =============================================================================
+# ПРОТОКОЛ AWG 3.1
+# =============================================================================
+
+# Версия протокола по awg0.conf: параметры, которых нет в 2.0
+_awg_proto() {
+    if grep -qiE '^[[:space:]]*(RandomTrailers|DisableCookies)[[:space:]]*=' "$AWG_CONF" 2>/dev/null; then
+        echo "3.1"
+    elif grep -qiE '^[[:space:]]*(HeaderProtectionKey|ContentPaddingAddition|RekeyAfterTime|RekeyTimeout|RejectAfterTime|KeepaliveTimeout|MaxHandshakeAttempts)[[:space:]]*=' "$AWG_CONF" 2>/dev/null; then
+        echo "3.0"
+    else
+        echo "2.0"
+    fi
+}
+
+# Прогон migrate_to_awg31(); $1=1 — не ждать неготовые слейвы.
+# Код выхода: 0 — готово, 2 — мешают неготовые слейвы, 1 — прочее
+_run_awg31_migration() {
+    PYTHONPATH="$PY_DIR" python3 -c '
+import sys
+from awg_core import migrate_to_awg31
+ok, report, unready = migrate_to_awg31(skip_unready_slaves=sys.argv[1] == "1")
+print("\n".join(report))
+sys.exit(0 if ok else (2 if unready else 1))
+' "$1"
+}
+
+manage_awg31() {
+    show_header
+    echo -e "${BOLD}  Протокол AmneziaWG${NC}"
+    echo ""
+    local PROTO TOOLS_VER MOD_LOADED MOD_DISK
+    PROTO=$(_awg_proto)
+    TOOLS_VER=$(awg --version 2>/dev/null | grep -oE 'v[0-9][0-9.]*' | head -1)
+    MOD_LOADED=$(cat /sys/module/amneziawg/version 2>/dev/null)
+    MOD_DISK=$(modinfo -F version amneziawg 2>/dev/null)
+    echo -e "  Протокол сервера: ${CYAN}AWG ${PROTO}${NC}"
+    echo -e "  Утилиты awg:      ${TOOLS_VER:-?}"
+    echo -e "  Модуль ядра:      ${MOD_LOADED:-не загружен}  (установлен: ${MOD_DISK:-?})"
+    echo ""
+    if [[ -f /etc/awg-slave ]]; then
+        echo "  Это слейв: параметры AWG приходят с основного сервера."
+        echo "  Перевод запускается там — слейвы он переведёт сам."
+        press_enter; return
+    fi
+    if [[ "$PROTO" != "2.0" ]]; then
+        echo -e "  ${GREEN}Сервер уже работает на AWG ${PROTO}.${NC}"
+        echo "  Откат на 2.0 — восстановить бэкап pre_awg31_* (п. 7 «Бэкапы» или бот),"
+        echo "  затем «Синхронизировать» каждый слейв в боте."
+        press_enter; return
+    fi
+
+    echo "  AWG 3.1 против 2.0:"
+    echo "   • заголовки пакетов шифруются (HeaderProtectionKey) — тип, индексы и"
+    echo "     счётчик WireGuard на проводе больше не видны;"
+    echo "   • случайный «хвост» у каждого пакета (RandomTrailers) — размеры плавают;"
+    echo "   • тайминги рекея и keepalive — диапазоны, а не ровные 120/25 с;"
+    echo "   • сервер не шлёт cookie-ответы (DisableCookies); I1 — пакет-маскировка."
+    echo ""
+    echo -e "  ${YELLOW}${BOLD}Это разовый перелом:${NC}"
+    echo -e "  ${YELLOW}• старые конфиги перестанут подключаться — всем устройствам нужен новый"
+    echo -e "    конфиг/QR/ссылка из бота;"
+    echo -e "  • приложения: AmneziaVPN 5.0.1.5+ или AmneziaWG 3.1+; роутеры и сторонние"
+    echo -e "    клиенты без поддержки 3.1 отвалятся;"
+    echo -e "  • слейвы переводятся вместе с основным — пакеты на них тоже должны быть 3.1.${NC}"
+    echo ""
+    echo "  Перед переводом делается бэкап (pre_awg31_*), при сбое файлы возвращаются."
+    echo ""
+    local CONFIRM
+    read -p "  Перевести сервер и все слейвы на AWG 3.1? Напишите «да»: " CONFIRM
+    [[ "${CONFIRM,,}" != "да" ]] && return
+
+    # Бот и TMA держат server.env в памяти: пока идёт перевод, созданное ими
+    # устройство получило бы параметры 2.0. Останавливаем и поднимаем после
+    local SVC RUNNING=()
+    for SVC in "$BOT_SERVICE" awg-tma; do
+        systemctl is-active --quiet "$SVC" 2>/dev/null && RUNNING+=("$SVC")
+    done
+    [[ ${#RUNNING[@]} -gt 0 ]] && systemctl stop "${RUNNING[@]}"
+
+    echo ""
+    echo -e "  ${CYAN}Проверяю версии и перевожу... (слейвы — по SSH, до минуты на каждый)${NC}"
+    echo ""
+    local RC
+    _run_awg31_migration 0 | sed 's/^/  /'
+    RC=${PIPESTATUS[0]}
+    if [[ "$RC" -eq 2 ]]; then
+        echo ""
+        read -p "  Перевести без неготовых слейвов (они останутся на 2.0)? [y/N]: " CONFIRM
+        if [[ "${CONFIRM,,}" == "y" ]]; then
+            echo ""
+            _run_awg31_migration 1 | sed 's/^/  /'
+            RC=${PIPESTATUS[0]}
+        fi
+    fi
+
+    [[ ${#RUNNING[@]} -gt 0 ]] && systemctl start "${RUNNING[@]}"
+    if [[ "$RC" -eq 0 ]]; then
+        # vpn.sh тоже держит server.env в переменных — перечитываем
+        source "$ENV_FILE"
+        echo ""
+        echo -e "  ${GREEN}✓ Готово. Бот и веб-панель перезапущены с параметрами 3.1.${NC}"
+    fi
+    press_enter
+}
+
 main_menu() {
     while true; do
         show_header
@@ -1099,7 +1251,7 @@ main_menu() {
         systemctl is-active --quiet ${BOT_SERVICE} \
             && BOT_ST="${GREEN}●${NC}" || BOT_ST="${RED}●${NC}"
 
-        echo -e "  ${BOLD}Endpoint:${NC} ${CYAN}${SERVER_ENDPOINT}:${SERVER_PORT}${NC}  |  Клиентов: ${CYAN}${CLIENTS_COUNT}${NC}  |  AWG: ${AWG_ST}  Бот: ${BOT_ST}"
+        echo -e "  ${BOLD}Endpoint:${NC} ${CYAN}${SERVER_ENDPOINT}:${SERVER_PORT}${NC}  |  Клиентов: ${CYAN}${CLIENTS_COUNT}${NC}  |  AWG ${CYAN}$(_awg_proto)${NC}: ${AWG_ST}  Бот: ${BOT_ST}"
         echo ""
         echo "  ── Клиенты ──────────────────────────"
         echo "  1) Добавить клиента"
@@ -1114,6 +1266,7 @@ main_menu() {
         echo "  8) Обновление"
         echo "  9) Управление модулями"
         echo " 10) Защита SSH (fail2ban, ключи)"
+        echo " 15) Протокол AWG 3.1 (перевод сервера)"
         echo ""
         echo "  ── Диагностика ──────────────────────"
         echo " 11) Полный диагностический отчёт"
@@ -1140,6 +1293,7 @@ main_menu() {
             12) analyze_configs ;;
             13) view_old_diagnostics ;;
             14) check_peer_integrity ;;
+            15) manage_awg31 ;;
             0|"")  echo ""; exit 0 ;;
             *)  echo -e "  ${RED}Неверный выбор${NC}"; sleep 1 ;;
         esac

@@ -40,6 +40,18 @@ AmneziaWG нативно в kernelspace (300+ мбит) с управление�
 bash <(curl -fsSL https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/claude/project-audit-errors-security-4prpuc/setup.sh)
 ```
 
+### Экспериментальная ветка: AmneziaWG 3.1
+
+Ветка `experimental` ставит протокол **AmneziaWG 3.1**: шифрование заголовков,
+случайные «хвосты» пакетов, плавающие тайминги. Клиентам нужны AmneziaVPN
+5.0.1.5+ или AmneziaWG 3.1+. Работающий сервер 2.0 переводится пунктом
+`vpn.sh` → «15) Протокол AWG 3.1», старые конфиги после этого не подключаются.
+Подробности, совместимость и откат — в [docs/AWG_3.1.md](docs/AWG_3.1.md).
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/yntoolsmail-prog/Vpn_AWG/experimental/setup.sh)
+```
+
 Установщик автоматически:
 1. Проверит и при необходимости обновит ядро
 2. Установит AmneziaWG (нативный модуль ядра)

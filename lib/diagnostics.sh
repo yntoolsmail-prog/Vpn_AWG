@@ -11,7 +11,32 @@ _diag_norm_range() {
     if [[ "$v" =~ ^([0-9]+)-([0-9]+)$ && "${BASH_REMATCH[1]}" == "${BASH_REMATCH[2]}" ]]; then
         v="${BASH_REMATCH[1]}"
     fi
+    # Переключатели AWG 3.1 (второй аргумент bool): в конфиге on/off/1/0,
+    # awg show печатает on/off
+    if [[ "$2" == "bool" ]]; then
+        case "${v,,}" in
+            on|1)    v="on" ;;
+            off|0|"") v="off" ;;
+        esac
+    fi
+    # Ключа защиты заголовков нет: модуль ядра печатает (none), amneziawg-go — нули
+    if [[ "$2" == "key" && ( -z "$v" || "$v" == "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" ) ]]; then
+        v="(none)"
+    fi
     echo "$v"
+}
+
+# Ключ защиты заголовков в отчёте — только началом: отчёт пересылают
+_diag_mask_key() {
+    local v="$1"
+    (( ${#v} > 12 )) && v="${v:0:6}..."
+    echo "$v"
+}
+
+# Версия «v3.1.2026…» / «3.1.2026…» не ниже 3.1
+_diag_ver_ge_31() {
+    [[ "$1" =~ ^v?([0-9]+)\.([0-9]+) ]] || return 1
+    (( BASH_REMATCH[1] > 3 || (BASH_REMATCH[1] == 3 && BASH_REMATCH[2] >= 1) ))
 }
 
 run_diagnostics() {
@@ -157,7 +182,13 @@ run_diagnostics() {
         echo "Статус сервиса: $(systemctl is-active awg-quick@${VPN_IFACE})"
         echo ""
         echo "--- awg show ---"
-        awg show "$VPN_IFACE" 2>/dev/null || echo "⚠️  AWG не отвечает"
+        local AWG_SHOW_OUT
+        if AWG_SHOW_OUT=$(awg show "$VPN_IFACE" 2>/dev/null); then
+            # Ключ защиты заголовков (AWG 3.x) — только началом: отчёт пересылают
+            echo "$AWG_SHOW_OUT" | sed -E 's/(header protection key: .{6}).*/\1.../'
+        else
+            echo "⚠️  AWG не отвечает"
+        fi
         echo ""
 
         # ── Версии: утилиты ↔ модуль ядра ─────────────────────────────────────
@@ -182,6 +213,19 @@ run_diagnostics() {
             echo "  ⚠️  Утилиты awg старше модуля ядра (AWG 3): H1–H4 не применятся."
             echo "      Обновите утилиты: apt install --only-upgrade amneziawg-tools"
         fi
+        # Конфиг на AWG 3.1 (ключ защиты заголовков, RandomTrailers…) старые
+        # утилиты не разберут вовсе — awg-quick up падает на «Line unrecognized»,
+        # а модуль старше 3.1 не примет новые параметры по netlink
+        if grep -qiE '^[[:space:]]*(HeaderProtectionKey|RandomTrailers|DisableCookies)[[:space:]]*=' \
+                "$AWG_CONF" 2>/dev/null; then
+            if ! _diag_ver_ge_31 "$TOOLS_VER" || ! _diag_ver_ge_31 "${MOD_LOADED:-$MOD_DISK}"; then
+                echo "  ⚠️  awg0.conf на AWG 3.1, а утилиты или модуль старше 3.1 — интерфейс"
+                echo "      с таким конфигом не поднимется. Обновите пакеты и перезагрузитесь:"
+                echo "      apt update && apt install --only-upgrade amneziawg amneziawg-tools"
+            else
+                echo "  ✅ Протокол AWG 3.1: утилиты и модуль его поддерживают"
+            fi
+        fi
         echo ""
 
         # ── Обфускация: что реально применено к интерфейсу ────────────────────
@@ -191,18 +235,24 @@ run_diagnostics() {
         # из него gen_obfs() собирает конфиги клиентов. На слейве server.env
         # остаётся от его собственной установки и эталоном не является.
         echo "--- Обфускация: awg0.conf ↔ интерфейс ---"
-        local OBF_KEY OBF_CONF OBF_LIVE OBF_DEF OBF_ENV OBF_ENV_NAME
-        local OBF_MISMATCH=0 OBF_ENV_MISMATCH=0 OBF_DEFAULT_H=1 OBF_ABSENT=0
+        local OBF_SPEC OBF_LABEL OBF_KEY OBF_SHOW OBF_CONF OBF_LIVE OBF_DEF OBF_ENV OBF_ENV_NAME
+        local OBF_KIND OBF_RC OBF_REF
+        local OBF_MISMATCH=0 OBF_ENV_MISMATCH=0 OBF_DEFAULT_H=1 OBF_ABSENT=0 OBF_HPK=0
         if [[ "$IS_SLAVE" -eq 0 ]]; then
             printf "  %-6s %-22s %-22s %s\n" "ПАРАМ" "awg0.conf" "server.env" "ИНТЕРФЕЙС"
         else
             printf "  %-6s %-22s %s\n" "ПАРАМ" "awg0.conf" "ИНТЕРФЕЙС"
         fi
-        for OBF_KEY in Jc Jmin Jmax S1 S2 H1 H2 H3 H4; do
-            case "$OBF_KEY" in
-                H1) OBF_DEF=1 ;; H2) OBF_DEF=2 ;; H3) OBF_DEF=3 ;; H4) OBF_DEF=4 ;;
-                *)  OBF_DEF=0 ;;
-            esac
+        # МЕТКА:ключ в конфиге:параметр awg show:переменная server.env:умолчание:вид.
+        # S3/S4 (2.0), ключ защиты заголовков (3.0) и RandomTrailers (3.1) ломают
+        # хендшейк так же, как чужие H1–H4. Тайминги и DisableCookies — нет:
+        # они меняют только поведение своей стороны
+        for OBF_SPEC in Jc:Jc:jc:JC:0: Jmin:Jmin:jmin:JMIN:0: Jmax:Jmax:jmax:JMAX:0: \
+                S1:S1:s1:S1:0: S2:S2:s2:S2:0: S3:S3:s3:S3:0:new S4:S4:s4:S4:0:new \
+                H1:H1:h1:H1:1: H2:H2:h2:H2:2: H3:H3:h3:H3:3: H4:H4:h4:H4:4: \
+                HPK:HeaderProtectionKey:header-protection-key:HEADER_PROTECTION_KEY:\(none\):key \
+                Trail:RandomTrailers:random-trailers:RANDOM_TRAILERS:off:bool; do
+            IFS=: read -r OBF_LABEL OBF_KEY OBF_SHOW OBF_ENV_NAME OBF_DEF OBF_KIND <<< "$OBF_SPEC"
             OBF_CONF=$(awk -v k="$OBF_KEY" '
                 /^\[Peer\]/ { exit }
                 index($0, "=") {
@@ -212,34 +262,52 @@ run_diagnostics() {
                         print v; exit
                     }
                 }' "$AWG_CONF" 2>/dev/null)
-            OBF_LIVE=$(_diag_norm_range "$(awg show "$VPN_IFACE" "${OBF_KEY,,}" 2>/dev/null)")
+            OBF_LIVE=$(awg show "$VPN_IFACE" "$OBF_SHOW" 2>/dev/null)
+            OBF_RC=$?
+            # Параметра 3.x нет ни в конфиге, ни в утилитах (сервер на 2.0 или
+            # старые утилиты) — строка ни о чём не говорит
+            if [[ -z "$OBF_CONF" && "$OBF_KIND" =~ ^(new|key|bool)$ ]] \
+                    && [[ "$OBF_RC" -ne 0 || -z "$OBF_LIVE" \
+                          || "$(_diag_norm_range "$OBF_LIVE" "$OBF_KIND")" == "$OBF_DEF" ]]; then
+                continue
+            fi
+            OBF_LIVE=$(_diag_norm_range "$OBF_LIVE" "$OBF_KIND")
+            OBF_REF=$(_diag_norm_range "${OBF_CONF:-$OBF_DEF}" "$OBF_KIND")
             local OBF_MARK=""
-            if [[ "$OBF_LIVE" != "$(_diag_norm_range "${OBF_CONF:-$OBF_DEF}")" ]]; then
+            if [[ "$OBF_LIVE" != "$OBF_REF" ]]; then
                 OBF_MISMATCH=1
                 OBF_MARK="  ⚠️"
             fi
-            if [[ "$OBF_KEY" == H* && "$OBF_LIVE" != "$OBF_DEF" ]]; then
+            if [[ "$OBF_KEY" =~ ^H[1-4]$ && "$OBF_LIVE" != "$OBF_DEF" ]]; then
                 OBF_DEFAULT_H=0
             fi
+            [[ "$OBF_KIND" == "key" && -n "$OBF_LIVE" && "$OBF_LIVE" != "$OBF_DEF" ]] && OBF_HPK=1
             [[ -z "$OBF_CONF" ]] && OBF_ABSENT=1
             # printf выравнивает по байтам, поэтому в колонках только ASCII
             if [[ "$IS_SLAVE" -eq 0 ]]; then
                 # JC/JMIN/…/H4 — переменные из server.env, его подключает vpn.sh
-                OBF_ENV_NAME="${OBF_KEY^^}"
-                OBF_ENV=$(_diag_norm_range "${!OBF_ENV_NAME}")
+                OBF_ENV=$(_diag_norm_range "${!OBF_ENV_NAME}" "$OBF_KIND")
+                [[ "$OBF_KIND" == "bool" && -z "${!OBF_ENV_NAME}" ]] && OBF_ENV=""
                 if [[ -n "$OBF_ENV" && "$OBF_ENV" != "$OBF_LIVE" ]]; then
                     OBF_ENV_MISMATCH=1
                     OBF_MARK="  ⚠️"
                 fi
-                printf "  %-6s %-22s %-22s %s%s\n" "$OBF_KEY" "${OBF_CONF:--}" "${OBF_ENV:--}" \
+                if [[ "$OBF_KIND" == "key" ]]; then
+                    OBF_CONF=$(_diag_mask_key "$OBF_CONF"); OBF_ENV=$(_diag_mask_key "$OBF_ENV")
+                    OBF_LIVE=$(_diag_mask_key "$OBF_LIVE")
+                fi
+                printf "  %-6s %-22s %-22s %s%s\n" "$OBF_LABEL" "${OBF_CONF:--}" "${OBF_ENV:--}" \
                     "${OBF_LIVE:-?}" "$OBF_MARK"
             else
-                printf "  %-6s %-22s %s%s\n" "$OBF_KEY" "${OBF_CONF:--}" "${OBF_LIVE:-?}" "$OBF_MARK"
+                if [[ "$OBF_KIND" == "key" ]]; then
+                    OBF_CONF=$(_diag_mask_key "$OBF_CONF"); OBF_LIVE=$(_diag_mask_key "$OBF_LIVE")
+                fi
+                printf "  %-6s %-22s %s%s\n" "$OBF_LABEL" "${OBF_CONF:--}" "${OBF_LIVE:-?}" "$OBF_MARK"
             fi
         done
         if [[ "$OBF_ABSENT" -eq 1 ]]; then
             echo "  (- = не задан в awg0.conf: действует значение по умолчанию —"
-            echo "   0 для Jc/Jmin/Jmax/S1/S2, 1/2/3/4 для H1–H4)"
+            echo "   0 для Jc/Jmin/Jmax/S1–S4, 1/2/3/4 для H1–H4, off для 3.1)"
         fi
         if [[ "$OBF_MISMATCH" -eq 1 ]]; then
             echo "  ⚠️  Интерфейс работает НЕ с теми параметрами, что записаны в awg0.conf."
@@ -258,10 +326,15 @@ run_diagnostics() {
                 echo "     (сверьте с основным: там должны быть те же значения)"
             fi
         fi
+        if [[ "$OBF_HPK" -eq 1 ]]; then
+            echo "  ℹ️  AWG 3.x: заголовки пакетов зашифрованы ключом (HPK) — H1–H4, счётчик и"
+            echo "      индексы на проводе не видны. Клиенты на 2.0 к такому интерфейсу"
+            echo "      не подключатся: нужны AmneziaVPN 5.0.1.5+ или AmneziaWG 3.1+."
+        fi
         # 1–4 — не поломка: так ставил setup.sh 13 апреля, и клиенты тех установок
         # выпущены с ними же. Но хендшейк тогда — обычный WireGuard-пакет, и
         # маскируют его только junk-пакеты (Jc), что DPI распознаёт легче.
-        if [[ "$OBF_DEFAULT_H" -eq 1 ]]; then
+        if [[ "$OBF_DEFAULT_H" -eq 1 && "$OBF_HPK" -eq 0 ]]; then
             echo "  ℹ️  H1–H4 = 1–4 — стандартные заголовки WireGuard: хендшейк маскируют"
             echo "      только junk-пакеты (Jc). Работает, если у клиентов тоже 1–4,"
             echo "      но DPI такой трафик распознаёт легче, чем со случайными H1–H4."
@@ -496,8 +569,8 @@ run_diagnostics() {
 
         if [[ "$IS_SLAVE" -eq 1 ]]; then
             echo "--- Обфускация (должна совпадать с основным сервером) ---"
-            grep -E '^(Jc|Jmin|Jmax|S1|S2|H1|H2|H3|H4|i1|ListenPort)\s*=' "$AWG_CONF" 2>/dev/null \
-                | sed 's/^/  /' || echo "  не найдена"
+            grep -iE '^(Jc|Jmin|Jmax|S[1-4]|H[1-4]|I[1-5]|HeaderProtectionKey|ContentPaddingAddition|RekeyAfterTime|RekeyTimeout|RejectAfterTime|KeepaliveTimeout|MaxHandshakeAttempts|RandomTrailers|DisableCookies|ListenPort)\s*=' "$AWG_CONF" 2>/dev/null \
+                | sed -E 's/^(HeaderProtectionKey *= *.{6}).*/\1.../; s/^/  /' || echo "  не найдена"
             echo ""
             echo "  Если эти значения или SERVER_PUBLIC выше разошлись с основным —"
             echo "  конфиги клиентов на этом сервере работать не будут."

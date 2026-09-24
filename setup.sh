@@ -850,6 +850,28 @@ if ! modprobe amneziawg 2>/dev/null; then
 fi
 echo "amneziawg" > /etc/modules-load.d/amneziawg.conf
 
+# ── Версия протокола: 3.1, если её тянут утилиты и загруженный модуль ─────────
+# Конфиг 3.1 утилиты старше не разберут («Line unrecognized»), модуль старше не
+# примет по netlink. Сборки 3.1 в PPA есть не для всех выпусков Ubuntu (например,
+# 24.10/25.04 без них) — тогда ставим параметры 2.0, перевести можно позже из vpn.sh.
+_awg_ver_ge_31() {
+    [[ "$1" =~ ^v?([0-9]+)\.([0-9]+) ]] || return 1
+    (( BASH_REMATCH[1] > 3 || (BASH_REMATCH[1] == 3 && BASH_REMATCH[2] >= 1) ))
+}
+AWG_TOOLS_VER=$(awg --version 2>/dev/null | grep -oE 'v[0-9][0-9.]*' | head -1)
+AWG_MOD_VER=$(cat /sys/module/amneziawg/version 2>/dev/null || true)
+if _awg_ver_ge_31 "$AWG_TOOLS_VER" && _awg_ver_ge_31 "$AWG_MOD_VER"; then
+    AWG31=1
+    info "AmneziaWG: утилиты ${AWG_TOOLS_VER}, модуль ${AWG_MOD_VER} — протокол 3.1"
+else
+    AWG31=0
+    warn "AmneziaWG: утилиты ${AWG_TOOLS_VER:-?}, модуль ${AWG_MOD_VER:-?} — протокол 3.1 недоступен."
+    if [[ "$(modinfo -F version amneziawg 2>/dev/null)" != "$AWG_MOD_VER" ]]; then
+        warn "Установлен более новый модуль, но загружен старый — поможет перезагрузка."
+    fi
+    warn "Ставлю совместимые параметры AWG 2.0. Перевод на 3.1 — vpn.sh → «Протокол AWG 3.1»."
+fi
+
 # ── Шаг 3: Параметры сервера ──────────────────────────────────────────────────
 echo ""
 SERVER_IP=$(curl -4 -s ifconfig.me 2>/dev/null || curl -4 -s api.ipify.org 2>/dev/null || curl -4 -s ifconfig.co 2>/dev/null)
@@ -979,21 +1001,44 @@ chmod 600 /etc/amnezia/amneziawg/server_private.key
 SERVER_PRIVATE=$(cat /etc/amnezia/amneziawg/server_private.key)
 SERVER_PUBLIC=$(cat /etc/amnezia/amneziawg/server_public.key)
 
-# ── Шаг 5: Генерация параметров обфускации (AWG 2.0) ─────────────────────────
-log "Генерация параметров обфускации AWG 2.0..."
-read JC JMIN JMAX I1 H1 H2 H3 H4 < <(python3 -c "
+# ── Шаг 5: Генерация параметров обфускации ───────────────────────────────────
+# Та же схема, что gen_awg31_env() / AWG31_DEFAULTS в awg_clients.py — меняя
+# здесь, поменяйте и там.
+#  • S1/S2 15–64: не меньше 12 — первые 12 байт набивки служат нонсом защиты
+#    заголовков; S1+56 ≥ 71, так что init и response не совпадут по размеру.
+#  • S4 12–20: удлиняет каждый пакет данных, с MTU сервера 1420 не выйти за 1500.
+#  • H1–H4 — одиночные числа: под защитой заголовков они зашифрованы, а широкий
+#    диапазон с RandomTrailers изредка выдавал бы пакет данных за хендшейк.
+#  • Тайминги — вокруг констант WireGuard, как у Amnezia: ровный период рекея
+#    и keepalive — подпись. I1 — пакет, похожий на DNS-ответ (дефолт Amnezia).
+read JC JMIN JMAX S1 S2 S3 S4 H1 H2 H3 H4 < <(python3 -c "
 import random
-h = random.sample(range(5, 2**32), 4)
-print(
-    random.randint(3,10),
-    random.randint(10,50),
-    random.randint(51,100),
-    random.randint(1, 2**64-1),
-    *h,
-)")
-S1=0
-S2=0
-info "Jc=$JC Jmin=$JMIN Jmax=$JMAX H1=$H1 H2=$H2 H3=$H3 H4=$H4 i1=$I1"
+r = random.SystemRandom()
+h = r.sample(range(5, 2**32), 4)
+print(r.randint(3,10), r.randint(10,50), r.randint(51,100),
+      r.randint(15,64), r.randint(15,64), r.randint(12,32), r.randint(12,20), *h)")
+if [[ "$AWG31" -eq 1 ]]; then
+    log "Генерация параметров обфускации AWG 3.1..."
+    HEADER_PROTECTION_KEY=$(awg genkey)
+    REKEY_AFTER_TIME="100-120"
+    REKEY_TIMEOUT="3-7"
+    REJECT_AFTER_TIME="150-180"
+    KEEPALIVE_TIMEOUT="5-15"
+    MAX_HANDSHAKE_ATTEMPTS="15-20"
+    RANDOM_TRAILERS="on"
+    DISABLE_COOKIES="on"
+    CLIENT_MTU="1376"
+    PERSISTENT_KEEPALIVE="25-35"
+    I1="<r 2><b 0x858000010001000000000669636c6f756403636f6d0000010001c00c000100010000105a00044d583737>"
+    info "Jc=$JC Jmin=$JMIN Jmax=$JMAX S1=$S1 S2=$S2 S3=$S3 S4=$S4 H1=$H1 H2=$H2 H3=$H3 H4=$H4"
+    info "Защита заголовков, RandomTrailers, DisableCookies, тайминги-диапазоны, I1"
+else
+    log "Генерация параметров обфускации AWG 2.0..."
+    # Как ставилось до ветки experimental, но без i1 = <число>: тегов в нём не
+    # было, и ядро собирало из него пакет нулевой длины — он не отправлялся
+    S1=0; S2=0; S3=""; S4=""
+    info "Jc=$JC Jmin=$JMIN Jmax=$JMAX H1=$H1 H2=$H2 H3=$H3 H4=$H4"
+fi
 
 # ── Шаг 6: Конфиг AWG ────────────────────────────────────────────────────────
 log "Создание конфига интерфейса ${VPN_IFACE}..."
@@ -1004,8 +1049,19 @@ log "Создание конфига интерфейса ${VPN_IFACE}..."
     printf "ListenPort = %s\n" "$AWG_PORT"
     printf "Jc = %s\nJmin = %s\nJmax = %s\n" "$JC" "$JMIN" "$JMAX"
     printf "S1 = %s\nS2 = %s\n" "$S1" "$S2"
+    if [[ "$AWG31" -eq 1 ]]; then
+        printf "S3 = %s\nS4 = %s\n" "$S3" "$S4"
+    fi
     printf "H1 = %s\nH2 = %s\nH3 = %s\nH4 = %s\n" "$H1" "$H2" "$H3" "$H4"
-    printf "i1 = %s\n" "$I1"
+    # I1 — только в конфигах клиентов: его шлёт инициатор хендшейка
+    if [[ "$AWG31" -eq 1 ]]; then
+        printf "HeaderProtectionKey = %s\n" "$HEADER_PROTECTION_KEY"
+        printf "RekeyAfterTime = %s\nRekeyTimeout = %s\nRejectAfterTime = %s\n" \
+            "$REKEY_AFTER_TIME" "$REKEY_TIMEOUT" "$REJECT_AFTER_TIME"
+        printf "KeepaliveTimeout = %s\nMaxHandshakeAttempts = %s\n" \
+            "$KEEPALIVE_TIMEOUT" "$MAX_HANDSHAKE_ATTEMPTS"
+        printf "RandomTrailers = %s\nDisableCookies = %s\n" "$RANDOM_TRAILERS" "$DISABLE_COOKIES"
+    fi
     printf "\n"
     printf "PostUp = iptables -A FORWARD -i %s -j ACCEPT; iptables -A FORWARD -o %s -j ACCEPT; iptables -t nat -A POSTROUTING -o %s -j MASQUERADE\n" \
         "$VPN_IFACE" "$VPN_IFACE" "$IFACE"
@@ -1113,9 +1169,20 @@ printf "SERVER_IP=%s\nSERVER_PORT=%s\nSERVER_PUBLIC=%s\nVPN_IFACE=%s\nVPN_SUBNET
 printf "SERVER_ENDPOINT=%s\nSERVER_ENDPOINT_BACKUP=%s\n" \
     "$SERVER_ENDPOINT" "$SERVER_ENDPOINT_BACKUP" \
     >> /etc/amnezia/amneziawg/server.env
-printf "JC=%s\nJMIN=%s\nJMAX=%s\nS1=%s\nS2=%s\nH1=%s\nH2=%s\nH3=%s\nH4=%s\nI1=%s\n" \
-    "$JC" "$JMIN" "$JMAX" "$S1" "$S2" "$H1" "$H2" "$H3" "$H4" "$I1" \
+printf "JC=%s\nJMIN=%s\nJMAX=%s\nS1=%s\nS2=%s\nH1=%s\nH2=%s\nH3=%s\nH4=%s\n" \
+    "$JC" "$JMIN" "$JMAX" "$S1" "$S2" "$H1" "$H2" "$H3" "$H4" \
     >> /etc/amnezia/amneziawg/server.env
+if [[ "$AWG31" -eq 1 ]]; then
+    # I1 в кавычках: server.env подключается через source, а < > без них — перенаправление
+    printf "S3=%s\nS4=%s\nI1='%s'\nHEADER_PROTECTION_KEY=%s\n" \
+        "$S3" "$S4" "$I1" "$HEADER_PROTECTION_KEY" >> /etc/amnezia/amneziawg/server.env
+    printf "REKEY_AFTER_TIME=%s\nREKEY_TIMEOUT=%s\nREJECT_AFTER_TIME=%s\nKEEPALIVE_TIMEOUT=%s\nMAX_HANDSHAKE_ATTEMPTS=%s\n" \
+        "$REKEY_AFTER_TIME" "$REKEY_TIMEOUT" "$REJECT_AFTER_TIME" "$KEEPALIVE_TIMEOUT" \
+        "$MAX_HANDSHAKE_ATTEMPTS" >> /etc/amnezia/amneziawg/server.env
+    printf "RANDOM_TRAILERS=%s\nDISABLE_COOKIES=%s\nCLIENT_MTU=%s\nPERSISTENT_KEEPALIVE=%s\n" \
+        "$RANDOM_TRAILERS" "$DISABLE_COOKIES" "$CLIENT_MTU" "$PERSISTENT_KEEPALIVE" \
+        >> /etc/amnezia/amneziawg/server.env
+fi
 printf "PRIMARY_DNS=1.1.1.1\nSECONDARY_DNS=1.0.0.1\n" \
     >> /etc/amnezia/amneziawg/server.env
 printf "TIMEZONE=%s\n" "$TIMEZONE" \
@@ -1329,6 +1396,11 @@ echo -e "${GREEN}${BOLD}══════════════════�
 echo ""
 info "AWG интерфейс: ${VPN_IFACE}  |  Подсеть: ${VPN_SUBNET}.x  |  Порт: ${AWG_PORT}/UDP"
 info "AWG запущен с параметрами: Jc=$JC Jmin=$JMIN Jmax=$JMAX"
+if [[ "$AWG31" -eq 1 ]]; then
+    info "Протокол: AmneziaWG 3.1 — клиентам нужны AmneziaVPN 5.0.1.5+ или AmneziaWG 3.1+"
+else
+    warn "Протокол: AmneziaWG 2.0 (пакеты 3.1 недоступны) — перевод: vpn.sh → «Протокол AWG 3.1»"
+fi
 echo ""
 
 if [[ "$SLAVE_MODE" -eq 1 ]]; then
