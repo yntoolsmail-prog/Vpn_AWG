@@ -46,9 +46,14 @@ if python3 -c "import paramiko" 2>/dev/null; then
     info "paramiko доступен ✓"
 else
     warn "paramiko не найден — пробую установить..."
-    pip3 install "paramiko>=3.0" --break-system-packages > /dev/null 2>&1 \
-        || pip3 install "paramiko>=3.0" > /dev/null 2>&1 \
-        || warn "Не удалось установить paramiko — добавление slave-серверов потребует ручного ввода ключа."
+    # pip_install_sys (lib/utils.sh) обходит зависимости, поставленные из apt;
+    # без lib — прежний путь
+    if [[ -f /root/lib/utils.sh ]] && source /root/lib/utils.sh && declare -F pip_install_sys > /dev/null; then
+        pip_install_sys "paramiko>=3.0"
+    else
+        pip3 install "paramiko>=3.0" --break-system-packages > /dev/null 2>&1 \
+            || pip3 install "paramiko>=3.0" > /dev/null 2>&1
+    fi || warn "Не удалось установить paramiko — добавление slave-серверов потребует ручного ввода ключа."
 fi
 
 touch "${MOD_DIR}/.installed"

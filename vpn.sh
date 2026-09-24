@@ -9,6 +9,8 @@
 source "$(dirname "$0")/lib/colors.sh"
 # shellcheck source=lib/diagnostics.sh
 source "$(dirname "$0")/lib/diagnostics.sh"
+# shellcheck source=lib/utils.sh
+source "$(dirname "$0")/lib/utils.sh"   # pip_install_sys
 
 BOT_ENV="/etc/amnezia/amneziawg/bot.env"
 ENV_FILE="/etc/amnezia/amneziawg/server.env"
@@ -806,8 +808,8 @@ manage_updates() {
                 ;;
             3)
                 echo -e "  ${CYAN}Обновляю python-telegram-bot...${NC}"
-                pip3 install -U "python-telegram-bot[job-queue]" --break-system-packages 2>/dev/null || \
-                pip3 install -U "python-telegram-bot[job-queue]"
+                PIP_VERBOSE=1 pip_install_sys -U "python-telegram-bot[job-queue]>=22.0,<23" \
+                    || echo -e "${RED}  ✗ Не удалось обновить (вывод pip — выше)${NC}"
                 echo -e "${GREEN}  ✓ Готово. Перезапускаю бота...${NC}"
                 systemctl restart ${BOT_SERVICE}
                 press_enter

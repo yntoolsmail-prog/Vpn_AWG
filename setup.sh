@@ -1222,27 +1222,24 @@ chmod +x /root/vpn.sh /root/setup.sh
 
 # ── Шаг 11: Python зависимости (только PRIMARY) ──────────────────────────────
 if [[ "$SLAVE_MODE" -eq 0 ]]; then
+    # pip_install_sys — из lib/utils.sh. Подключаем заново копию, которую шаг 10
+    # только что скачал из этой ветки: lib/, подхваченная при старте, могла
+    # остаться от прошлого запуска и этой функции не знать
+    [[ -f /root/lib/utils.sh ]] && source /root/lib/utils.sh
+    declare -F pip_install_sys > /dev/null \
+        || err "В lib/utils.sh нет pip_install_sys — перезапустите установщик."
+    [[ "$INSTALL_MODE" == "1" ]] && PIP_VERBOSE=0 || PIP_VERBOSE=1
+
     log "Установка python-telegram-bot..."
-    if [[ "$INSTALL_MODE" == "1" ]]; then
-        pip3 install "python-telegram-bot[job-queue]>=22.0,<23" --break-system-packages > /dev/null || \
-        pip3 install "python-telegram-bot[job-queue]>=22.0,<23" > /dev/null || \
-        err "Не удалось установить python-telegram-bot."
-    else
-        pip3 install "python-telegram-bot[job-queue]>=22.0,<23" --break-system-packages || \
-        pip3 install "python-telegram-bot[job-queue]>=22.0,<23" || \
-        err "Не удалось установить python-telegram-bot."
-    fi
+    pip_install_sys "python-telegram-bot[job-queue]>=22.0,<23" \
+        || err "Не удалось установить python-telegram-bot."
 
     log "Установка flask (веб-интерфейс TMA)..."
-    pip3 install "flask>=3.0" --break-system-packages --ignore-installed blinker > /dev/null 2>&1 || \
-    pip3 install "flask>=3.0" --ignore-installed blinker > /dev/null 2>&1 || \
-    pip3 install "flask>=3.0" > /dev/null 2>&1 || \
-    err "Не удалось установить flask."
+    pip_install_sys "flask>=3.0" || err "Не удалось установить flask."
 
     log "Установка paramiko (SSH для slave-серверов)..."
-    pip3 install "paramiko>=3.0" --break-system-packages > /dev/null 2>&1 || \
-    pip3 install "paramiko>=3.0" > /dev/null 2>&1 || \
-    warn "Не удалось установить paramiko — добавление slave-серверов потребует ручного ввода ключа."
+    pip_install_sys "paramiko>=3.0" \
+        || warn "Не удалось установить paramiko — добавление slave-серверов потребует ручного ввода ключа."
 else
     info "Slave-режим: Python/Flask пропускаем (бот не нужен)"
 fi
