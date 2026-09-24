@@ -2,11 +2,28 @@
 # ── SSH защита ────────────────────────────────────────────────────────────────
 # Используется из setup.sh. Переменные AWG_DIR, CYAN, BOLD, NC и др. — из родительского скрипта.
 
+# Действующее значение опции sshd (ключ в нижнем регистре). sshd -T учитывает
+# значения по умолчанию и sshd_config.d/*.conf — в Ubuntu 22.04+ там, например,
+# 50-cloud-init.conf с PasswordAuthentication. Раньше читали только строку
+# «Port …» из sshd_config: её по умолчанию нет (закомментирована), grep ничего
+# не находил, а «|| echo 22» не срабатывал — код конвейера берётся от awk,
+# и порт выводился пустым. Без sshd -T (нет /run/sshd и т.п.) — первая строка
+# из конфигов в порядке sshd: drop-in раньше основного, первое совпадение главное.
+_sshd_opt() {
+    local key="${1,,}" def="$2" v
+    v=$(sshd -T 2>/dev/null | awk -v k="$key" '$1 == k { print $2; exit }')
+    if [[ -z "$v" ]]; then
+        v=$(cat /etc/ssh/sshd_config.d/*.conf /etc/ssh/sshd_config 2>/dev/null \
+            | awk -v k="$key" 'tolower($1) == k { print $2; exit }')
+    fi
+    echo "${v:-$def}"
+}
+
 _ssh_status_report() {
     local port pass_auth permit_root fail2ban_status root_keys=0
-    port=$(grep "^Port " /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' || echo "22")
-    pass_auth=$(grep "^PasswordAuthentication " /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' || echo "yes")
-    permit_root=$(grep "^PermitRootLogin " /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' || echo "yes")
+    port=$(_sshd_opt Port 22)
+    pass_auth=$(_sshd_opt PasswordAuthentication yes)
+    permit_root=$(_sshd_opt PermitRootLogin prohibit-password)
     fail2ban_status=$(systemctl is-active fail2ban 2>/dev/null || echo "inactive")
     [[ -f /root/.ssh/authorized_keys && -s /root/.ssh/authorized_keys ]] && root_keys=1
 
@@ -19,7 +36,8 @@ _ssh_status_report() {
     else
         echo -e "  Вход по паролю:  ${RED}[✗] включён — опасно!${NC}"
     fi
-    if [[ "$permit_root" == "prohibit-password" || "$permit_root" == "no" ]]; then
+    # sshd -T печатает prohibit-password старым синонимом without-password
+    if [[ "$permit_root" =~ ^(prohibit-password|without-password|no)$ ]]; then
         echo -e "  Root-логин:      ${GREEN}[✓] только по ключу или запрещён${NC}"
     else
         echo -e "  Root-логин:      ${RED}[✗] разрешён паролем — опасно!${NC}"
@@ -44,10 +62,22 @@ _ssh_install_fail2ban() {
         ok "fail2ban уже работает."
         return 0
     fi
-    log "Обновление пакетов..."
-    apt-get update -qq
+    # На свежем VPS apt почти всегда занят unattended-upgrades (плановые
+    # обновления после загрузки). Раньше apt-get сразу падал на блокировке dpkg.
+    # Теперь ждём её освобождения до 10 минут (DPkg::Lock::Timeout) — не убиваем
+    # процесс: прерванный посреди установки dpkg ломает систему пакетов
+    local apt_wait=(-o DPkg::Lock::Timeout=600) holder
+    holder=$(fuser /var/lib/dpkg/lock-frontend 2>/dev/null | awk '{print $1}')
+    if [[ -n "$holder" ]]; then
+        info "apt занят: $(ps -o comm= -p "$holder" 2>/dev/null || echo "PID $holder") — жду, пока закончит (до 10 мин)..."
+    fi
+    log "Обновление списков пакетов..."
+    apt-get "${apt_wait[@]}" update -qq || warn "Списки пакетов не обновились — ставлю из имеющихся."
     log "Установка fail2ban..."
-    apt-get install -y -qq fail2ban || { warn "Не удалось установить fail2ban."; return 1; }
+    apt-get "${apt_wait[@]}" install -y -qq fail2ban || {
+        warn "Не удалось установить fail2ban. Повторите позже: bash /root/setup.sh --ssh"
+        return 1
+    }
     cat > /etc/fail2ban/jail.local << 'JAILEOF'
 [sshd]
 enabled = true
@@ -55,7 +85,7 @@ maxretry = 5
 findtime = 600
 bantime = 3600
 JAILEOF
-    systemctl enable fail2ban --now
+    systemctl enable fail2ban --now || { warn "fail2ban установлен, но не запустился: systemctl status fail2ban"; return 1; }
     ok "fail2ban запущен: блокировка на 1 час после 5 неверных попыток за 10 минут."
 }
 
@@ -116,7 +146,7 @@ _ssh_setup_keys() {
     local server_ip ssh_port
     server_ip=$(grep "^SERVER_IP=" "${AWG_DIR}/server.env" 2>/dev/null | cut -d= -f2 || \
                 curl -4 -s --max-time 5 ifconfig.me 2>/dev/null || echo "IP_СЕРВЕРА")
-    ssh_port=$(grep "^Port " /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' || echo "22")
+    ssh_port=$(_sshd_opt Port 22)
 
     echo ""
     echo -e "  ${BOLD}Добавление персонального SSH-ключа${NC}"
@@ -222,8 +252,10 @@ _ssh_security_menu() {
         echo ""
         read -p "  > " _SSH_ACT
         case "$_SSH_ACT" in
-            1) echo ""; _ssh_install_fail2ban; read -p "  Нажмите Enter..." _d ;;
-            2) _ssh_setup_keys; read -p "  Нажмите Enter..." _d ;;
+            # || true: setup.sh работает под set -e, и неудача пункта меню
+            # (например, apt занят) обрывала весь установщик
+            1) echo ""; _ssh_install_fail2ban || true; read -p "  Нажмите Enter..." _d ;;
+            2) _ssh_setup_keys || true; read -p "  Нажмите Enter..." _d ;;
             0) return ;;
             *) warn "Введите 0, 1 или 2."; sleep 1 ;;
         esac
