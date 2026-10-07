@@ -521,11 +521,18 @@ async def srv_del_confirm(query, srv_idx: int):
     emoji = srv.get("emoji", "🖥")
     name  = srv.get("name", f"Сервер {srv_idx+1}")
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🗑 Да, удалить", callback_data=f"srv_del_ok_{srv_idx}")],
-        [InlineKeyboardButton(BTN_BACK,        callback_data=f"srv_card_{srv_idx}")],
+        [InlineKeyboardButton("🗑 Удалить и остановить AWG", callback_data=f"srv_del_ok_{srv_idx}")],
+        [InlineKeyboardButton("📤 Только убрать из бота",    callback_data=f"srv_detach_{srv_idx}")],
+        [InlineKeyboardButton(BTN_BACK,                      callback_data=f"srv_card_{srv_idx}")],
     ])
     await query.edit_message_text(
-        f"Удалить сервер *{emoji} {name}*?",
+        f"Сервер *{emoji} {name}*:\n\n"
+        "🗑 *Удалить* — бот остановит AWG на нём и уберёт из списка: клиенты "
+        "к нему больше не подключатся.\n\n"
+        "📤 *Только убрать из бота* — сервер продолжит работать как есть, со "
+        "своими клиентами и параметрами, но бот перестанет им управлять: новые "
+        "устройства и удаления до него не дойдут. Вернуть — «➕ Добавить сервер», "
+        "конфиг основного скопируется на него заново.",
         reply_markup=kb, parse_mode="Markdown"
     )
 
@@ -571,6 +578,32 @@ async def srv_del_ok(query, srv_idx: int):
     save_servers(servers)
     await query.edit_message_text(
         f"✅ Сервер *{emoji} {name}* удалён.{stop_note}{moved_note}",
+        reply_markup=back_kb("servers"),
+        parse_mode="Markdown"
+    )
+
+
+async def srv_detach_ok(query, srv_idx: int):
+    """Убирает slave из servers.json, не заходя на него. Нужен, когда сервер
+    должен доработать на своих параметрах — например, слейвы на AWG 2.0 после
+    перевода основного на 3.1: «Удалить» остановил бы на них AWG, а оставленные
+    в списке они попали бы под перевод и «Синхронизировать»."""
+    servers = load_servers()
+    if srv_idx >= len(servers):
+        await query.answer("Сервер не найден.", show_alert=True)
+        return
+    srv = servers[srv_idx]
+    if srv.get("is_primary"):
+        await query.answer("Нельзя убрать PRIMARY сервер.", show_alert=True)
+        return
+    name  = srv.get("name", "Сервер")
+    emoji = srv.get("emoji", "🖥")
+    servers.pop(srv_idx)
+    save_servers(servers)
+    await query.edit_message_text(
+        f"📤 Сервер *{emoji} {name}* убран из бота.\n\n"
+        "AWG на нём не тронут: клиенты с уже скачанными конфигами подключаются "
+        "как раньше. Новые устройства и удаления до него больше не доходят.",
         reply_markup=back_kb("servers"),
         parse_mode="Markdown"
     )

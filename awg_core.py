@@ -602,17 +602,30 @@ def post_restore_fixup() -> list:
         try:
             with open(ENV_FILE) as f:
                 lines = f.read().split("\n")
-            out = []
+            old_ip = next((l.split("=", 1)[1].strip() for l in lines
+                           if l.startswith("SERVER_IP=")), "")
+            out, ep_moved = [], []
             for line in lines:
-                if line.startswith("SERVER_IP="):
-                    old_ip = line.split("=", 1)[1].strip()
+                key, _, val = line.partition("=")
+                if key == "SERVER_IP":
                     out.append(f"SERVER_IP={new_ip}")
+                # Адрес, который уходит в конфиги клиентов: если сервер раздавался
+                # по голому IP, без домена, здесь тоже старый IP — бот и TMA берут
+                # его по умолчанию и выдавали бы конфиги на прежний (часто
+                # заблокированный) адрес
+                elif (key in ("SERVER_ENDPOINT", "SERVER_ENDPOINT_BACKUP")
+                      and old_ip and old_ip != new_ip and val.strip() == old_ip):
+                    out.append(f"{key}={new_ip}")
+                    ep_moved.append(key)
                 else:
                     out.append(line)
             with open(ENV_FILE, "w") as f:
                 f.write("\n".join(out))
             if old_ip and old_ip != new_ip:
                 report.append(f"🖥 IP сервера обновлён: {old_ip} → {new_ip}")
+            if ep_moved:
+                report.append("🔗 Конфиги раздавались по IP без домена — адрес в них тоже "
+                              f"заменён на {new_ip}")
         except Exception as e:
             report.append(f"⚠️ server.env: {e}")
 

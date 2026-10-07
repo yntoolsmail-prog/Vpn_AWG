@@ -80,7 +80,7 @@ from handlers.clients import (
 from handlers.servers import (
     show_servers_list, srv_deldomain_list, srv_deldomain_confirm, srv_deldomain_ok,
     show_server_card, _sync_peer_to_all_slaves, _check_endpoint_dns, _check_slaves_sync,
-    srv_checkdns, srv_del_confirm, srv_del_ok, srv_sync_now,
+    srv_checkdns, srv_del_confirm, srv_del_ok, srv_detach_ok, srv_sync_now,
     srv_rename_start, srv_rename_name, srv_rename_emoji, srv_rename_country,
     srv_adddomain_start, srv_adddomain_pick, srv_adddomain_receive,
 )
@@ -419,6 +419,8 @@ async def _button_dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_servers_list(query)
     elif data.startswith("srv_card_") and is_admin:
         await show_server_card(query, int(data[9:]))
+    elif data.startswith("srv_detach_") and is_admin:
+        await srv_detach_ok(query, int(data[11:]))
     elif data.startswith("srv_del_ok_") and is_admin:
         await srv_del_ok(query, int(data[11:]))
     elif data.startswith("srv_del_") and not data.startswith("srv_del_ok_") and is_admin:
