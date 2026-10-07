@@ -86,6 +86,7 @@ TMA_URL                = srv.get("TMA_URL", "")
 
 # ── Системные константы (сервисы, бинарники, флаги) ───────────────────────────
 BOT_SERVICE  = srv.get("BOT_SERVICE",  "awg-bot")
+TMA_SERVICE  = srv.get("TMA_SERVICE",  "awg-tma")
 AWG_SERVICE  = f"awg-quick@{AWG_IFACE}"
 
 QRENCODE_BIN = srv.get("QRENCODE_BIN", "qrencode")
@@ -666,6 +667,27 @@ def post_restore_fixup() -> list:
         pass
 
     return report
+
+
+def restart_after_restore(caller: str):
+    """После восстановления бэкапа: поднять AWG и перезапустить бота и веб-панель.
+
+    Оба процесса читают server.env один раз, при импорте. Не перезапущенный
+    выдавал новым устройствам параметры обфускации из памяти — от установки,
+    а не из бэкапа, — и те не проходили хендшейк. Перекачивание конфига не
+    помогает: параметры пишутся в файл устройства при создании.
+
+    Команды через «;»: не поднявшийся AWG не должен оставлять процессы со
+    старыми параметрами. Вызвавший сервис (caller) — последним: systemctl
+    restart убивает его cgroup вместе с этим скриптом. Остальные — try-restart:
+    выключенную веб-панель не запускать. sleep 2 — чтобы успел уйти ответ
+    пользователю."""
+    others = [s for s in (BOT_SERVICE, TMA_SERVICE) if s != caller]
+    cmds = ["sleep 2", f"systemctl start {AWG_SERVICE}"]
+    cmds += [f"systemctl try-restart {s}" for s in others]
+    cmds.append(f"systemctl restart {caller}")
+    subprocess.Popen(["bash", "-c", "; ".join(cmds)],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def _harden_secret_perms():

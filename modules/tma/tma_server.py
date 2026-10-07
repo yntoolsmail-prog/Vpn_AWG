@@ -26,6 +26,7 @@ from flask import Flask, jsonify, request, Response, send_file
 
 from awg_core import (
     ADMIN_ID, AWG_CONF, AWG_IFACE, AWG_SERVICE, BACKUP_DIR, BOT_SERVICE, CLIENTS_DIR, BOT_TOKEN,
+    TMA_SERVICE,
     ENV_FILE, QRENCODE_BIN, SERVER_ENDPOINT, SERVER_ENDPOINT_BACKUP, SERVER_IP, SERVER_PORT, SERVER_PUBLIC,
     PRIMARY_DNS, SECONDARY_DNS, USERS_FILE,
     build_allowed_ips, can_access_device, collect_stats_basic, collect_stats_full,
@@ -884,12 +885,9 @@ def backup_restore(user_id, filename):
     except Exception as e:
         fixes = [f"⚠️ Пост-обработка не завершилась: {e}"]
 
-    # Поднимаем AWG и перезапускаем бота (через 2 сек, не блокируем ответ)
-    subprocess.Popen(
-        ["bash", "-c",
-         f"sleep 2 && systemctl start awg-quick@{AWG_IFACE} && systemctl restart {BOT_SERVICE}"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
+    # Поднимаем AWG, перезапускаем бота и саму веб-панель (через 2 сек, не
+    # блокируем ответ): оба держат server.env в памяти
+    restart_after_restore(TMA_SERVICE)
     return jsonify({
         "ok":          True,
         "auto_backup": os.path.basename(auto_backup),
