@@ -238,6 +238,9 @@ run_diagnostics() {
         local OBF_SPEC OBF_LABEL OBF_KEY OBF_SHOW OBF_CONF OBF_LIVE OBF_DEF OBF_ENV OBF_ENV_NAME
         local OBF_KIND OBF_RC OBF_REF
         local OBF_MISMATCH=0 OBF_ENV_MISMATCH=0 OBF_DEFAULT_H=1 OBF_ABSENT=0 OBF_HPK=0
+        # Что ждёт сервер по каждому параметру — для сверки файлов устройств
+        # в «Целостности данных»: метка, вид, умолчание и значение на интерфейсе
+        local -A OBF_LBL OBF_KND OBF_DFL OBF_SRV
         if [[ "$IS_SLAVE" -eq 0 ]]; then
             printf "  %-6s %-22s %-22s %s\n" "ПАРАМ" "awg0.conf" "server.env" "ИНТЕРФЕЙС"
         else
@@ -253,6 +256,8 @@ run_diagnostics() {
                 HPK:HeaderProtectionKey:header-protection-key:HEADER_PROTECTION_KEY:\(none\):key \
                 Trail:RandomTrailers:random-trailers:RANDOM_TRAILERS:off:bool; do
             IFS=: read -r OBF_LABEL OBF_KEY OBF_SHOW OBF_ENV_NAME OBF_DEF OBF_KIND <<< "$OBF_SPEC"
+            OBF_LBL[$OBF_KEY]=$OBF_LABEL; OBF_KND[$OBF_KEY]=$OBF_KIND
+            OBF_DFL[$OBF_KEY]=$OBF_DEF;   OBF_SRV[$OBF_KEY]=$OBF_DEF
             OBF_CONF=$(awk -v k="$OBF_KEY" '
                 /^\[Peer\]/ { exit }
                 index($0, "=") {
@@ -273,6 +278,12 @@ run_diagnostics() {
             fi
             OBF_LIVE=$(_diag_norm_range "$OBF_LIVE" "$OBF_KIND")
             OBF_REF=$(_diag_norm_range "${OBF_CONF:-$OBF_DEF}" "$OBF_KIND")
+            # Интерфейс не отвечает — эталоном остаётся awg0.conf
+            if [[ "$OBF_RC" -eq 0 && -n "$OBF_LIVE" ]]; then
+                OBF_SRV[$OBF_KEY]=$OBF_LIVE
+            else
+                OBF_SRV[$OBF_KEY]=$OBF_REF
+            fi
             local OBF_MARK=""
             if [[ "$OBF_LIVE" != "$OBF_REF" ]]; then
                 OBF_MISMATCH=1
@@ -552,6 +563,51 @@ run_diagnostics() {
             fi
         done
         [[ "$ORPHAN" == "0" ]] && echo "  ✅ Все клиенты есть в awg.conf"
+        echo ""
+
+        # Параметры обфускации пишутся в файл устройства при создании, и из него
+        # же собирается каждый перевыпущенный конфиг. Устройство, созданное
+        # процессом со старым server.env в памяти (бот или веб-панель не
+        # перезапустились после восстановления бэкапа), получает чужие S/H и
+        # молча не проходит хендшейк — перекачивание конфига не помогает.
+        # Сверяем то, что обязано совпадать с сервером; Jc/Jmin/Jmax, I1–I5 и
+        # тайминги — односторонние, их не трогаем.
+        echo "--- Обфускация в файлах устройств ↔ интерфейс ---"
+        local DEV_BAD=0 DEV_KEY DEV_VAL DEV_DIFF DEV_K DEV_V
+        local -A DEV_P
+        for CONF in "$CLIENTS_DIR"/*.conf; do
+            [[ -f "$CONF" ]] || continue
+            DEV_P=()
+            # «ключ<TAB>значение» из [Interface], ключ — в нижнем регистре
+            while IFS=$'\t' read -r DEV_K DEV_V; do
+                DEV_P[$DEV_K]=$DEV_V
+            done < <(awk '
+                /^\[Peer\]/ { exit }
+                index($0, "=") {
+                    k = substr($0, 1, index($0, "=") - 1); gsub(/[ \t]/, "", k)
+                    v = substr($0, index($0, "=") + 1);    gsub(/[ \t\r]/, "", v)
+                    printf "%s\t%s\n", tolower(k), v
+                }' "$CONF" 2>/dev/null)
+            DEV_DIFF=""
+            for DEV_KEY in S1 S2 S3 S4 H1 H2 H3 H4 HeaderProtectionKey RandomTrailers; do
+                DEV_VAL=${DEV_P[${DEV_KEY,,}]}
+                DEV_VAL=$(_diag_norm_range "${DEV_VAL:-${OBF_DFL[$DEV_KEY]}}" "${OBF_KND[$DEV_KEY]}")
+                [[ "$DEV_VAL" != "${OBF_SRV[$DEV_KEY]}" ]] && DEV_DIFF+=" ${OBF_LBL[$DEV_KEY]}"
+            done
+            if [[ -n "$DEV_DIFF" ]]; then
+                echo "  ⚠️  $(basename "$CONF" .conf): не совпадает${DEV_DIFF}"
+                DEV_BAD=$((DEV_BAD+1))
+            fi
+        done
+        if [[ "$DEV_BAD" -eq 0 ]]; then
+            echo "  ✅ У всех устройств параметры как на интерфейсе"
+        else
+            echo "  Эти устройства не пройдут хендшейк, и перекачивание конфига не"
+            echo "  поможет: параметры записаны в их файлы. Удалите и создайте заново."
+            echo "  Если таких много — перезапустите бота и веб-панель, чтобы новые"
+            echo "  устройства не получали те же параметры:"
+            echo "  systemctl restart ${BOT_SERVICE} awg-tma"
+        fi
         echo ""
         fi   # конец блока «только основной сервер»
 

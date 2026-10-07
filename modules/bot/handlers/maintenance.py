@@ -9,7 +9,7 @@ from awg_core import (
     get_all_clients, get_awg_dump, get_combined_awg_dump, get_client_pub, get_kernel_version,
     get_maintenance, get_system_stats, get_ubuntu_version,
     get_user_clients, is_approved, load_users, log_maintenance_done,
-    remove_client_from_awg, save_users,
+    remove_client_from_awg, restart_after_restore, save_users,
     get_admin_pubkey, get_ssh_password_auth_local,
     ssh_toggle_password_auth_all, ssh_regen_admin_key,
     process_domain, run_subnet_daemon,
@@ -281,12 +281,9 @@ async def confirm_restore(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"restore: отчёт не отправлен: {e}")
     finally:
-        # 4. Поднимаем AWG с новым конфигом, перезапускаем бота — в любом случае
-        subprocess.Popen(
-            ["bash", "-c",
-             f"sleep 2 && systemctl start awg-quick@{AWG_IFACE} && systemctl restart {BOT_SERVICE}"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
+        # 4. Поднимаем AWG с новым конфигом, перезапускаем веб-панель и бота —
+        #    в любом случае: оба держат server.env в памяти
+        restart_after_restore(BOT_SERVICE)
     return ConversationHandler.END
 
 # ══════════════════════════════════════════════════════════════════════════════
