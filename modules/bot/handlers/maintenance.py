@@ -266,20 +266,27 @@ async def confirm_restore(update: Update, context: ContextTypes.DEFAULT_TYPE):
     os.remove(tmp_path)
     context.user_data.pop("restore_path", None)
 
+    # Отчёт — без Markdown: в нём имена файлов с «_» (proxy_bot.env) и тексты
+    # ошибок с путями, а одиночное «_» Telegram считает незакрытым курсивом и
+    # отклоняет сообщение. Раньше обработчик на этом падал до шага 4: AWG
+    # оставался остановленным, бот не перезапускался, в чате висело
+    # «Восстанавливаю конфиги...»
     fixes_note = ("\n\n" + "\n".join(fixes)) if fixes else ""
-    await query.message.reply_text(
-        f"✅ Конфиги восстановлены!{fixes_note}\n\n"
-        f"Автобэкап сохранён: `{auto_backup}`\n\n"
-        f"⏳ Перезапускаю AWG и бота...",
-        parse_mode="Markdown"
-    )
-
-    # 4. Поднимаем AWG с новым конфигом, перезапускаем бота
-    subprocess.Popen(
-        ["bash", "-c",
-         f"sleep 2 && systemctl start awg-quick@{AWG_IFACE} && systemctl restart {BOT_SERVICE}"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-    )
+    try:
+        await query.message.reply_text(
+            f"✅ Конфиги восстановлены!{fixes_note}\n\n"
+            f"Автобэкап сохранён: {auto_backup}\n\n"
+            f"⏳ Перезапускаю AWG и бота..."
+        )
+    except Exception as e:
+        logger.error(f"restore: отчёт не отправлен: {e}")
+    finally:
+        # 4. Поднимаем AWG с новым конфигом, перезапускаем бота — в любом случае
+        subprocess.Popen(
+            ["bash", "-c",
+             f"sleep 2 && systemctl start awg-quick@{AWG_IFACE} && systemctl restart {BOT_SERVICE}"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
     return ConversationHandler.END
 
 # ══════════════════════════════════════════════════════════════════════════════
