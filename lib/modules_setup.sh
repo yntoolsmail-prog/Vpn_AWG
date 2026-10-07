@@ -31,10 +31,14 @@ _mod_is_installed() {
 
 # Установить выбранные модули
 _install_modules() {
-    local -n _to_install=$1   # indexed array of module names to install
+    # Ссылка на массив имён модулей у вызывающего. Её имя обязано отличаться
+    # от имени переданного массива: меню передаёт «_to_install», и одноимённая
+    # ссылка указывала сама на себя (bash: circular name reference) — список
+    # был пуст, установщик молча писал «Изменений нет»
+    local -n _mods_ref=$1
 
     local changed=0
-    for name in "${_to_install[@]}"; do
+    for name in "${_mods_ref[@]}"; do
         if _mod_is_installed "$name"; then
             info "Модуль ${name} уже установлен — пропускаю."
             continue
