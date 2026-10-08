@@ -842,7 +842,49 @@ def post_restore_fixup() -> list:
     except Exception:
         pass
 
+    # 9. Что после переезда остаётся админу и чего восстановление не видит:
+    #    A-записи доменов основного (клиенты с доменом в конфиге пойдут на новый
+    #    сервер, только когда запись сменится) и порт AWG в фаерволе хостера
+    try:
+        ip = load_env(ENV_FILE).get("SERVER_IP", "")
+        invalidate_servers_cache()
+        primary = next((s for s in load_servers() if s.get("is_primary")), {})
+        doms = [ep["value"] for ep in primary.get("endpoints", []) if ep.get("type") == "domain"]
+        if doms and ip:
+            report.append("🌐 Домены основного:")
+            for d, got in _resolve_domains(doms).items():
+                if got == ip:
+                    report.append(f"   ✅ {d} → {got}")
+                else:
+                    report.append(f"   ❌ {d} → {got or 'не разрешился'} — поменяйте A-запись на {ip}")
+    except Exception as e:
+        report.append(f"⚠️ Проверка доменов: {e}")
+    try:
+        with open(conf) as f:
+            m = re.search(r"^\s*ListenPort\s*=\s*(\d+)", f.read(), re.M)
+        if m:
+            report.append(f"📡 Порт AWG: UDP {m.group(1)} — если у хостера есть фаервол "
+                          f"в панели, откройте его там")
+    except Exception:
+        pass
+
     return report
+
+
+def _resolve_domains(domains: list, timeout: float = 5.0) -> dict:
+    """{домен: IPv4 или None} — параллельно и не дольше timeout: восстановление
+    ждёт ответа в обработчике бота, зависший DNS не должен его держать."""
+    from concurrent.futures import ThreadPoolExecutor
+    ex = ThreadPoolExecutor(max_workers=max(1, len(domains)))
+    futs = {d: ex.submit(socket.gethostbyname, d) for d in domains}
+    out = {}
+    for d, fut in futs.items():
+        try:
+            out[d] = fut.result(timeout=timeout)
+        except Exception:
+            out[d] = None
+    ex.shutdown(wait=False)
+    return out
 
 
 def restart_after_restore(caller: str):

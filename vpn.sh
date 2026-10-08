@@ -530,30 +530,24 @@ manage_backups() {
         read -p "  Выбор: " CHOICE
         case $CHOICE in
             1)
-                local TS FILE
-                TS=$(date +"%Y%m%d_%H%M%S")
-                FILE="${BACKUP_DIR}/awg_backup_${TS}.tar.gz"
                 echo -e "  ${CYAN}Создаю бэкап...${NC}"
-                local TAR_FILE="${FILE%.gz}"   # сначала без сжатия для возможности tar -rf
-                # Основные файлы AWG
-                local _TAR_ARGS=("${VPN_IFACE}.conf" "server.env" "clients/")
-                [ -f /etc/amnezia/amneziawg/users.json ]        && _TAR_ARGS+=("users.json")
-                [ -f /etc/amnezia/amneziawg/subnet_cache.json ] && _TAR_ARGS+=("subnet_cache.json")
-                [ -f /etc/amnezia/amneziawg/servers.json ]      && _TAR_ARGS+=("servers.json")
-                if tar -cf "$TAR_FILE" -C /etc/amnezia/amneziawg "${_TAR_ARGS[@]}" 2>/dev/null; then
-                    # Дополняем бэкап файлами из других мест
-                    [ -f /root/.ssh/awg_admin_key ]         && tar -rf "$TAR_FILE" /root/.ssh/awg_admin_key         2>/dev/null || true
-                    [ -f /root/.ssh/awg_admin_key.pub ]     && tar -rf "$TAR_FILE" /root/.ssh/awg_admin_key.pub     2>/dev/null || true
-                    [ -f /etc/awg-bot/bot_persistence.pkl ] && tar -rf "$TAR_FILE" /etc/awg-bot/bot_persistence.pkl 2>/dev/null || true
-                    [ -f /root/modules.conf ]               && tar -rf "$TAR_FILE" /root/modules.conf               2>/dev/null || true
-                    gzip -f "$TAR_FILE" && mv -f "${TAR_FILE}.gz" "$FILE" 2>/dev/null || FILE="$TAR_FILE"
+                # Та же функция, что у бота и TMA, — состав бэкапа в одном месте.
+                # Свой tar клал SSH-ключ, состояние бота и modules.conf по полным
+                # путям (root/.ssh/…), восстановление их не находило, а
+                # proxy_bot.env не брал вовсе: после переезда с таким бэкапом
+                # новый основной терял доступ к слейвам
+                local FILE ERR_LOG
+                ERR_LOG=$(mktemp)
+                FILE=$(PYTHONPATH="$PY_DIR" python3 -c 'from awg_core import create_backup; print(create_backup())' 2>"$ERR_LOG" | tail -1)
+                if [[ -n "$FILE" && -f "$FILE" ]]; then
                     local SIZE
                     SIZE=$(du -sh "$FILE" | cut -f1)
                     echo -e "${GREEN}  ✓ Бэкап создан: ${FILE} (${SIZE})${NC}"
-                    echo -e "  Скачать: ${YELLOW}scp root@${SERVER_IP}:${FILE} ./$(basename $FILE)${NC}"
+                    echo -e "  Скачать: ${YELLOW}scp root@${SERVER_IP}:${FILE} ./$(basename "$FILE")${NC}"
                 else
-                    echo -e "${RED}  ✗ Ошибка создания бэкапа${NC}"
+                    echo -e "${RED}  ✗ Ошибка создания бэкапа: $(tail -1 "$ERR_LOG")${NC}"
                 fi
+                rm -f "$ERR_LOG"
                 press_enter
                 ;;
             2)
