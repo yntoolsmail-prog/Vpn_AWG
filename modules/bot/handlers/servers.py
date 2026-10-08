@@ -1,4 +1,4 @@
-import asyncio, logging, os, re, time
+import asyncio, ipaddress, logging, os, re, time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 from awg_core import (
@@ -8,6 +8,7 @@ from awg_core import (
     get_all_clients, get_client_pub, load_servers, save_servers,
     invalidate_servers_cache, resolve_endpoint,
     get_real_server_ip, sync_server_ip, restart_after_restore, BOT_SERVICE,
+    ssh_check_server, ssh_push_admin_key,
     read_iface_bytes, get_system_stats, load_bw_peak, get_combined_awg_dump, fmt_bytes,
     ssh_read_slave_env      as _ssh_read_slave_env,
     ssh_clone_awg_to_slave  as _ssh_clone_awg_to_slave,
@@ -17,7 +18,7 @@ from awg_core import (
     ssh_get_slave_peer_count as _ssh_get_slave_peer_count,
     ssh_get_slave_sys_stats as _ssh_get_slave_sys_stats,
 )
-from .common import _md, back_kb, skip_kb, read_text_or_skip, WAITING_SRV_DOMAIN, WAITING_SRV_EDIT_NAME, WAITING_SRV_EDIT_EMOJI, WAITING_SRV_COUNTRY, BTN_BACK, BTN_BACK_MENU, BTN_CANCEL, BTN_BACK_CARD
+from .common import _md, back_kb, WAITING_SRV_DOMAIN, WAITING_SRV_EDIT_VALUE, WAITING_SRV_EDIT_FORCE, BTN_BACK, BTN_BACK_MENU, BTN_CANCEL, BTN_BACK_CARD
 
 
 def _count_peers_in_conf(conf_text: str) -> int:
@@ -273,7 +274,7 @@ async def show_server_card(query, srv_idx: int):
 
     rows = [
         [InlineKeyboardButton("➕ Добавить домен", callback_data=f"srv_adddomain_{srv_idx}")],
-        [InlineKeyboardButton("✏️ Переименовать", callback_data=f"srv_rename_{srv_idx}")],
+        [InlineKeyboardButton("✏️ Редактировать", callback_data=f"srv_edit_{srv_idx}")],
     ]
 
     if not is_pri:
@@ -286,7 +287,8 @@ async def show_server_card(query, srv_idx: int):
             primary_peers = 0
 
         if slave_peers is None:
-            sync_line = "⚠️ Нет связи со slave"
+            sync_line = ("⚠️ Нет связи со slave. Сменился IP или не подошёл "
+                         "SSH-ключ — «✏️ Редактировать»")
             sync_icon = "🔄"
         elif slave_peers == primary_peers:
             sync_line = f"✅ Синхронизирован ({slave_peers} клиентов)"
@@ -411,13 +413,19 @@ async def _check_slaves_sync(context):
                 await context.bot.send_message(
                     ADMIN_ID,
                     f"🔌 *Нет связи со слейвом*\n\n"
-                    f"*{_md(label)}* не отвечает уже {miss} проверки подряд.\n\n"
-                    f"VPN на нём при этом работает — недоступно только управление.\n"
-                    f"Обычная причина: не подошёл SSH-ключ (после переезда или "
-                    f"пересоздания ключа) либо сервер выключен.",
+                    f"*{_md(label)}* не отвечает по SSH уже {miss} проверки подряд (~1,5 часа).\n\n"
+                    f"Если сервер включён, VPN на нём работает, но бот до него не "
+                    f"достаёт: новые устройства на нём не подключатся, а удалённые "
+                    f"продолжают на нём работать.\n\n"
+                    f"*Причины:*\n"
+                    f"• хостер сменил IP — карточка → ✏️ Редактировать → IP;\n"
+                    f"• не подошёл SSH-ключ (после переезда или пересоздания ключа) — "
+                    f"там же → Пароль SSH: бот войдёт по паролю и заново поставит ключ;\n"
+                    f"• сервер выключен.\n\n"
+                    f"После починки — «🔄 Синхронизировать» в карточке.",
                     parse_mode="Markdown",
                     reply_markup=InlineKeyboardMarkup([[
-                        InlineKeyboardButton("🖥 Серверы", callback_data="servers")
+                        InlineKeyboardButton("🖥 Карточка сервера", callback_data=f"srv_card_{idx}")
                     ]]),
                 )
             continue
@@ -699,72 +707,321 @@ async def srv_sync_now(query, srv_idx: int):
 
 # ── Переименование сервера ────────────────────────────────────────────────────
 
-async def srv_rename_start(update, context: ContextTypes.DEFAULT_TYPE):
-    """Начало диалога переименования сервера (entry point ConversationHandler)."""
-    query = update.callback_query
-    await query.answer()
-    srv_idx = int(query.data.split("_")[-1])
-    context.user_data["srv_rename"] = {"srv_idx": srv_idx}
+# ── Редактирование сервера ────────────────────────────────────────────────────
+# Всё, что вносится при добавлении сервера. SSH-поля — только у слейва: на
+# основной бот по SSH не ходит, а его IP при смене у хостера sync_server_ip()
+# обновляет сам (_check_server_ip).
+_SRV_EDIT_FIELDS = {
+    # поле: (кнопка, только у слейва, подсказка)
+    "name":     ("Название", False,
+                 "Новое название — латиницей, оно входит в имя файлов конфигов "
+                 "(например: NLD, FIN):"),
+    "emoji":    ("Флаг", False, "Новый флаг или эмодзи (например: 🇳🇱):"),
+    "country":  ("Страна", False, "Название страны на русском (например: Голландия):"),
+    "ip":       ("IP", True,
+                 "Новый IP сервера. Бот зайдёт на него по SSH и проверит, что это "
+                 "тот же сервер:"),
+    "port":     ("SSH-порт", True, "Новый SSH-порт:"),
+    "login":    ("Логин SSH", True, "Новый логин SSH:"),
+    "password": ("Пароль SSH", True,
+                 "Пароль SSH. Бот войдёт с ним и заново поставит свой ключ — так "
+                 "чинится «не подошёл SSH-ключ». Сообщение с паролем бот удалит:"),
+}
+# Значение, которое не прошло проверку SSH, — до ответа «Сохранить всё равно».
+# Не в user_data: та пишется на диск (PicklePersistence), а здесь бывает пароль.
+_PENDING_SRV_EDIT: dict = {}
+
+
+def _srv_find(servers: list, srv_id: str):
+    """(индекс, сервер) по id — индекс мог сдвинуться, пока админ вводил значение."""
+    for i, s in enumerate(servers):
+        if s.get("id") == srv_id:
+            return i, s
+    return None, None
+
+
+def _srv_edit_view(srv_idx: int, note: str = ""):
+    """Текст и кнопки экрана «✏️ Редактирование» или None, если сервера нет."""
     servers = load_servers()
     if srv_idx >= len(servers):
+        return None
+    srv    = servers[srv_idx]
+    is_pri = srv.get("is_primary", False)
+    ssh    = srv.get("ssh", {})
+    lines  = [note, ""] if note else []
+    lines += [
+        f"✏️ *Редактирование:* {srv.get('emoji', '')} {_md(srv.get('name', ''))}"
+        + (" _(Основной)_" if is_pri else " _(Слейв)_"),
+        "",
+        f"Название: {_md(srv.get('name', '') or '—')}",
+        f"Флаг: {srv.get('emoji', '') or '—'}",
+        f"Страна: {_md(srv.get('country', '') or '—')}",
+    ]
+    if is_pri:
+        lines.append(f"IP: `{ssh.get('ip', '—')}` — обновляется сам при смене у хостера")
+    else:
+        lines += [
+            f"IP: `{ssh.get('ip', '—')}`",
+            f"SSH-порт: `{ssh.get('port', 22)}`",
+            f"Логин SSH: `{ssh.get('login', 'root')}`",
+            "Вход: " + ("по ключу" if ssh.get("auth") == "key" else "по паролю"),
+        ]
+    rows = [[InlineKeyboardButton(label, callback_data=f"srv_editf_{field}_{srv_idx}")]
+            for field, (label, slave_only, _) in _SRV_EDIT_FIELDS.items()
+            if not (slave_only and is_pri)]
+    rows.append([InlineKeyboardButton(BTN_BACK_CARD, callback_data=f"srv_card_{srv_idx}")])
+    return "\n".join(lines), InlineKeyboardMarkup(rows)
+
+
+async def show_srv_edit(query, srv_idx: int):
+    """Экран «✏️ Редактировать» из карточки сервера: текущие данные и кнопка на каждое поле."""
+    view = _srv_edit_view(srv_idx)
+    if not view:
+        await query.answer("Сервер не найден.", show_alert=True)
+        return
+    await query.edit_message_text(view[0], reply_markup=view[1], parse_mode="Markdown")
+
+
+def _srv_edit_check(field: str, value: str, servers: list, srv: dict) -> str:
+    """Проверка введённого значения; пустая строка — годится, иначе что не так."""
+    if field == "name" and not re.fullmatch(r"[A-Za-z0-9-]{1,16}", value):
+        return "Название — латиница, цифры и дефис, до 16 символов."
+    if field == "emoji" and not 0 < len(value) <= 10:
+        return "Флаг — один эмодзи."
+    if field == "country" and not 0 < len(value) <= 30:
+        return "Страна — до 30 символов."
+    if field == "ip":
+        try:
+            ipaddress.IPv4Address(value)
+        except ValueError:
+            return "Это не IPv4-адрес, пример: 87.58.204.107"
+        if any(s is not srv and s.get("ssh", {}).get("ip") == value for s in servers):
+            return "Этот IP уже записан у другого сервера."
+    if field == "port" and not (value.isdigit() and 0 < int(value) < 65536):
+        return "Порт — число от 1 до 65535."
+    if field == "login" and not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", value):
+        return "Логин — латиница в нижнем регистре, например root."
+    if field == "password" and not value:
+        return "Пароль пустой."
+    return ""
+
+
+def _srv_edit_apply(srv_id: str, field: str, value: str, checked: bool) -> list:
+    """Записывает SSH-поле слейва в servers.json; возвращает строки отчёта.
+    Синхронная — для run_in_executor: при новом пароле ставит ключ по SSH."""
+    servers = load_servers()
+    _, srv = _srv_find(servers, srv_id)
+    if not srv:
+        return ["❌ Сервер не найден."]
+    ssh = srv.setdefault("ssh", {})
+    out = []
+    if field == "ip":
+        old = ssh.get("ip", "")
+        ssh["ip"] = value
+        for ep in srv.get("endpoints", []):
+            if ep.get("value") == old:
+                ep["value"] = value
+        out.append(f"✅ IP изменён: {old} → {value}")
+    elif field == "port":
+        ssh["port"] = int(value)
+        out.append(f"✅ SSH-порт: {value}")
+    elif field == "login":
+        ssh["login"] = value
+        out.append(f"✅ Логин SSH: {value}")
+    elif field == "password":
+        # Пароль задают, когда ключ не подошёл: без «auth: key» _ssh_connect
+        # после неудачи с ключом пробует пароль
+        ssh["password"] = value
+        ssh.pop("auth", None)
+        out.append("✅ Пароль SSH сохранён")
+    save_servers(servers)
+
+    if field == "password" and checked:
+        if ssh_push_admin_key(srv):
+            servers = load_servers()
+            _, srv = _srv_find(servers, srv_id)
+            if srv:
+                srv["ssh"]["auth"] = "key"
+                srv["ssh"]["password"] = ""
+                save_servers(servers)
+            out.append("🔑 Ключ бота заново установлен, вход переключён на ключ, "
+                       "пароль больше не хранится")
+        else:
+            out.append("⚠️ Ключ поставить не удалось — бот будет входить по паролю")
+    return out
+
+
+async def _srv_domains_report(srv_id: str) -> list:
+    """После смены IP слейва: куда указывают его домены и что делать с конфигами."""
+    import socket as _s
+    _, srv = _srv_find(load_servers(), srv_id)
+    if not srv:
+        return []
+    ip   = srv.get("ssh", {}).get("ip", "")
+    loop = asyncio.get_running_loop()
+    out  = []
+    for ep in srv.get("endpoints", []):
+        if ep.get("type") != "domain":
+            continue
+        try:
+            got = await loop.run_in_executor(None, _s.gethostbyname, ep["value"])
+        except Exception:
+            got = None
+        if got == ip:
+            out.append(f"✅ {ep['value']} → {got}")
+        else:
+            out.append(f"❌ {ep['value']} → {got or 'не разрешился'} — нужна A-запись на {ip}")
+    out.append("Устройства, скачанные с прежним IP вместо домена, нужно скачать заново.")
+    out.append("В карточке — синхронизация: устройства, добавленные или удалённые, "
+               "пока не было связи, доедут после «Синхронизировать».")
+    return out
+
+
+def _srv_edit_done_kb(srv_idx: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✏️ Редактировать ещё", callback_data=f"srv_edit_{srv_idx}")],
+        [InlineKeyboardButton(BTN_BACK_CARD, callback_data=f"srv_card_{srv_idx}")],
+    ])
+
+
+async def srv_edit_field_start(update, context: ContextTypes.DEFAULT_TYPE):
+    """Кнопка поля на экране редактирования (entry point ConversationHandler)."""
+    query = update.callback_query
+    await query.answer()
+    if update.effective_user.id != ADMIN_ID:
+        return ConversationHandler.END
+    _, _, field, idx = query.data.split("_", 3)
+    srv_idx = int(idx)
+    _PENDING_SRV_EDIT.pop(query.message.chat_id, None)
+    servers = load_servers()
+    if srv_idx >= len(servers) or field not in _SRV_EDIT_FIELDS:
         await query.edit_message_text("❌ Сервер не найден.")
         return ConversationHandler.END
     srv = servers[srv_idx]
-    await query.edit_message_text(
-        f"✏️ *Переименование сервера*\n\n"
-        f"Текущее название: *{srv.get('emoji', '')} {srv.get('name', '')}*\n\n"
-        f"Введите новое название (например: NLD, FIN, RUS)\nили /cancel для отмены:",
-        parse_mode="Markdown"
-    )
-    return WAITING_SRV_EDIT_NAME
-
-
-async def srv_rename_name(update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["srv_rename"]["name"] = update.message.text.strip()
-    await update.message.reply_text(
-        "Введите эмодзи/флаг (например: 🇳🇱):",
-        reply_markup=skip_kb("Оставить текущий", "srv_rename_skip"),
-    )
-    return WAITING_SRV_EDIT_EMOJI
-
-
-async def srv_rename_emoji(update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["srv_rename"]["emoji"] = await read_text_or_skip(update)
-    srv_idx = context.user_data["srv_rename"]["srv_idx"]
-    servers = load_servers()
-    current_country = servers[srv_idx].get("country", "") if srv_idx < len(servers) else ""
-    hint = f" (текущее: {current_country})" if current_country else " (не задано)"
-    await update.effective_chat.send_message(
-        f"Введите название страны на русском (например: Голландия, Финляндия){hint}:",
-        reply_markup=skip_kb("Оставить текущее", "srv_rename_skip"),
-    )
-    return WAITING_SRV_COUNTRY
-
-
-async def srv_rename_country(update, context: ContextTypes.DEFAULT_TYPE):
-    d = context.user_data.pop("srv_rename", {})
-    srv_idx     = d.get("srv_idx", 0)
-    new_name    = d.get("name", "").strip()
-    new_emoji   = d.get("emoji", "").strip()
-    new_country = await read_text_or_skip(update)
-
-    servers = load_servers()
-    if srv_idx >= len(servers):
-        await update.effective_chat.send_message("❌ Сервер не найден.")
+    label, slave_only, prompt = _SRV_EDIT_FIELDS[field]
+    if slave_only and srv.get("is_primary"):
         return ConversationHandler.END
-    srv = servers[srv_idx]
-    if new_name:    srv["name"]    = new_name
-    if new_emoji:   srv["emoji"]   = new_emoji
-    if new_country: srv["country"] = new_country
-    servers[srv_idx] = srv
-    save_servers(servers)
-    await update.effective_chat.send_message(
-        f"✅ Сервер обновлён: *{srv['emoji']} {srv['name']}*",
-        parse_mode="Markdown",
+    context.user_data["srv_edit"] = {"srv_id": srv.get("id"), "field": field}
+    ssh = srv.get("ssh", {})
+    cur = {"name": srv.get("name"), "emoji": srv.get("emoji"), "country": srv.get("country"),
+           "ip": ssh.get("ip"), "port": ssh.get("port", 22), "login": ssh.get("login", "root")}
+    now = "" if field == "password" else f"Сейчас: {cur.get(field) or '—'}\n\n"
+    await query.edit_message_text(
+        f"✏️ {label}\n\n{now}{prompt}",
         reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton(BTN_BACK_CARD, callback_data=f"srv_card_{srv_idx}")
-        ]])
+            InlineKeyboardButton(BTN_CANCEL, callback_data="srv_edit_cancel")
+        ]]),
     )
+    return WAITING_SRV_EDIT_VALUE
+
+
+async def srv_edit_receive(update, context: ContextTypes.DEFAULT_TYPE):
+    """Новое значение поля. Название/флаг/страна — сразу в servers.json; SSH-поля —
+    после проверки подключения и ключа AWG (ssh_check_server)."""
+    d     = context.user_data.get("srv_edit") or {}
+    field = d.get("field", "")
+    value = (update.message.text or "").strip()
+    chat  = update.effective_chat
+    if field == "password":
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+
+    servers = load_servers()
+    srv_idx, srv = _srv_find(servers, d.get("srv_id"))
+    if not srv:
+        context.user_data.pop("srv_edit", None)
+        await chat.send_message("❌ Сервер не найден.")
+        return ConversationHandler.END
+    if field == "port":
+        value = value.replace(" ", "")
+    err = _srv_edit_check(field, value, servers, srv)
+    if err:
+        await chat.send_message(
+            f"⚠️ {err}\n\nВведите ещё раз:",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton(BTN_CANCEL, callback_data="srv_edit_cancel")
+            ]]),
+        )
+        return WAITING_SRV_EDIT_VALUE
+
+    if field in ("name", "emoji", "country"):
+        srv[field] = value
+        save_servers(servers)
+        context.user_data.pop("srv_edit", None)
+        text, kb = _srv_edit_view(srv_idx, "✅ Сохранено")
+        await chat.send_message(text, reply_markup=kb, parse_mode="Markdown")
+        return ConversationHandler.END
+
+    cand = {**srv, "ssh": dict(srv.get("ssh", {}))}
+    if field == "port":
+        cand["ssh"]["port"] = int(value)
+    elif field == "password":
+        cand["ssh"]["password"] = value
+        cand["ssh"].pop("auth", None)
+    else:
+        cand["ssh"][field] = value
+    ssh = cand["ssh"]
+    status = await chat.send_message(f"🔌 Проверяю {ssh.get('ip')}:{ssh.get('port', 22)}…")
+    loop = asyncio.get_running_loop()
+    err = await loop.run_in_executor(None, ssh_check_server, cand)
+    if err:
+        _PENDING_SRV_EDIT[chat.id] = (d.get("srv_id"), field, value)
+        # Без parse_mode: в тексте ошибки paramiko бывают «_» и «`»
+        await status.edit_text(
+            f"❌ {err}\n\nСохранить всё равно? Например, если сервер сейчас выключен.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("💾 Сохранить всё равно", callback_data="srv_edit_force")],
+                [InlineKeyboardButton("✏️ Ввести заново", callback_data=f"srv_editf_{field}_{srv_idx}")],
+                [InlineKeyboardButton(BTN_CANCEL, callback_data="srv_edit_cancel")],
+            ]),
+        )
+        return WAITING_SRV_EDIT_FORCE
+
+    context.user_data.pop("srv_edit", None)
+    lines = ["✅ Подключение есть, это тот же сервер."]
+    lines += await loop.run_in_executor(None, _srv_edit_apply, d.get("srv_id"), field, value, True)
+    if field == "ip":
+        lines += await _srv_domains_report(d.get("srv_id"))
+    await status.edit_text("\n".join(lines), reply_markup=_srv_edit_done_kb(srv_idx))
+    return ConversationHandler.END
+
+
+async def srv_edit_force(update, context: ContextTypes.DEFAULT_TYPE):
+    """«💾 Сохранить всё равно» после неудачной проверки SSH."""
+    query = update.callback_query
+    await query.answer()
+    context.user_data.pop("srv_edit", None)
+    pending = _PENDING_SRV_EDIT.pop(query.message.chat_id, None)
+    if not pending:
+        await query.edit_message_text("Нечего сохранять — начните заново из карточки сервера.")
+        return ConversationHandler.END
+    srv_id, field, value = pending
+    loop  = asyncio.get_running_loop()
+    lines = await loop.run_in_executor(None, _srv_edit_apply, srv_id, field, value, False)
+    if field == "ip":
+        lines += await _srv_domains_report(srv_id)
+    srv_idx, _ = _srv_find(load_servers(), srv_id)
+    await query.edit_message_text(
+        "\n".join(lines),
+        reply_markup=_srv_edit_done_kb(srv_idx) if srv_idx is not None else back_kb("servers"),
+    )
+    return ConversationHandler.END
+
+
+async def srv_edit_cancel(update, context: ContextTypes.DEFAULT_TYPE):
+    """Отмена ввода — назад на экран редактирования."""
+    query = update.callback_query
+    await query.answer()
+    d = context.user_data.pop("srv_edit", None) or {}
+    _PENDING_SRV_EDIT.pop(query.message.chat_id, None)
+    srv_idx, _ = _srv_find(load_servers(), d.get("srv_id"))
+    view = _srv_edit_view(srv_idx) if srv_idx is not None else None
+    if view:
+        await query.edit_message_text(view[0], reply_markup=view[1], parse_mode="Markdown")
+    else:
+        await query.edit_message_text("Отмена.", reply_markup=back_kb("servers"))
     return ConversationHandler.END
 
 

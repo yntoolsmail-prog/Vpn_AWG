@@ -50,7 +50,7 @@ from handlers.common import (
 from handlers.common import (
     WAITING_REGISTER_NAME, WAITING_DEVICE_NAME, WAITING_RESTORE_FILE,
     WAITING_SITES_DOMAIN, WAITING_SRV_DOMAIN,
-    WAITING_SRV_EDIT_NAME, WAITING_SRV_EDIT_EMOJI, WAITING_SRV_COUNTRY,
+    WAITING_SRV_EDIT_VALUE, WAITING_SRV_EDIT_FORCE,
     WAITING_BROADCAST_MSG, WAITING_BROADCAST_CONFIRM, WAITING_SUPPORT_MSG, WAITING_SUPPORT_REPLY,
     IMG_BASE, back_kb, _tma_button, sites_keyboard, _md,
 )
@@ -82,7 +82,7 @@ from handlers.servers import (
     show_server_card, _sync_peer_to_all_slaves, _check_endpoint_dns, _check_slaves_sync,
     _check_server_ip,
     srv_checkdns, srv_del_confirm, srv_del_ok, srv_detach_ok, srv_sync_now,
-    srv_rename_start, srv_rename_name, srv_rename_emoji, srv_rename_country,
+    show_srv_edit, srv_edit_field_start, srv_edit_receive, srv_edit_force, srv_edit_cancel,
     srv_adddomain_start, srv_adddomain_pick, srv_adddomain_receive,
 )
 from handlers.maintenance import (
@@ -436,7 +436,9 @@ async def _button_dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await srv_deldomain_confirm(query, data[len("srv_deldomain_confirm_"):])
     elif data.startswith("srv_deldomain_ok_") and is_admin:
         await srv_deldomain_ok(query, data[len("srv_deldomain_ok_"):])
-    # srv_rename_ handled by ConversationHandler below
+    elif re.fullmatch(r"srv_edit_\d+", data) and is_admin:
+        await show_srv_edit(query, int(data[9:]))
+    # srv_editf_* (поля редактирования) — ConversationHandler ниже
     elif data == "status":
         await show_status(query)
     elif data == "restart_bot":
@@ -793,19 +795,19 @@ def main():
         allow_reentry=True,
     )
 
-    srv_rename_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(srv_rename_start, pattern="^srv_rename_\\d+$")],
+    srv_edit_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(srv_edit_field_start, pattern="^srv_editf_[a-z]+_\\d+$")],
         states={
-            WAITING_SRV_EDIT_NAME:  [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_rename_name)],
-            WAITING_SRV_EDIT_EMOJI: [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_rename_emoji),
-                                     CallbackQueryHandler(srv_rename_emoji, pattern="^srv_rename_skip$")],
-            WAITING_SRV_COUNTRY:    [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_rename_country),
-                                     CallbackQueryHandler(srv_rename_country, pattern="^srv_rename_skip$")],
+            WAITING_SRV_EDIT_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, srv_edit_receive),
+                                     CallbackQueryHandler(srv_edit_cancel, pattern="^srv_edit_cancel$")],
+            WAITING_SRV_EDIT_FORCE: [CallbackQueryHandler(srv_edit_force, pattern="^srv_edit_force$"),
+                                     CallbackQueryHandler(srv_edit_cancel, pattern="^srv_edit_cancel$")],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         per_chat=True,
         per_message=False,
         allow_reentry=True,
+        conversation_timeout=900,
     )
 
     # Связь с пользователями (handlers/support.py). Регистрируются после прочих
@@ -864,7 +866,7 @@ def main():
     app.add_handler(restore_conv)
     app.add_handler(sites_custom_conv)  # до общего button_handler
     app.add_handler(srv_domain_conv)
-    app.add_handler(srv_rename_conv)
+    app.add_handler(srv_edit_conv)
     app.add_handler(notify_conv)
     app.add_handler(support_conv)
     app.add_handler(support_reply_conv)

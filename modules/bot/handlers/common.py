@@ -21,10 +21,10 @@ WAITING_RESTORE_FILE   = 12
 WAITING_SITES_DOMAIN   = 16   # ждём домен/IP для добавления в исключения
 # Добавление домена к серверу
 WAITING_SRV_DOMAIN     = 26
-# Переименование сервера (primary или slave)
-WAITING_SRV_EDIT_NAME  = 27
-WAITING_SRV_EDIT_EMOJI = 28
-WAITING_SRV_COUNTRY    = 29
+# Редактирование сервера (primary или slave): новое значение поля и
+# «сохранить без проверки», если слейв по новым SSH-данным не ответил
+WAITING_SRV_EDIT_VALUE = 27
+WAITING_SRV_EDIT_FORCE = 28
 # Связь с пользователями (handlers/support.py)
 WAITING_BROADCAST_MSG     = 30   # админ пишет рассылку
 WAITING_BROADCAST_CONFIRM = 31   # подтверждение рассылки
@@ -42,26 +42,6 @@ def _md(s: str) -> str:
 
 def back_kb(target="back"):
     return InlineKeyboardMarkup([[InlineKeyboardButton(BTN_BACK_MENU, callback_data=target)]])
-
-
-# Шаги диалогов «нажмите Enter, чтобы пропустить» не работали: Telegram не
-# отправляет пустое сообщение (и сообщение из одних пробелов). Поэтому значение
-# по умолчанию — inline-кнопка под вопросом, а её нажатие читается как пустой ввод.
-def skip_kb(label: str, callback: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[InlineKeyboardButton(label, callback_data=callback)]])
-
-
-async def read_text_or_skip(update) -> str:
-    """Текст ответа в диалоге или "" — если нажата кнопка из skip_kb()."""
-    query = update.callback_query
-    if query:
-        await query.answer()
-        try:
-            await query.edit_message_reply_markup(reply_markup=None)
-        except Exception:
-            pass
-        return ""
-    return (update.message.text or "").strip()
 
 
 def _tma_button() -> InlineKeyboardButton | None:

@@ -111,6 +111,33 @@ def ssh_push_admin_key(server: dict) -> bool:
         return False
 
 
+def ssh_check_server(server: dict) -> str:
+    """Проверка перед сохранением SSH-данных слейва (бот → карточка →
+    «✏️ Редактировать»): бот подключается с новыми данными и сверяет публичный
+    ключ AWG на интерфейсе с записанным. Ловит опечатку в IP и чужой сервер на
+    адресе — иначе бот синкал бы устройства не туда. Пустая строка — всё в
+    порядке, иначе причина."""
+    if not PARAMIKO_AVAILABLE:
+        return "paramiko не установлен: pip3 install paramiko"
+    ssh = server.get("ssh", {})
+    try:
+        client = _ssh_connect(ssh)
+    except Exception as e:
+        return f"Не удалось подключиться к {ssh.get('ip', '')}:{ssh.get('port', 22)}: {e}"
+    try:
+        _, stdout, _ = client.exec_command(f"awg show {AWG_IFACE} public-key 2>/dev/null", timeout=10)
+        key = stdout.read().decode().strip()
+    except Exception as e:
+        return f"Подключение есть, но команда на сервере не выполнилась: {e}"
+    finally:
+        client.close()
+    if not key:
+        return "Подключение есть, но AWG на сервере не запущен — не проверить, тот ли это сервер"
+    if key != (server.get("awg_public_key") or SERVER_PUBLIC):
+        return "На этом адресе другой сервер: ключ AWG не совпадает с записанным"
+    return ""
+
+
 def ssh_toggle_password_auth_all(enable: bool) -> dict:
     """Включает/выключает PasswordAuthentication на primary и всех slave.
     Возвращает {"primary": bool, "slaves": {name: bool}}."""
