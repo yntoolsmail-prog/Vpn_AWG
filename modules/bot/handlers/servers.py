@@ -1,4 +1,4 @@
-import asyncio, os, re, time
+import asyncio, logging, os, re, time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 from awg_core import (
@@ -7,6 +7,7 @@ from awg_core import (
     PARAMIKO_AVAILABLE as _PARAMIKO_AVAILABLE,
     get_all_clients, get_client_pub, load_servers, save_servers,
     invalidate_servers_cache, resolve_endpoint,
+    get_real_server_ip, sync_server_ip, restart_after_restore, BOT_SERVICE,
     read_iface_bytes, get_system_stats, load_bw_peak, get_combined_awg_dump, fmt_bytes,
     ssh_read_slave_env      as _ssh_read_slave_env,
     ssh_clone_awg_to_slave  as _ssh_clone_awg_to_slave,
@@ -472,6 +473,56 @@ async def _check_endpoint_dns(context):
                 f"DNS → `{r['resolved']}`, ожидался `{r['expected']}`",
                 parse_mode="Markdown"
             )
+
+
+# Последний отчёт о неудачной правке IP: job ходит раз в час, и одна и та же
+# ошибка записи не должна приходить админу каждый час
+_ip_sync_last_report = ""
+
+
+async def _check_server_ip(context):
+    """Job: хостер сменил IP сервера — сам или по просьбе, так уходят от блокировки
+    адреса. Вручную server.env и servers.json после этого никто не правит, и бот,
+    TMA и ссылки MTProxy показывали бы прежний адрес. sync_server_ip() переписывает
+    их; админу — отчёт с проверкой доменов основного, затем перезапуск бота и TMA:
+    оба держат SERVER_IP в памяти с импорта. AWG перезапускать не нужно — он
+    слушает на всех адресах."""
+    global _ip_sync_last_report
+    loop = asyncio.get_running_loop()
+    real_ip = await loop.run_in_executor(None, get_real_server_ip)
+    if not real_ip:
+        return
+    changed, lines = await loop.run_in_executor(None, sync_server_ip, real_ip)
+    if not lines:
+        return
+    text = "\n".join(lines)
+    if not changed and text == _ip_sync_last_report:
+        return
+    _ip_sync_last_report = text
+    try:
+        if changed:
+            results, _ = await _dns_check_all_servers()
+            doms = [r for r in results if r["expected"] == real_ip]
+            if doms:
+                lines.append("\nДомены основного:")
+                for r in doms:
+                    if r["now_ok"]:
+                        lines.append(f"✅ {r['domain']} → {r['resolved']}")
+                    else:
+                        lines.append(f"❌ {r['domain']} → {r['resolved'] or 'не разрешился'}"
+                                     f" — нужна A-запись на {real_ip}")
+                if not all(r["now_ok"] for r in doms):
+                    lines.append("Если A-запись уже поменяли — DNS обновляется до нескольких часов.")
+            lines.append("\nУстройства, скачанные с IP вместо домена в адресе сервера, "
+                         "нужно скачать заново.")
+            lines.append("Бот и веб-панель перезапускаются.")
+        # Без parse_mode: в доменах и текстах ошибок бывает «_»
+        await context.bot.send_message(ADMIN_ID, "\n".join(lines))
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"_check_server_ip: {e}")
+    finally:
+        if changed:
+            restart_after_restore(BOT_SERVICE)
 
 
 async def srv_checkdns(query):

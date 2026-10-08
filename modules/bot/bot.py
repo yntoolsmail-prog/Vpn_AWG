@@ -80,6 +80,7 @@ from handlers.clients import (
 from handlers.servers import (
     show_servers_list, srv_deldomain_list, srv_deldomain_confirm, srv_deldomain_ok,
     show_server_card, _sync_peer_to_all_slaves, _check_endpoint_dns, _check_slaves_sync,
+    _check_server_ip,
     srv_checkdns, srv_del_confirm, srv_del_ok, srv_detach_ok, srv_sync_now,
     srv_rename_start, srv_rename_name, srv_rename_emoji, srv_rename_country,
     srv_adddomain_start, srv_adddomain_pick, srv_adddomain_receive,
@@ -884,6 +885,9 @@ def main():
     app.job_queue.run_repeating(check_repo_updates, interval=86400, first=20)
     # Проверка DNS эндпоинтов — каждые 12 часов, первая через 5 минут после старта
     app.job_queue.run_repeating(_check_endpoint_dns, interval=43200, first=300)
+    # Смена IP сервера у хостера — раз в час, первая через 30 секунд после старта:
+    # обычно IP меняют с перезагрузкой, и бот замечает это сразу при запуске
+    app.job_queue.run_repeating(_check_server_ip, interval=3600, first=30)
     # Сверка синхронизации со slave-серверами — каждые 30 минут, первая через 3 минуты.
     # Пишет админу сама, чтобы о рассинхроне не приходилось узнавать из меню.
     app.job_queue.run_repeating(_check_slaves_sync, interval=1800, first=180)

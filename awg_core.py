@@ -489,6 +489,90 @@ def create_backup(prefix: str = "awg_backup") -> str:
             tar.add(_mtp_conf, arcname="proxy_bot.env")
     return backup_path
 
+# ── Внешний IP сервера ─────────────────────────────────────────────────────────
+def sync_server_ip(new_ip: str = "") -> tuple[bool, list]:
+    """Приводит SERVER_IP в server.env и IP основного в servers.json к реальному
+    внешнему адресу сервера. Два случая: бэкап восстановлен на другом VPS
+    (post_restore_fixup) и хостер сменил IP этому же серверу — так уходят от
+    блокировки адреса; это бот проверяет сам (_check_server_ip). Без правки бот,
+    TMA и ссылки MTProxy показывают прежний адрес, а проверка DNS сверяет домены
+    с ним же.
+
+    Адрес, который по-прежнему висит на интерфейсе этого сервера, не трогаем:
+    исходящий трафик может уходить с другого (дополнительный IP), а в SERVER_IP
+    админ записал нужный. Возвращает (server.env переписан, строки отчёта)."""
+    from awg_stats import get_real_server_ip
+    new_ip = new_ip or get_real_server_ip() or ""
+    try:
+        # Сервис определения IP при сбое может вернуть что угодно — в server.env
+        # попадает только настоящий публичный IPv4
+        if not ipaddress.IPv4Address(new_ip).is_global:
+            return False, []
+    except ValueError:
+        return False, []
+    try:
+        with open(ENV_FILE) as f:
+            lines = f.read().split("\n")
+    except Exception as e:
+        return False, [f"⚠️ server.env: {e}"]
+    old_ip = next((l.split("=", 1)[1].strip() for l in lines
+                   if l.startswith("SERVER_IP=")), "")
+    if old_ip == new_ip:
+        return False, []
+    if old_ip:
+        try:
+            local = subprocess.run(["ip", "-4", "-o", "addr", "show"],
+                                   capture_output=True, text=True, timeout=5).stdout
+            if f" {old_ip}/" in local:
+                return False, []
+        except Exception:
+            pass
+
+    report = []
+    try:
+        out, ep_moved = [], []
+        for line in lines:
+            key, _, val = line.partition("=")
+            if key == "SERVER_IP":
+                out.append(f"SERVER_IP={new_ip}")
+            # Адрес, который уходит в конфиги клиентов: если сервер раздавался
+            # по голому IP, без домена, здесь тоже старый IP — бот и TMA берут
+            # его по умолчанию и выдавали бы конфиги на прежний (часто
+            # заблокированный) адрес
+            elif (key in ("SERVER_ENDPOINT", "SERVER_ENDPOINT_BACKUP")
+                  and old_ip and val.strip() == old_ip):
+                out.append(f"{key}={new_ip}")
+                ep_moved.append(key)
+            else:
+                out.append(line)
+        with open(ENV_FILE, "w") as f:
+            f.write("\n".join(out))
+    except Exception as e:
+        return False, [f"⚠️ server.env: {e}"]
+    report.append(f"🖥 IP сервера обновлён: {old_ip} → {new_ip}" if old_ip
+                  else f"🖥 IP сервера записан: {new_ip}")
+    if ep_moved:
+        report.append("🔗 Конфиги раздавались по IP без домена — адрес в них тоже "
+                      f"заменён на {new_ip}")
+
+    # servers.json: у primary остаются IP и ip-эндпоинт прежнего адреса
+    if old_ip:
+        try:
+            invalidate_servers_cache()
+            servers = load_servers()
+            for s in servers:
+                if not s.get("is_primary"):
+                    continue
+                s.setdefault("ssh", {})["ip"] = new_ip
+                for ep in s.get("endpoints", []):
+                    if ep.get("value") == old_ip:
+                        ep["value"] = new_ip
+            save_servers(servers)
+        except Exception as e:
+            report.append(f"⚠️ servers.json: {e}")
+    return True, report
+
+
 # ── Пост-обработка восстановления из бэкапа ────────────────────────────────────
 def post_restore_fixup() -> list:
     """Доводит распакованный бэкап до рабочего состояния на НОВОМ сервере.
@@ -500,7 +584,7 @@ def post_restore_fixup() -> list:
 
     Вызывается ПОСЛЕ распаковки и ДО запуска awg. Возвращает список строк-отчёт.
     """
-    from awg_stats import get_host_iface, get_real_server_ip
+    from awg_stats import get_host_iface
     base   = "/etc/amnezia/amneziawg"
     report = []
 
@@ -596,55 +680,8 @@ def post_restore_fixup() -> list:
     except Exception as e:
         report.append(f"⚠️ PostUp/PostDown: {e}")
 
-    # 3. SERVER_IP в server.env — от старого сервера. Обновляем на реальный.
-    new_ip = get_real_server_ip()
-    old_ip = ""
-    if new_ip:
-        try:
-            with open(ENV_FILE) as f:
-                lines = f.read().split("\n")
-            old_ip = next((l.split("=", 1)[1].strip() for l in lines
-                           if l.startswith("SERVER_IP=")), "")
-            out, ep_moved = [], []
-            for line in lines:
-                key, _, val = line.partition("=")
-                if key == "SERVER_IP":
-                    out.append(f"SERVER_IP={new_ip}")
-                # Адрес, который уходит в конфиги клиентов: если сервер раздавался
-                # по голому IP, без домена, здесь тоже старый IP — бот и TMA берут
-                # его по умолчанию и выдавали бы конфиги на прежний (часто
-                # заблокированный) адрес
-                elif (key in ("SERVER_ENDPOINT", "SERVER_ENDPOINT_BACKUP")
-                      and old_ip and old_ip != new_ip and val.strip() == old_ip):
-                    out.append(f"{key}={new_ip}")
-                    ep_moved.append(key)
-                else:
-                    out.append(line)
-            with open(ENV_FILE, "w") as f:
-                f.write("\n".join(out))
-            if old_ip and old_ip != new_ip:
-                report.append(f"🖥 IP сервера обновлён: {old_ip} → {new_ip}")
-            if ep_moved:
-                report.append("🔗 Конфиги раздавались по IP без домена — адрес в них тоже "
-                              f"заменён на {new_ip}")
-        except Exception as e:
-            report.append(f"⚠️ server.env: {e}")
-
-    # 4. servers.json: у primary остаются IP и ip-эндпоинт старого сервера
-    if new_ip and old_ip and old_ip != new_ip:
-        try:
-            invalidate_servers_cache()
-            servers = load_servers()
-            for s in servers:
-                if not s.get("is_primary"):
-                    continue
-                s.setdefault("ssh", {})["ip"] = new_ip
-                for ep in s.get("endpoints", []):
-                    if ep.get("value") == old_ip:
-                        ep["value"] = new_ip
-            save_servers(servers)
-        except Exception as e:
-            report.append(f"⚠️ servers.json: {e}")
+    # 3–4. SERVER_IP в server.env и IP основного в servers.json — от старого сервера
+    report += sync_server_ip()[1]
 
     # 5. server_public/private.key — на новом VPS они от свежей установки и больше
     #    не совпадают с восстановленным конфигом. Пересобираем из конфига.
