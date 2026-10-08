@@ -11,6 +11,8 @@ BTN_CANCEL     = "❌ Отмена"
 BTN_DONE       = "✅ Готово"
 BTN_REFRESH    = "🔄 Обновить"
 BTN_MY_DEVICES = "📋 Мои устройства"
+BTN_HELP_MENU  = "🆘 Помощь / Обновление"
+BTN_CLIENT_UPD = "📲 Обновить клиент"
 
 # Состояния ConversationHandler
 WAITING_REGISTER_NAME  = 10

@@ -282,10 +282,18 @@ def make_vpn_link(priv, pub, ip, psk, obfs, name, endpoint: str = None,
            "port": str(prt),
            "subnet_address": ".".join(ip.split(".")[:3]) + ".0",
            "transport_proto": "udp"}
+    # Тип контейнера AmneziaVPN, а не версия протокола: «amnezia-awg» приложение
+    # подписывает «AmneziaWG Legacy» — так у него называется старая раскладка
+    # собственной установки сервера. На подключение тип не влияет, оба идут
+    # одним кодом протокола. «amnezia-awg2» — только для 3.x: его знают
+    # приложения с поддержкой 3.1 (AmneziaVPN 5.0.1.5+), а ссылки сервера на 2.0
+    # могут открывать и старые
+    container = "amnezia-awg"
     if is_awg3(obfs):
         awg["protocol_version"] = "3.1"
-    c = {"containers": [{"awg": awg, "container": "amnezia-awg"}],
-         "defaultContainer": "amnezia-awg", "description": name,
+        container = "amnezia-awg2"
+    c = {"containers": [{"awg": awg, "container": container}],
+         "defaultContainer": container, "description": name,
          "dns1": PRIMARY_DNS, "dns2": SECONDARY_DNS,
          "hostName": ep, "nameOverriddenByUser": True}
     b = json.dumps(c, ensure_ascii=False).encode()

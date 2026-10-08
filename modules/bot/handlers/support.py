@@ -3,7 +3,8 @@
 📣 Уведомления (админ, «Настройки»): следующее сообщение админа — текст, фото,
 файл — после подтверждения уходит всем одобренным пользователям.
 
-🆘 Помощь (пользователь, вместо «Инструкции»): инструкция и «✉️ Написать
+🆘 Помощь / Обновление (пользователь, вместо «Инструкции»): инструкция,
+«📲 Обновить клиент» и «✉️ Написать
 админу». Сообщение приходит админу с кнопкой «↩️ Ответить», ответ — обратно
 пользователю с кнопкой «✉️ Ответить». Всё идёт через бота: личный аккаунт
 админа пользователям не виден. Писать могут только одобренные пользователи.
@@ -21,7 +22,7 @@ from telegram.ext import ContextTypes, ConversationHandler
 
 from awg_core import ADMIN_ID, get_user_clients, get_user_name, is_approved, load_users
 from .common import (
-    BTN_BACK_MENU, BTN_CANCEL,
+    BTN_BACK_MENU, BTN_CANCEL, BTN_CLIENT_UPD, BTN_HELP_MENU,
     WAITING_BROADCAST_MSG, WAITING_BROADCAST_CONFIRM,
     WAITING_SUPPORT_MSG, WAITING_SUPPORT_REPLY,
 )
@@ -155,10 +156,11 @@ async def notify_cancel(update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_help_menu(query):
     await query.edit_message_text(
-        "🆘 Помощь\n\n"
-        "Инструкция по подключению — или напишите администратору, "
-        "если что-то не работает.",
+        f"{BTN_HELP_MENU}\n\n"
+        "Инструкция по подключению, обновление приложения — или напишите "
+        "администратору, если что-то не работает.",
         reply_markup=_kb(("📖 Инструкция", "help"),
+                         (BTN_CLIENT_UPD, "client_update"),
                          ("✉️ Написать админу", "support_start"),
                          (BTN_BACK_MENU, "back")),
     )

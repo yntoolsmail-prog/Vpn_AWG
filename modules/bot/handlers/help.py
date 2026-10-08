@@ -1,5 +1,5 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from strings import get_help_main, HELP_DNS
+from strings import get_client_update, get_help_main, HELP_DNS
 from awg_core import TMA_URL, ADMIN_ID, gen_obfs, is_awg3
 from .common import BTN_BACK, BTN_BACK_MENU
 
@@ -22,3 +22,14 @@ async def show_help_dns(query):
         [InlineKeyboardButton("◀️ Назад к инструкции", callback_data="help")],
     ])
     await query.edit_message_text(HELP_DNS, reply_markup=kb, parse_mode="Markdown")
+
+
+async def send_client_update(query):
+    """«📲 Обновить клиент» (меню помощи у пользователя, техобслуживание у админа):
+    инструкция новым сообщением, а не вместо экрана — её открывают со ссылками
+    в браузере и возвращаются к ней, а меню остаётся на месте."""
+    await query.message.reply_text(
+        get_client_update(is_awg3(gen_obfs())),
+        parse_mode="Markdown",
+        disable_web_page_preview=True,
+    )

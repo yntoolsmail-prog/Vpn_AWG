@@ -15,7 +15,9 @@ from awg_core import (
     process_domain, run_subnet_daemon,
     load_servers, post_restore_fixup, upgrade_all_servers,
 )
-from .common import back_kb, WAITING_RESTORE_FILE, BTN_BACK, BTN_BACK_MENU, BTN_BACK_MAINT, BTN_CANCEL
+from .common import (
+    back_kb, WAITING_RESTORE_FILE, BTN_BACK, BTN_BACK_MENU, BTN_BACK_MAINT, BTN_CANCEL, BTN_CLIENT_UPD,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -452,6 +454,7 @@ async def show_maintenance(query):
         [InlineKeyboardButton("🔍 Диагностика конфигов",        callback_data="diagnostics")],
         [InlineKeyboardButton("💿 Бэкап + обновление всех серверов", callback_data="maint_upgrade")],
         [InlineKeyboardButton("📦 Проверить версию библиотеки", callback_data="maint_ptb")],
+        [InlineKeyboardButton(BTN_CLIENT_UPD,                   callback_data="client_update")],
         [InlineKeyboardButton("✅ Отмечено — всё ок",            callback_data="maint_done")],
         [InlineKeyboardButton(BTN_BACK_MENU,                       callback_data="settings_menu")],
     ])

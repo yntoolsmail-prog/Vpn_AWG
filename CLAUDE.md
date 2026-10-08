@@ -24,7 +24,7 @@ Vpn_AWG/
 │   ├── modules.conf     # Включение/отключение модулей (bot=enabled, ...)
 │   ├── bot/
 │   │   ├── bot.py       # Точка входа бота: setup, start, main_menu, button_handler, main()
-│   │   ├── strings.py   # Текстовые блоки: get_help_main(tma_url), HELP_DNS
+│   │   ├── strings.py   # Текстовые блоки: get_help_main(tma_url), get_client_update(awg3), HELP_DNS
 │   │   └── handlers/    # Логика по функциональным группам
 │   │       ├── common.py       # BTN_* константы, back_kb, _md, sites_keyboard, WAITING_*
 │   │       ├── bandwidth.py    # Мониторинг трафика, статистика, пики
@@ -34,8 +34,8 @@ Vpn_AWG/
 │   │       ├── sites.py        # Исключения сайтов (split tunneling)
 │   │       ├── updates.py      # Обновления репозитория, проверка IP
 │   │       ├── users.py        # Управление пользователями (approve/kick)
-│   │       ├── support.py      # 📣 Рассылка всем, 🆘 Помощь: пользователь ↔ админ через бота
-│   │       └── help.py         # Экраны справки; вызывает get_help_main(TMA_URL, is_awg3(gen_obfs()))
+│   │       ├── support.py      # 📣 Рассылка всем, 🆘 Помощь / Обновление: пользователь ↔ админ через бота
+│   │       └── help.py         # Экраны справки; вызывает get_help_main(TMA_URL, is_awg3(gen_obfs())); send_client_update()
 │   ├── tma/
 │   │   ├── tma_server.py # Flask HTTP API для веб-панели (TMA)
 │   │   └── install.sh    # Установщик TMA-модуля
@@ -94,8 +94,9 @@ Vpn_AWG/
   ├── 📋 Мои устройства
   ├── 🧲 Добавить устройство
   ├── 📊 Статус сервера
-  └── 🆘 Помощь  → help_menu
+  └── 🆘 Помощь / Обновление  → help_menu
         ├── 📖 Инструкция  (Назад → help_menu)
+        ├── 📲 Обновить клиент  (инструкция новым сообщением, экран остаётся)
         ├── ✉️ Написать админу
         └── ◀️ В меню
 ```
@@ -179,7 +180,7 @@ Vpn_AWG/
 | `get_awg_dump()` | `awg show` dump — трафик и handshake |
 | `make_conf_for_client(name, endpoint)` | Генерация .conf файла для клиента |
 | `load_client_excl(name)` / `save_client_excl(name, data)` | Исключения сплит-туннелинга |
-| `make_wg_conf(...)` / `make_vpn_link(...)` | Генерация конфига / vpn:// ссылки. Параметры AWG — по `AWG_PARAMS`, пустые пропускаются. Для конфига 3.x ещё `MTU` (1376) и `PersistentKeepalive` диапазоном (`_client_tunnel_opts`); в `vpn://` — `protocol_version: 3.1`, ключи как у AmneziaVPN (`I1`, `HeaderProtectionKey`, …) |
+| `make_wg_conf(...)` / `make_vpn_link(...)` | Генерация конфига / vpn:// ссылки. Параметры AWG — по `AWG_PARAMS`, пустые пропускаются. Для конфига 3.x ещё `MTU` (1376) и `PersistentKeepalive` диапазоном (`_client_tunnel_opts`); в `vpn://` — `protocol_version: 3.1`, ключи как у AmneziaVPN (`I1`, `HeaderProtectionKey`, …) и контейнер `amnezia-awg2`: `amnezia-awg` приложение подписывает «AmneziaWG Legacy» (так у него называется старая раскладка собственной установки сервера, на протокол не влияет). Для 2.0 остаётся `amnezia-awg` — `amnezia-awg2` знают только приложения с поддержкой 3.1 |
 | `AWG_PARAMS` | Кортеж «ключ конфига ↔ переменная server.env» для всех параметров обфускации 1.0–3.1, в порядке записи. Единственный источник набора ключей: `gen_obfs`, `get_client_keys`, `make_*`, перевод на 3.1 |
 | `gen_obfs(env=None)` | Параметры для конфигов клиентов из server.env (или переданного `env`). Параметр 3.x попадает, только если задан — сервер на 2.0 выдаёт прежние конфиги. `I1–I5` без тегов `<…>` (старое `i1 = <число>`, пакет нулевой длины) отбрасываются |
 | `is_awg3(obfs)` | Есть ли параметры 3.x (как `hasAwg3Markers` в AmneziaVPN): ключ защиты, тайминги, `ContentPaddingAddition` или включённые `RandomTrailers`/`DisableCookies` |
@@ -252,7 +253,8 @@ Vpn_AWG/
 | Функция | Назначение |
 |---------|-----------|
 | `notify_start/receive/send/cancel` | «📣 Уведомления»: админ пишет любое сообщение (текст, фото, файл) → «Отправить N пользователям?» → `_broadcast()` в фоне шлёт всем одобренным, кроме админа; `RetryAfter` — ждём и повторяем, `Forbidden` — в итог «не доставлено» с именами. Черновик — в `_PENDING_BROADCAST`, не в `user_data` (та пишется в PicklePersistence) |
-| `show_help_menu(query)` | «🆘 Помощь» пользователя: инструкция / написать админу |
+| `show_help_menu(query)` | «🆘 Помощь / Обновление» пользователя: инструкция / обновить клиент / написать админу |
+| `send_client_update(query)` (help.py) | «📲 Обновить клиент» — у пользователя в меню помощи, у админа в «🔧 Техобслуживание». Новым сообщением (`reply_text`, без превью ссылок): AmneziaVPN и AmneziaWG, магазины, ссылки на `releases/latest` на GitHub Amnezia и какой файл из Assets брать (`android11+_arm64-v8a.apk` и т.д. — хвост имени, версия в имени меняется). Текст — `get_client_update(awg3)` в strings.py |
 | `support_start/receive/cancel` | Пользователь → админ. Только одобренные, без лимитов. `support_start` из меню заменяет экран, `support_again` (кнопка под ответом админа) шлёт новое сообщение, чтобы не затереть ответ. Админу приходит «✉️ Сообщение от Имя (@ник), устройства» + кнопка «↩️ Ответить» (`support_reply_<uid>`) |
 | `support_reply_start/receive/cancel` | Админ → пользователь: «💬 Ответ администратора» + кнопка «✉️ Ответить» |
 | `_send_with_header(bot, chat, msg, header)` | Заголовок + содержимое одним сообщением: текст — `send_message` с `text_html`, медиа — `copy_message` с новой подписью; стикер/кружок/текст на пределе длины — заголовок отдельно, содержимое копией |
@@ -329,7 +331,7 @@ Vpn_AWG/
 ## UI-строки и кнопки
 
 - `modules/bot/handlers/common.py` — все кнопки навигации (BTN_BACK, BTN_CANCEL и др.)
-- `modules/bot/strings.py` — только большие тексты: `get_help_main(tma_url)`, `HELP_DNS`
+- `modules/bot/strings.py` — только большие тексты: `get_help_main(tma_url)`, `get_client_update(awg3)`, `HELP_DNS`. Имена файлов с `_` — только внутри `…`: снаружи Markdown v1 считает `_` незакрытым курсивом
 - `modules/mtproxy/strings.py` — тексты и кнопки MTProxy
 
 ---

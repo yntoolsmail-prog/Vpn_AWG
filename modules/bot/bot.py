@@ -45,7 +45,7 @@ from sites_data import (
 from module_loader import load_modules
 from handlers.common import (
     BTN_BACK, BTN_BACK_MENU, BTN_BACK_CARD, BTN_BACK_MAINT,
-    BTN_CANCEL, BTN_DONE, BTN_REFRESH, BTN_MY_DEVICES,
+    BTN_CANCEL, BTN_DONE, BTN_REFRESH, BTN_MY_DEVICES, BTN_HELP_MENU,
 )
 from handlers.common import (
     WAITING_REGISTER_NAME, WAITING_DEVICE_NAME, WAITING_RESTORE_FILE,
@@ -58,7 +58,7 @@ from handlers.bandwidth import (
     bw_monitor_job, slave_bw_poll_job, show_bandwidth, show_bw_days,
     show_bw_reset_ask, do_bw_reset, do_bw_reset_all, do_backup,
 )
-from handlers.help import show_help, show_help_dns
+from handlers.help import send_client_update, show_help, show_help_dns
 from handlers.support import (
     show_help_menu, notify_start, notify_receive, notify_send, notify_cancel,
     support_start, support_receive, support_cancel,
@@ -289,7 +289,7 @@ async def main_menu(msg, user_id: int, edit=False):
         kb.append([InlineKeyboardButton(BTN_MY_DEVICES,      callback_data="my_devices")])
         kb.append([InlineKeyboardButton("🧲 Добавить устройство",  callback_data="add")])
         kb.append([InlineKeyboardButton("📊 Статус сервера",       callback_data="status")])
-        kb.append([InlineKeyboardButton("🆘 Помощь",               callback_data="help_menu")])
+        kb.append([InlineKeyboardButton(BTN_HELP_MENU,             callback_data="help_menu")])
         kb.extend(_modules.get_user_menu_buttons(user_id))
 
     if edit:
@@ -530,6 +530,8 @@ async def _button_dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_help(query)
     elif data == "help_dns":
         await show_help_dns(query)
+    elif data == "client_update":
+        await send_client_update(query)
     elif data == "add_cancel":
         await main_menu(query, user_id, edit=True)
     elif data == "my_devices_back":

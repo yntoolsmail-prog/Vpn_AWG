@@ -48,6 +48,56 @@ def get_help_main(tma_url: str = "", awg3: bool = False) -> str:
     ]
     return "\n".join(lines).replace("\n\n\n", "\n\n")
 
+# ── Обновление приложения («📲 Обновить клиент») ─────────────────────────────
+# Имена файлов — по релизам Amnezia на GitHub (октябрь 2026): AmneziaVPN
+# выкладывает APK на каждую версию Android и архитектуру сразу, поэтому
+# называем хвост имени, а не версию — номер меняется с каждым релизом.
+# Имена с «_» — только внутри `…`: в Markdown v1 одиночное «_» снаружи
+# Telegram считает незакрытым курсивом и отклоняет сообщение.
+def get_client_update(awg3: bool = False) -> str:
+    lines = [
+        "📲 *Обновление приложения*\n",
+        "Подключаться можно через любое из двух приложений — обновите то, которым пользуетесь:",
+        "• *AmneziaVPN* — основное (телефон, компьютер, Mac).",
+        "• *AmneziaWG* — лёгкий клиент (компьютер, телевизор, Android).\n",
+    ]
+    if awg3:
+        lines.append("Для нашего сервера нужны *AmneziaVPN 5.0.1.5+* или *AmneziaWG 3.1+*.\n")
+    lines += [
+        "━━━━━━━━━━━━",
+        "*Способ 1 — магазин приложений*",
+        "Google Play или App Store → найдите приложение → *Обновить*.",
+        "На iPhone, iPad и для AmneziaWG на Mac — только так.\n",
+        "━━━━━━━━━━━━",
+        "*Способ 2 — с GitHub, официальной страницы Amnezia*",
+        "Если магазин не предлагает обновление (в Google Play новые версии"
+        " появляются с задержкой) — скачайте свежую версию сами:\n",
+        "AmneziaVPN:",
+        "https://github.com/amnezia-vpn/amnezia-client/releases/latest\n",
+        "AmneziaWG для Android:",
+        "https://github.com/amnezia-vpn/amneziawg-android/releases/latest\n",
+        "AmneziaWG для Windows:",
+        "https://github.com/amnezia-vpn/amneziawg-windows-client/releases/latest\n",
+        "На странице прокрутите вниз до раздела *Assets* — там файлы сразу"
+        " для всех систем. Какой скачивать:\n",
+        "*AmneziaVPN* — имя файла заканчивается на:",
+        "• Android 11 и новее — `android11+_arm64-v8a.apk`",
+        "• Android 9–10 — `android9-10_arm64-v8a.apk`",
+        "• Телевизор, приставка или старый телефон, если файл выше"
+        " не устанавливается — тот же, но `armeabi-v7a.apk`",
+        "• Windows — `windows_x64.exe`",
+        "• Mac — `macos_x64.pkg`\n",
+        "*AmneziaWG*:",
+        "• Android — единственный файл `.apk` в списке",
+        "• Windows — `amd64-…msi` (обычный компьютер)\n",
+        "Версия Android: Настройки → О телефоне.\n",
+        "⚠️ Если телефон пишет «Приложение не установлено» — удалите старую"
+        " версию, установите скачанную и заново добавьте конфиг через"
+        " 📋 Мои устройства.",
+    ]
+    return "\n".join(lines)
+
+
 HELP_DNS = (
     "🌐 *DNS — почему это важно*\n\n"
     "Если VPN вдруг перестал подключаться после того как всё работало — "
