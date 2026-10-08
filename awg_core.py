@@ -140,6 +140,88 @@ def invalidate_servers_cache():
     _servers_cache = None
     _servers_cache_ts = 0.0
 
+# ── Адреса основного: server.env ↔ servers.json ────────────────────────────────
+# SERVER_ENDPOINT / SERVER_ENDPOINT_BACKUP задают setup.sh и vpn.sh, а бот и TMA
+# показывают и выдают адреса из servers.json. servers.json создавался из
+# server.env один раз, дальше файлы жили отдельно: заданный в vpn.sh домен в
+# боте не был виден (ни выбрать, ни удалить), а удалённый в боте оставался в
+# server.env адресом по умолчанию. Теперь адреса server.env — всегда среди
+# адресов основного.
+_ENV_ENDPOINT_KEYS = ("SERVER_ENDPOINT", "SERVER_ENDPOINT_BACKUP")
+
+
+def _endpoint_type(value: str) -> str:
+    try:
+        ipaddress.IPv4Address(value)
+        return "ip"
+    except ValueError:
+        return "domain"
+
+
+def _merge_env_endpoints(servers: list) -> bool:
+    """server.env → servers.json: адрес из server.env, которого нет ни у одного
+    сервера, добавляется основному. Перенесённый на слейв не трогаем — он есть в
+    списке. Возвращает True, если список изменён."""
+    primary = next((s for s in servers if s.get("is_primary")), None)
+    if not primary:
+        return False
+    env = load_env(ENV_FILE)
+    present = {ep.get("value") for s in servers for ep in s.get("endpoints", [])}
+    changed = False
+    for key in _ENV_ENDPOINT_KEYS:
+        val = env.get(key, "").strip()
+        if val and val not in present:
+            ep = {"value": val, "type": _endpoint_type(val)}
+            if ep["type"] == "domain":
+                ep["verified"] = False
+            primary.setdefault("endpoints", []).append(ep)
+            present.add(val)
+            changed = True
+    return changed
+
+
+def _drop_env_endpoints(old_servers: list, new_servers: list):
+    """servers.json → server.env: адрес, ушедший с основного (удалён в боте или
+    перенесён на слейв), убирается и из server.env — иначе _merge_env_endpoints
+    вернул бы его при следующем чтении. Ушёл SERVER_ENDPOINT — основным
+    становится другой домен основного (резервный — в последнюю очередь); доменов
+    нет — пусто, и по умолчанию берётся SERVER_IP. Бот и TMA держат прежние
+    значения в памяти до перезапуска — это только адрес по умолчанию."""
+    def _primary(servers):
+        return next((s for s in servers if s.get("is_primary")), None) or {}
+    old_vals = {ep.get("value") for ep in _primary(old_servers).get("endpoints", [])}
+    primary  = _primary(new_servers)
+    new_vals = {ep.get("value") for ep in primary.get("endpoints", [])}
+    gone = old_vals - new_vals
+    if not gone or not primary:
+        return
+    env    = load_env(ENV_FILE)
+    main   = env.get("SERVER_ENDPOINT", "").strip()
+    backup = env.get("SERVER_ENDPOINT_BACKUP", "").strip()
+    upd = {}
+    if backup and backup in gone:
+        upd["SERVER_ENDPOINT_BACKUP"] = backup = ""
+    if main and main in gone:
+        doms = [ep.get("value") for ep in primary.get("endpoints", [])
+                if ep.get("type") == "domain"]
+        rest = [d for d in doms if d != backup]
+        if rest:
+            upd["SERVER_ENDPOINT"] = rest[0]
+        elif backup:
+            upd["SERVER_ENDPOINT"] = backup
+            upd["SERVER_ENDPOINT_BACKUP"] = ""
+        else:
+            upd["SERVER_ENDPOINT"] = ""
+    if not upd:
+        return
+    from awg_clients import _env_with_updates
+    with open(ENV_FILE) as f:
+        text = f.read()
+    with open(ENV_FILE, "w") as f:
+        f.write(_env_with_updates(text, upd))
+    logger.info(f"server.env: адреса основного обновлены по servers.json: {upd}")
+
+
 def load_servers() -> list:
     """Загружает список серверов; при отсутствии файла создаёт из server.env."""
     global _servers_cache, _servers_cache_ts
@@ -150,7 +232,10 @@ def load_servers() -> list:
         try:
             with open(SERVERS_FILE) as f:
                 data = json.load(f)
-            _servers_cache = data.get("servers", [])
+            servers = data.get("servers", [])
+            if _merge_env_endpoints(servers):
+                save_servers(servers)
+            _servers_cache = servers
             _servers_cache_ts = now
             return _servers_cache
         except Exception:
@@ -162,8 +247,19 @@ def load_servers() -> list:
     return _servers_cache
 
 def save_servers(servers: list):
-    """Сохраняет список серверов и сбрасывает кэш."""
+    """Сохраняет список серверов и сбрасывает кэш. Адрес, ушедший с основного,
+    сначала убирается из server.env (_drop_env_endpoints): в обратном порядке
+    процесс, читающий servers.json между двумя записями, вернул бы его в список."""
     global _servers_cache, _servers_cache_ts
+    try:
+        with open(SERVERS_FILE) as f:
+            old = json.load(f).get("servers", [])
+    except Exception:
+        old = []
+    try:
+        _drop_env_endpoints(old, servers)
+    except Exception as e:
+        logger.warning(f"server.env: адреса основного не обновлены: {e}")
     os.makedirs(os.path.dirname(SERVERS_FILE), exist_ok=True)
     with open(SERVERS_FILE, "w") as f:
         json.dump({"servers": servers}, f, ensure_ascii=False, indent=2)
@@ -564,9 +660,16 @@ def sync_server_ip(new_ip: str = "") -> tuple[bool, list]:
                 if not s.get("is_primary"):
                     continue
                 s.setdefault("ssh", {})["ip"] = new_ip
+                # Без повторов: если новый IP уже стоял в server.env (голый IP в
+                # SERVER_ENDPOINT*), load_servers() добавил его основному сам
+                seen, eps = set(), []
                 for ep in s.get("endpoints", []):
                     if ep.get("value") == old_ip:
                         ep["value"] = new_ip
+                    if ep.get("value") not in seen:
+                        seen.add(ep.get("value"))
+                        eps.append(ep)
+                s["endpoints"] = eps
             save_servers(servers)
         except Exception as e:
             report.append(f"⚠️ servers.json: {e}")

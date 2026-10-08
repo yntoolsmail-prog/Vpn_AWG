@@ -925,6 +925,15 @@ analyze_configs() {
         [[ -n "$SERVER_ENDPOINT_BACKUP" ]] && echo "  Резерв:      ${SERVER_ENDPOINT_BACKUP}:${SERVER_PORT}"
         echo ""
 
+        # Известные адреса — из server.env и все эндпоинты всех серверов из
+        # servers.json: домены, добавленные в боте, и адреса слейвов в server.env
+        # не попадают, и сверка только с ним давала ложное «не совпадает»
+        local KNOWN_EPS
+        KNOWN_EPS=" ${SERVER_ENDPOINT} ${SERVER_IP} ${SERVER_ENDPOINT_BACKUP} $(python3 -c '
+import json, sys
+print(" ".join(e.get("value", "") for s in json.load(open(sys.argv[1])).get("servers", [])
+               for e in s.get("endpoints", [])))' /etc/amnezia/amneziawg/servers.json 2>/dev/null) "
+
         for CNAME in "${SELECTED[@]}"; do
             local CONF="$CLIENTS_DIR/${CNAME}.conf"
             [[ ! -f "$CONF" ]] && continue
@@ -1000,7 +1009,7 @@ analyze_configs() {
             if [[ "$EP_PORT" != "$SERVER_PORT" ]]; then
                 echo "  ⚠️  ПОРТ КЛИЕНТА (${EP_PORT}) НЕ СОВПАДАЕТ С СЕРВЕРОМ (${SERVER_PORT})"
             fi
-            if [[ "$EP_HOST" != "$SERVER_ENDPOINT" && "$EP_HOST" != "$SERVER_IP" && "$EP_HOST" != "$SERVER_ENDPOINT_BACKUP" ]]; then
+            if [[ "$KNOWN_EPS" != *" ${EP_HOST} "* ]]; then
                 echo "  ⚠️  ENDPOINT КЛИЕНТА (${EP_HOST}) НЕ СОВПАДАЕТ НИ С ОДНИМ ИЗВЕСТНЫМ ENDPOINT"
             fi
 
