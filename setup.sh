@@ -1011,11 +1011,14 @@ SERVER_PUBLIC=$(cat /etc/amnezia/amneziawg/server_public.key)
 #    диапазон с RandomTrailers изредка выдавал бы пакет данных за хендшейк.
 #  • Тайминги — вокруг констант WireGuard, как у Amnezia: ровный период рекея
 #    и keepalive — подпись. I1 — пакет, похожий на DNS-ответ (дефолт Amnezia).
+#  • Jc 4–6, как у AmneziaVPN (JC_RANGE): I1, мусор и хендшейк уходят одной
+#    пачкой, а есть сети, пропускающие от нового потока только первые ~10
+#    пакетов, — при Jc 9–10 хендшейк терялся и клиент подключался со 2-й попытки.
 read JC JMIN JMAX S1 S2 S3 S4 H1 H2 H3 H4 < <(python3 -c "
 import random
 r = random.SystemRandom()
 h = r.sample(range(5, 2**32), 4)
-print(r.randint(3,10), r.randint(10,50), r.randint(51,100),
+print(r.randint(4,6), r.randint(10,50), r.randint(51,100),
       r.randint(15,64), r.randint(15,64), r.randint(12,32), r.randint(12,20), *h)")
 if [[ "$AWG31" -eq 1 ]]; then
     log "Генерация параметров обфускации AWG 3.1..."

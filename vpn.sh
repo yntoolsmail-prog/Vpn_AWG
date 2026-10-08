@@ -1164,6 +1164,40 @@ sys.exit(0 if ok else (2 if unready else 1))
 ' "$1"
 }
 
+# Jc больше 6 остаётся у серверов, переведённых с 2.0 до октября 2026: I1,
+# мусор и хендшейк уходят одной пачкой, и в сетях, пропускающих от нового
+# потока только первые ~10 пакетов, хендшейк терялся — подключение со второй
+# попытки через 3–7 с или никак. Jc односторонний: выданные конфиги со старым
+# значением продолжают работать. Бот и TMA держат server.env в памяти — на время
+# записи останавливаем, после поднимаем (как при переводе)
+_offer_jc_fix() {
+    [[ "$JC" =~ ^[0-9]+$ ]] && (( JC > 6 )) || return 0
+    echo ""
+    echo -e "  ${YELLOW}Jc = ${JC}: вместе с I1 и хендшейком клиент шлёт $((JC + 2)) пакетов одной пачкой.${NC}"
+    echo "  Часть сетей пропускает от нового потока только первые ~10 — хендшейк"
+    echo "  теряется, и устройство подключается со второй попытки или не подключается."
+    echo "  У AmneziaVPN Jc = 4–6. Выданные конфиги продолжат работать, новый Jc"
+    echo "  получат новые устройства и перекачанные конфиги."
+    local CONFIRM
+    read -p "  Поставить Jc 4–6? [y/N]: " CONFIRM
+    [[ "${CONFIRM,,}" == "y" ]] || return 0
+    local SVC RUNNING=()
+    for SVC in "$BOT_SERVICE" awg-tma; do
+        systemctl is-active --quiet "$SVC" 2>/dev/null && RUNNING+=("$SVC")
+    done
+    [[ ${#RUNNING[@]} -gt 0 ]] && systemctl stop "${RUNNING[@]}"
+    echo ""
+    PYTHONPATH="$PY_DIR" python3 -c '
+import sys
+from awg_core import set_junk_count
+ok, report = set_junk_count()
+print("\n".join(report))
+sys.exit(0 if ok else 1)
+' | sed 's/^/  /'
+    [[ ${#RUNNING[@]} -gt 0 ]] && systemctl start "${RUNNING[@]}"
+    source "$ENV_FILE"
+}
+
 manage_awg31() {
     show_header
     echo -e "${BOLD}  Протокол AmneziaWG${NC}"
@@ -1186,6 +1220,7 @@ manage_awg31() {
         echo -e "  ${GREEN}Сервер уже работает на AWG ${PROTO}.${NC}"
         echo "  Откат на 2.0 — восстановить бэкап pre_awg31_* (п. 7 «Бэкапы» или бот),"
         echo "  затем «Синхронизировать» каждый слейв в боте."
+        _offer_jc_fix
         press_enter; return
     fi
 

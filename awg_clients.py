@@ -497,6 +497,15 @@ AWG31_DEFAULTS = {
           "c00c000100010000105a00044d583737>",
 }
 
+# Jc — сколько мусорных пакетов клиент шлёт перед каждым хендшейком, одной
+# пачкой вместе с I1 и самим хендшейком. Параметр односторонний: сервер мусор
+# молча выбрасывает и с клиентом его не сверяет. 4–6 — как у AmneziaVPN
+# (awgInstaller.cpp). Больше вредно: найдены сети, которые пропускают от нового
+# потока UDP только первые ~10 пакетов, пока его не распознают, — при Jc = 9
+# хендшейк (11-й пакет) терялся, и клиент подключался со второй попытки,
+# через 3–7 с, или не подключался вовсе. С Jc = 4–6 пачка — 6–8 пакетов
+JC_RANGE = (4, 6)
+
 _UPGRADE_HINT = (
     "Обновите пакеты AmneziaWG (бот: Техобслуживание → «Бэкап + обновление всех",
     "серверов», или apt update && apt upgrade) и перезагрузите сервер, если",
@@ -506,7 +515,8 @@ _UPGRADE_HINT = (
 
 def gen_awg31_env(current: dict) -> dict:
     """Переменные server.env для AWG 3.1 поверх текущих (current — прочитанный server.env).
-    Jc/Jmin/Jmax и одиночные H1–H4 остаются прежними. S1–S4 не меньше 12: первые
+    Jmin/Jmax и одиночные H1–H4 остаются прежними, Jc — если он в JC_RANGE (у 2.0
+    бывал и 9–10: с I1 первая пачка вышла бы длиннее 10 пакетов). S1–S4 не меньше 12: первые
     12 байт каждой набивки — нонс защиты заголовков. S4 не больше 20: он удлиняет
     каждый пакет данных, и с MTU интерфейса сервера 1420 пакет не должен выйти за
     1500. H1–H4 — одиночные числа: под защитой заголовков они на проводе всё равно
@@ -521,8 +531,10 @@ def gen_awg31_env(current: dict) -> dict:
 
     env = dict(AWG31_DEFAULTS)
     jc, jmin, jmax = num("JC"), num("JMIN"), num("JMAX")
-    if None in (jc, jmin, jmax) or jmin > jmax:
-        jc, jmin, jmax = rnd.randint(3, 10), rnd.randint(10, 50), rnd.randint(51, 100)
+    if None in (jmin, jmax) or jmin > jmax:
+        jmin, jmax = rnd.randint(10, 50), rnd.randint(51, 100)
+    if jc is None or not JC_RANGE[0] <= jc <= JC_RANGE[1]:
+        jc = rnd.randint(*JC_RANGE)
     env.update(JC=str(jc), JMIN=str(jmin), JMAX=str(jmax))
 
     s1, s2 = num("S1"), num("S2")
@@ -741,3 +753,67 @@ def migrate_to_awg31(skip_unready_slaves: bool = False) -> tuple:
         f"Откат: восстановить бэкап {os.path.basename(backup)} и синхронизировать слейвы.",
     ]
     return True, report, len(unready)
+
+
+def _replace_iface_param(text: str, key: str, value: str) -> str:
+    """Меняет значение key в [Interface] (регистр ключа не важен). Строки нет —
+    текст не меняется: параметр не задан, и вписывать его незачем."""
+    out, section = [], ""
+    for line in text.split("\n"):
+        s = line.strip()
+        if s.startswith("[") and s.endswith("]"):
+            section = s.lower()
+        elif (section == "[interface]" and "=" in s and not s.startswith("#")
+              and s.split("=", 1)[0].strip().lower() == key.lower()):
+            line = f"{key} = {value}"
+        out.append(line)
+    return "\n".join(out)
+
+
+def set_junk_count(jc: int = None) -> tuple:
+    """Новый Jc (по умолчанию случайный из JC_RANGE) на работающем сервере: JC в
+    server.env — для новых устройств, Jc во всех clients/*.conf — бот собирает
+    перекачиваемый конфиг из файла устройства, а не из server.env, — и в awg0.conf.
+    К интерфейсу применяется через `awg set … jc` без перезапуска: Jc односторонний,
+    выданные конфиги со старым Jc продолжают работать. Слейвам ничего не нужно —
+    свой Jc сервер использует, только когда хендшейк начинает он сам, а
+    «Синхронизировать» заберёт новое значение вместе с конфигом.
+    Бот и TMA держат server.env в памяти — после вызова их перезапускают.
+    Возвращает (ok, отчёт)."""
+    import random
+    from awg_core import ENV_FILE
+    if jc is None:
+        jc = random.SystemRandom().randint(*JC_RANGE)
+    report = []
+    try:
+        with awg_file_lock():
+            paths = [AWG_CONF] + [f"{CLIENTS_DIR}/{n}.conf" for n in get_all_clients()]
+            changed = 0
+            for path in paths:
+                with open(path) as f:
+                    text = f.read()
+                new = _replace_iface_param(text, "Jc", str(jc))
+                if new != text:
+                    _write_private(path, new)
+                    changed += 1
+            with open(ENV_FILE) as f:
+                env_text = f.read()
+            _write_private(ENV_FILE, _env_with_updates(env_text, {"JC": str(jc)}))
+    except Exception as e:
+        return False, [f"Не удалось записать Jc = {jc}: {e}"]
+    report.append(f"Jc = {jc}: server.env, awg0.conf и файлы устройств ({changed} шт.)")
+    try:
+        r = subprocess.run(["awg", "set", AWG_IFACE, "jc", str(jc)],
+                           capture_output=True, text=True, timeout=10)
+        err = (r.stderr or "").strip() if r.returncode else ""
+    except Exception as e:
+        err = str(e)
+    if not err and _iface_param("jc") == str(jc):
+        report.append("Интерфейс: применено без перезапуска")
+    else:
+        report.append("Интерфейс: применится при следующем перезапуске AWG "
+                      f"({err or 'awg set не подтвердил'}). До него «Синхронизировать» "
+                      "слейв покажет расхождение Jc — сначала перезапустите AWG")
+    report.append("Новый Jc получат новые устройства и перекачанные конфиги; "
+                  "уже выданные работают и со старым.")
+    return True, report
