@@ -1152,35 +1152,85 @@ _awg_proto() {
     fi
 }
 
-# Прогон migrate_to_awg31(); $1=1 — не ждать неготовые слейвы.
+# Прогон migrate_to_awg31(): $1=1 — не ждать неготовые слейвы, $2=1 — перевыпуск
+# на сервере 3.x, $3 — новый порт (пусто — прежний).
 # Код выхода: 0 — готово, 2 — мешают неготовые слейвы, 1 — прочее
 _run_awg31_migration() {
     PYTHONPATH="$PY_DIR" python3 -c '
 import sys
 from awg_core import migrate_to_awg31
-ok, report, unready = migrate_to_awg31(skip_unready_slaves=sys.argv[1] == "1")
+ok, report, unready = migrate_to_awg31(skip_unready_slaves=sys.argv[1] == "1",
+                                       regen=sys.argv[2] == "1",
+                                       new_port=int(sys.argv[3]) if sys.argv[3] else None)
 print("\n".join(report))
 sys.exit(0 if ok else (2 if unready else 1))
-' "$1"
+' "$1" "$2" "$3"
+}
+
+# Свободный UDP-порт 30000–49999, как у AmneziaVPN (PORT_RANGE в awg_clients.py)
+_random_awg_port() {
+    local P=$((30000 + RANDOM % 20000))
+    while ss -uln 2>/dev/null | grep -q ":${P} "; do P=$((P + 1)); done
+    echo "$P"
+}
+
+# 51820 — стандартный порт WireGuard. Предлагаем заменить; выбранный порт — в
+# переменную NEW_PORT (пусто — не менять)
+_ask_new_port() {
+    NEW_PORT=""
+    [[ "$SERVER_PORT" == "51820" ]] || return 0
+    local P CONFIRM
+    P=$(_random_awg_port)
+    echo ""
+    echo -e "  ${YELLOW}Порт 51820 — стандартный порт WireGuard, его проверяют первым.${NC}"
+    echo "  AmneziaVPN ставит своим серверам случайный 30000–50000."
+    echo "  Если у хостера в панели есть свой файрвол — откройте ${P}/UDP на основном"
+    echo "  и слейвах до перевода (ufw и iptables INPUT здесь трафик не режут)."
+    read -p "  Сменить порт 51820 на ${P}? [Y/n]: " CONFIRM
+    [[ "${CONFIRM,,}" == "n" ]] || NEW_PORT="$P"
+}
+
+# Перевод / перевыпуск: $1=1 — перевыпуск, $2 — новый порт. Бот и TMA держат
+# server.env в памяти: пока идёт запись, созданное ими устройство получило бы
+# старые параметры. Останавливаем и поднимаем после
+_awg31_apply() {
+    local REGEN="$1" PORT="$2" SVC RUNNING=() RC CONFIRM
+    for SVC in "$BOT_SERVICE" awg-tma; do
+        systemctl is-active --quiet "$SVC" 2>/dev/null && RUNNING+=("$SVC")
+    done
+    [[ ${#RUNNING[@]} -gt 0 ]] && systemctl stop "${RUNNING[@]}"
+
+    echo ""
+    echo -e "  ${CYAN}Проверяю версии и применяю... (слейвы — по SSH, до минуты на каждый)${NC}"
+    echo ""
+    _run_awg31_migration 0 "$REGEN" "$PORT" | sed 's/^/  /'
+    RC=${PIPESTATUS[0]}
+    if [[ "$RC" -eq 2 ]]; then
+        echo ""
+        read -p "  Продолжить без неготовых слейвов (они останутся на прежних параметрах)? [y/N]: " CONFIRM
+        if [[ "${CONFIRM,,}" == "y" ]]; then
+            echo ""
+            _run_awg31_migration 1 "$REGEN" "$PORT" | sed 's/^/  /'
+            RC=${PIPESTATUS[0]}
+        fi
+    fi
+
+    [[ ${#RUNNING[@]} -gt 0 ]] && systemctl start "${RUNNING[@]}"
+    if [[ "$RC" -eq 0 ]]; then
+        # vpn.sh тоже держит server.env в переменных — перечитываем
+        source "$ENV_FILE"
+        echo ""
+        echo -e "  ${GREEN}✓ Готово. Бот и веб-панель перезапущены с новыми параметрами.${NC}"
+        echo "  Всем устройствам — новый конфиг, QR или ссылка из бота."
+    fi
 }
 
 # Jc больше 6 остаётся у серверов, переведённых с 2.0 до октября 2026: I1,
 # мусор и хендшейк уходят одной пачкой, и в сетях, пропускающих от нового
 # потока только первые ~10 пакетов, хендшейк терялся — подключение со второй
 # попытки через 3–7 с или никак. Jc односторонний: выданные конфиги со старым
-# значением продолжают работать. Бот и TMA держат server.env в памяти — на время
-# записи останавливаем, после поднимаем (как при переводе)
-_offer_jc_fix() {
-    [[ "$JC" =~ ^[0-9]+$ ]] && (( JC > 6 )) || return 0
-    echo ""
-    echo -e "  ${YELLOW}Jc = ${JC}: вместе с I1 и хендшейком клиент шлёт $((JC + 2)) пакетов одной пачкой.${NC}"
-    echo "  Часть сетей пропускает от нового потока только первые ~10 — хендшейк"
-    echo "  теряется, и устройство подключается со второй попытки или не подключается."
-    echo "  У AmneziaVPN Jc = 4–6. Выданные конфиги продолжат работать, новый Jc"
-    echo "  получат новые устройства и перекачанные конфиги."
-    local CONFIRM
-    read -p "  Поставить Jc 4–6? [y/N]: " CONFIRM
-    [[ "${CONFIRM,,}" == "y" ]] || return 0
+# значением продолжают работать
+_fix_jc_only() {
     local SVC RUNNING=()
     for SVC in "$BOT_SERVICE" awg-tma; do
         systemctl is-active --quiet "$SVC" 2>/dev/null && RUNNING+=("$SVC")
@@ -1198,11 +1248,38 @@ sys.exit(0 if ok else 1)
     source "$ENV_FILE"
 }
 
+# Что в параметрах сервера 3.x хуже эталона — по server.env (его подключает vpn.sh).
+# Печатает строки и возвращает 0, если есть что исправлять
+_awg31_weak_spots() {
+    local FOUND=1
+    if [[ "$H1$H2$H3$H4" == "1234" ]]; then
+        echo "   • H1–H4 = 1, 2, 3, 4 — значения от старой установки. Под ключом защиты"
+        echo "     заголовков они на проводе не видны, но случайные бесплатны и страхуют,"
+        echo "     если защиту заголовков когда-нибудь выключат"
+        FOUND=0
+    fi
+    if [[ "$I1" == *"669636c6f756403636f6d"* || -z "$I1" ]]; then
+        echo "   • I1 — стандартный шаблон Amnezia («DNS-ответ про icloud.com»), у всех её"
+        echo "     установок одинаковый: готовая сигнатура первого пакета хендшейка"
+        FOUND=0
+    fi
+    if [[ "$JC" =~ ^[0-9]+$ ]] && (( JC > 6 )); then
+        echo "   • Jc = ${JC}: с I1 и хендшейком — $((JC + 2)) пакетов одной пачкой; в сетях,"
+        echo "     пропускающих от нового потока ~10 пакетов, хендшейк теряется"
+        FOUND=0
+    fi
+    if [[ "$SERVER_PORT" == "51820" ]]; then
+        echo "   • Порт 51820 — стандартный порт WireGuard"
+        FOUND=0
+    fi
+    return $FOUND
+}
+
 manage_awg31() {
     show_header
     echo -e "${BOLD}  Протокол AmneziaWG${NC}"
     echo ""
-    local PROTO TOOLS_VER MOD_LOADED MOD_DISK
+    local PROTO TOOLS_VER MOD_LOADED MOD_DISK CONFIRM CHOICE
     PROTO=$(_awg_proto)
     TOOLS_VER=$(awg --version 2>/dev/null | grep -oE 'v[0-9][0-9.]*' | head -1)
     MOD_LOADED=$(cat /sys/module/amneziawg/version 2>/dev/null)
@@ -1210,17 +1287,48 @@ manage_awg31() {
     echo -e "  Протокол сервера: ${CYAN}AWG ${PROTO}${NC}"
     echo -e "  Утилиты awg:      ${TOOLS_VER:-?}"
     echo -e "  Модуль ядра:      ${MOD_LOADED:-не загружен}  (установлен: ${MOD_DISK:-?})"
+    echo -e "  Порт AWG:         ${SERVER_PORT:-?}/UDP"
     echo ""
     if [[ -f /etc/awg-slave ]]; then
         echo "  Это слейв: параметры AWG приходят с основного сервера."
-        echo "  Перевод запускается там — слейвы он переведёт сам."
+        echo "  Перевод и перевыпуск запускаются там — слейвы он обновит сам."
         press_enter; return
     fi
+
     if [[ "$PROTO" != "2.0" ]]; then
-        echo -e "  ${GREEN}Сервер уже работает на AWG ${PROTO}.${NC}"
-        echo "  Откат на 2.0 — восстановить бэкап pre_awg31_* (п. 7 «Бэкапы» или бот),"
-        echo "  затем «Синхронизировать» каждый слейв в боте."
-        _offer_jc_fix
+        echo -e "  ${GREEN}Сервер работает на AWG ${PROTO}.${NC}"
+        echo ""
+        if _awg31_weak_spots > /dev/null; then
+            echo -e "  ${YELLOW}Что в параметрах хуже эталона:${NC}"
+            _awg31_weak_spots
+        else
+            echo "  Параметры в порядке: случайные H1–H4, свой I1, Jc 4–6, порт не 51820."
+        fi
+        echo ""
+        echo "  1) Перевыпустить все параметры 3.1 — полностью новый набор"
+        echo "     (выданные конфиги перестанут подключаться: всем — новый конфиг из бота)"
+        if [[ "$JC" =~ ^[0-9]+$ ]] && (( JC > 6 )); then
+            echo "  2) Только Jc 4–6 (выданные конфиги продолжат работать)"
+        fi
+        echo "  0) Назад"
+        echo ""
+        read -p "  Выбор: " CHOICE
+        case "$CHOICE" in
+            1)
+                echo ""
+                echo "  Будет сгенерировано с нуля: Jc, размеры мусора, S1–S4, H1–H4, ключ защиты"
+                echo "  заголовков, I1 (меняется при каждом хендшейке). Тайминги, RandomTrailers,"
+                echo "  DisableCookies, MTU — как у AmneziaVPN. Перед этим — бэкап pre_regen_*,"
+                echo "  при сбое файлы возвращаются; слейвы обновляются сами."
+                _ask_new_port
+                echo ""
+                read -p "  Перевыпустить? Напишите «да»: " CONFIRM
+                [[ "${CONFIRM,,}" == "да" ]] && _awg31_apply 1 "$NEW_PORT"
+                ;;
+            2)
+                [[ "$JC" =~ ^[0-9]+$ ]] && (( JC > 6 )) && _fix_jc_only
+                ;;
+        esac
         press_enter; return
     fi
 
@@ -1229,7 +1337,9 @@ manage_awg31() {
     echo "     счётчик WireGuard на проводе больше не видны;"
     echo "   • случайный «хвост» у каждого пакета (RandomTrailers) — размеры плавают;"
     echo "   • тайминги рекея и keepalive — диапазоны, а не ровные 120/25 с;"
-    echo "   • сервер не шлёт cookie-ответы (DisableCookies); I1 — пакет-маскировка."
+    echo "   • сервер не шлёт cookie-ответы (DisableCookies); I1 — пакет-маскировка,"
+    echo "     меняется при каждом хендшейке;"
+    echo "   • все параметры — новые, ничего не наследуется от 2.0."
     echo ""
     echo -e "  ${YELLOW}${BOLD}Это разовый перелом:${NC}"
     echo -e "  ${YELLOW}• старые конфиги перестанут подключаться — всем устройствам нужен новый"
@@ -1239,42 +1349,11 @@ manage_awg31() {
     echo -e "  • слейвы переводятся вместе с основным — пакеты на них тоже должны быть 3.1.${NC}"
     echo ""
     echo "  Перед переводом делается бэкап (pre_awg31_*), при сбое файлы возвращаются."
+    _ask_new_port
     echo ""
-    local CONFIRM
     read -p "  Перевести сервер и все слейвы на AWG 3.1? Напишите «да»: " CONFIRM
     [[ "${CONFIRM,,}" != "да" ]] && return
-
-    # Бот и TMA держат server.env в памяти: пока идёт перевод, созданное ими
-    # устройство получило бы параметры 2.0. Останавливаем и поднимаем после
-    local SVC RUNNING=()
-    for SVC in "$BOT_SERVICE" awg-tma; do
-        systemctl is-active --quiet "$SVC" 2>/dev/null && RUNNING+=("$SVC")
-    done
-    [[ ${#RUNNING[@]} -gt 0 ]] && systemctl stop "${RUNNING[@]}"
-
-    echo ""
-    echo -e "  ${CYAN}Проверяю версии и перевожу... (слейвы — по SSH, до минуты на каждый)${NC}"
-    echo ""
-    local RC
-    _run_awg31_migration 0 | sed 's/^/  /'
-    RC=${PIPESTATUS[0]}
-    if [[ "$RC" -eq 2 ]]; then
-        echo ""
-        read -p "  Перевести без неготовых слейвов (они останутся на 2.0)? [y/N]: " CONFIRM
-        if [[ "${CONFIRM,,}" == "y" ]]; then
-            echo ""
-            _run_awg31_migration 1 | sed 's/^/  /'
-            RC=${PIPESTATUS[0]}
-        fi
-    fi
-
-    [[ ${#RUNNING[@]} -gt 0 ]] && systemctl start "${RUNNING[@]}"
-    if [[ "$RC" -eq 0 ]]; then
-        # vpn.sh тоже держит server.env в переменных — перечитываем
-        source "$ENV_FILE"
-        echo ""
-        echo -e "  ${GREEN}✓ Готово. Бот и веб-панель перезапущены с параметрами 3.1.${NC}"
-    fi
+    _awg31_apply 0 "$NEW_PORT"
     press_enter
 }
 

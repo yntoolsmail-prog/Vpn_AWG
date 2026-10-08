@@ -978,8 +978,15 @@ else
         warn "Уже занятые порты: ${EXISTING_PORTS[*]} — выберите другой!"
     fi
 
-    read -p "  Порт AWG [51820]: " AWG_PORT
-    AWG_PORT=${AWG_PORT:-51820}
+    # По умолчанию — случайный свободный порт 30000–49999, как у AmneziaVPN:
+    # 51820 — стандартный порт WireGuard, его проверяют первым (PORT_RANGE в
+    # awg_clients.py)
+    DEF_PORT=$((30000 + RANDOM % 20000))
+    while ss -ulnp 2>/dev/null | grep -q ":${DEF_PORT} "; do
+        DEF_PORT=$((DEF_PORT + 1))
+    done
+    read -p "  Порт AWG [${DEF_PORT}]: " AWG_PORT
+    AWG_PORT=${AWG_PORT:-$DEF_PORT}
 
     # Проверяем что введённый порт не занят
     for BUSY_PORT in "${EXISTING_PORTS[@]}"; do
@@ -1010,7 +1017,10 @@ SERVER_PUBLIC=$(cat /etc/amnezia/amneziawg/server_public.key)
 #  • H1–H4 — одиночные числа: под защитой заголовков они зашифрованы, а широкий
 #    диапазон с RandomTrailers изредка выдавал бы пакет данных за хендшейк.
 #  • Тайминги — вокруг констант WireGuard, как у Amnezia: ровный период рекея
-#    и keepalive — подпись. I1 — пакет, похожий на DNS-ответ (дефолт Amnezia).
+#    и keepalive — подпись.
+#  • I1 — DNS-запрос со случайным ID и именем, новый при каждом хендшейке (теги
+#    <r 2> и <rc N>), как gen_i1() — не стандартный шаблон Amnezia, одинаковый у
+#    всех её установок.
 #  • Jc 4–6, как у AmneziaVPN (JC_RANGE): I1, мусор и хендшейк уходят одной
 #    пачкой, а есть сети, пропускающие от нового потока только первые ~10
 #    пакетов, — при Jc 9–10 хендшейк терялся и клиент подключался со 2-й попытки.
@@ -1032,7 +1042,12 @@ if [[ "$AWG31" -eq 1 ]]; then
     DISABLE_COOKIES="on"
     CLIENT_MTU="1376"
     PERSISTENT_KEEPALIVE="25-35"
-    I1="<r 2><b 0x858000010001000000000669636c6f756403636f6d0000010001c00c000100010000105a00044d583737>"
+    I1=$(python3 -c "
+import random
+r = random.SystemRandom()
+n, zone, qt = r.randint(6, 14), r.choice(('com', 'net', 'org')), r.choice(('0001', '001c'))
+print(f'<r 2><b 0x01000001000000000001><b 0x{n:02x}><rc {n}>'
+      f'<b 0x{len(zone):02x}{zone.encode().hex()}00{qt}000100002904d0000000000000>')")
     info "Jc=$JC Jmin=$JMIN Jmax=$JMAX S1=$S1 S2=$S2 S3=$S3 S4=$S4 H1=$H1 H2=$H2 H3=$H3 H4=$H4"
     info "Защита заголовков, RandomTrailers, DisableCookies, тайминги-диапазоны, I1"
 else

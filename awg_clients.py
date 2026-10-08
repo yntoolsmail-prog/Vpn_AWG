@@ -480,8 +480,7 @@ def make_conf_for_client_ep(name: str, endpoint: str,
 # ── Перевод сервера на AWG 3.1 ────────────────────────────────────────────────
 # Значения — как у самого Amnezia (amnezia-client: protocolConstants.h,
 # awgInstaller.cpp): тайминги разбросаны вокруг констант WireGuard (120/5/180/10 с),
-# чтобы период рекея и keepalive не был ровным; I1 — пакет, похожий на DNS-ответ
-# (2 случайных байта ID + ответ на icloud.com). setup.sh генерирует то же самое —
+# чтобы период рекея и keepalive не был ровным. setup.sh генерирует то же самое —
 # меняя здесь, поменяйте и там.
 AWG31_DEFAULTS = {
     "REKEY_AFTER_TIME":       "100-120",
@@ -493,9 +492,13 @@ AWG31_DEFAULTS = {
     "DISABLE_COOKIES":        "on",
     "CLIENT_MTU":             "1376",
     "PERSISTENT_KEEPALIVE":   "25-35",
-    "I1": "<r 2><b 0x858000010001000000000669636c6f756403636f6d0000010001"
-          "c00c000100010000105a00044d583737>",
 }
+
+# I1 по умолчанию у AmneziaVPN: «DNS-ответ про icloud.com», у всех стандартных
+# установок одинаковы 42 байта из 44 — готовая сигнатура первого пакета
+# хендшейка. Нужен только чтобы узнать его в server.env и заменить
+AMNEZIA_DEFAULT_I1 = ("<r 2><b 0x858000010001000000000669636c6f756403636f6d0000010001"
+                      "c00c000100010000105a00044d583737>")
 
 # Jc — сколько мусорных пакетов клиент шлёт перед каждым хендшейком, одной
 # пачкой вместе с I1 и самим хендшейком. Параметр односторонний: сервер мусор
@@ -506,6 +509,10 @@ AWG31_DEFAULTS = {
 # через 3–7 с, или не подключался вовсе. С Jc = 4–6 пачка — 6–8 пакетов
 JC_RANGE = (4, 6)
 
+# Порт: 51820 — стандартный порт WireGuard, его проверяют первым. AmneziaVPN
+# своим серверам ставит случайный из этого диапазона (protocolUtils.cpp)
+PORT_RANGE = (30000, 49999)
+
 _UPGRADE_HINT = (
     "Обновите пакеты AmneziaWG (бот: Техобслуживание → «Бэкап + обновление всех",
     "серверов», или apt update && apt upgrade) и перезагрузите сервер, если",
@@ -513,49 +520,53 @@ _UPGRADE_HINT = (
 )
 
 
-def gen_awg31_env(current: dict) -> dict:
-    """Переменные server.env для AWG 3.1 поверх текущих (current — прочитанный server.env).
-    Jmin/Jmax и одиночные H1–H4 остаются прежними, Jc — если он в JC_RANGE (у 2.0
-    бывал и 9–10: с I1 первая пачка вышла бы длиннее 10 пакетов). S1–S4 не меньше 12: первые
-    12 байт каждой набивки — нонс защиты заголовков. S4 не больше 20: он удлиняет
-    каждый пакет данных, и с MTU интерфейса сервера 1420 пакет не должен выйти за
-    1500. H1–H4 — одиночные числа: под защитой заголовков они на проводе всё равно
-    зашифрованы, а широкий диапазон вместе с RandomTrailers изредка выдавал бы
-    пакет данных за хендшейк (ядро опознаёт тип по «размер ≥ и H в диапазоне»)."""
+def gen_i1(rnd=None) -> str:
+    """I1 — DNS-запрос, который меняется при каждом хендшейке: <r 2> — случайный ID,
+    <rc N> — случайные буквы имени (a–z, A–Z, как у резолверов с 0x20-рандомизацией).
+    Постоянна только структура DNS-заголовка — общая для любого DNS-запроса.
+    Для сервера выбираются длина имени 6–14, зона и тип записи, поэтому и размер
+    пакета у серверов разный (39–47 байт). Добавлена запись EDNS (UDP 1232),
+    как у современных резолверов. Нужен только клиенту: сервер его выбрасывает.
+    setup.sh собирает тот же пакет — меняя здесь, поменяйте и там."""
+    import random
+    rnd = rnd or random.SystemRandom()
+    n = rnd.randint(6, 14)
+    zone = rnd.choice(("com", "net", "org"))
+    qtype = rnd.choice(("0001", "001c"))                # A / AAAA
+    head = "01000001000000000001"                      # RD; 1 вопрос, 1 доп. запись
+    tail = (f"{len(zone):02x}{zone.encode().hex()}00"  # .zone и корень
+            f"{qtype}0001"                             # тип, класс IN
+            "00002904d0000000000000")                  # OPT: UDP 1232, без флагов
+    return f"<r 2><b 0x{head}><b 0x{n:02x}><rc {n}><b 0x{tail}>"
+
+
+def gen_awg31_env() -> dict:
+    """Полный набор переменных server.env для AWG 3.1 — всё с нуля, ничего от
+    прежнего сервера: переход на 3.1 и так ломает все выданные конфиги, а
+    унаследованные значения 2.0 (у установок с апреля — H1–H4 = 1–4 и S1 = S2 = 0)
+    тянули бы старые слабости. Порт сюда не входит — его меняет migrate_to_awg31.
+    • Jc — из JC_RANGE; Jmin/Jmax — размер каждого мусорного пакета, случайный в
+      этих пределах.
+    • S1–S4 не меньше 12: первые 12 байт каждой набивки — нонс защиты заголовков.
+      S1/S2 из 15–64: init (148+S1) и response (92+S2) не совпадут по размеру.
+      S4 не больше 20: он удлиняет каждый пакет данных, с MTU интерфейса 1420
+      пакет не выйдет за 1500.
+    • H1–H4 — одиночные случайные числа. Под ключом защиты заголовок каждого
+      пакета (тип, индекс, счётчик) шифруется ChaCha20 со случайным нонсом, и H на
+      проводе не видны — AmneziaVPN ставит даже 1–4. Случайные бесплатны и
+      страхуют, если ключ защиты когда-нибудь выключат. Диапазоны нельзя: с
+      RandomTrailers тип опознаётся по «размер ≥ и H в диапазоне», и широкий
+      диапазон изредка выдавал бы пакет данных за хендшейк.
+    • I1 — gen_i1(), меняется при каждом хендшейке."""
     import random
     rnd = random.SystemRandom()
-    cur = {k: str(v).strip() for k, v in current.items()}
-
-    def num(key):
-        return int(cur[key]) if cur.get(key, "").isdigit() else None
-
     env = dict(AWG31_DEFAULTS)
-    jc, jmin, jmax = num("JC"), num("JMIN"), num("JMAX")
-    if None in (jmin, jmax) or jmin > jmax:
-        jmin, jmax = rnd.randint(10, 50), rnd.randint(51, 100)
-    if jc is None or not JC_RANGE[0] <= jc <= JC_RANGE[1]:
-        jc = rnd.randint(*JC_RANGE)
-    env.update(JC=str(jc), JMIN=str(jmin), JMAX=str(jmax))
-
-    s1, s2 = num("S1"), num("S2")
-    if s1 is None or s2 is None or min(s1, s2) < 12 or s1 + 56 == s2:
-        # Оба из 15–64: S1 + 56 ≥ 71, поэтому init (148+S1) и response (92+S2)
-        # никогда не совпадут по размеру
-        s1, s2 = rnd.randint(15, 64), rnd.randint(15, 64)
-    s3, s4 = num("S3"), num("S4")
-    if s3 is None or not 12 <= s3 <= 64:
-        s3 = rnd.randint(12, 32)
-    if s4 is None or not 12 <= s4 <= 20:
-        s4 = rnd.randint(12, 20)
-    env.update(S1=str(s1), S2=str(s2), S3=str(s3), S4=str(s4))
-
-    hs = [cur.get(f"H{i}", "") for i in range(1, 5)]
-    if not all(h.isdigit() and int(h) < 2**32 for h in hs) or len(set(hs)) < 4:
-        hs = [str(h) for h in rnd.sample(range(5, 2**32), 4)]
-    env.update({f"H{i}": h for i, h in enumerate(hs, 1)})
-
-    if _valid_ipacket(cur.get("I1", "")):
-        env["I1"] = cur["I1"]
+    env.update(JC=str(rnd.randint(*JC_RANGE)),
+               JMIN=str(rnd.randint(10, 50)), JMAX=str(rnd.randint(51, 100)),
+               S1=str(rnd.randint(15, 64)), S2=str(rnd.randint(15, 64)),
+               S3=str(rnd.randint(12, 32)), S4=str(rnd.randint(12, 20)))
+    env.update({f"H{i}": str(h) for i, h in enumerate(rnd.sample(range(5, 2**32), 4), 1)})
+    env["I1"] = gen_i1(rnd)
     env["HEADER_PROTECTION_KEY"] = subprocess.check_output(["awg", "genkey"], text=True).strip()
     return env
 
@@ -645,17 +656,36 @@ def _restart_awg_iface() -> str:
     return log.replace("\n", " | ") or r.stderr.strip() or f"systemctl start: код {r.returncode}"
 
 
-def migrate_to_awg31(skip_unready_slaves: bool = False) -> tuple:
-    """Переводит основной сервер и все слейвы с AWG 2.0 и старше на 3.1.
-    Интерфейс 3.x клиентов 2.0 не пускает, поэтому это разовый перелом: старые
-    конфиги перестают подключаться, всем устройствам нужен новый конфиг.
+def _replace_endpoint_port(text: str, port) -> str:
+    """Порт в строке Endpoint конфига клиента (адрес остаётся, [IPv6] тоже)."""
+    out = []
+    for line in text.split("\n"):
+        s = line.strip()
+        if "=" in s and not s.startswith("#") and s.split("=", 1)[0].strip().lower() == "endpoint":
+            host = s.split("=", 1)[1].strip().rsplit(":", 1)[0]
+            line = f"Endpoint = {host}:{port}"
+        out.append(line)
+    return "\n".join(out)
+
+
+def migrate_to_awg31(skip_unready_slaves: bool = False, regen: bool = False,
+                     new_port: int = None) -> tuple:
+    """Переводит основной сервер и все слейвы с AWG 2.0 и старше на 3.1, а с
+    regen=True перевыпускает весь набор параметров 3.1 на сервере, который уже
+    на 3.x (gen_awg31_env — всё с нуля). new_port — заодно сменить порт AWG:
+    ListenPort, SERVER_PORT, Endpoint в файлах устройств и awg_port всех серверов
+    в servers.json (слейвы получают порт основного при переклоне).
+    Интерфейс 3.x клиентов 2.0 не пускает, а перевыпуск меняет S/H/ключ, поэтому
+    это разовый перелом: старые конфиги перестают подключаться, всем
+    устройствам нужен новый конфиг.
     Порядок: проверка версий здесь и на слейвах → бэкап → новые параметры в
     server.env, awg0.conf и конфиги клиентов → перезапуск AWG с проверкой, что
     параметры применились (иначе файлы возвращаются как были) → переклон слейвов.
     Возвращает (успех, строки отчёта, число слейвов, не готовых к 3.1).
     Бот и TMA держат server.env в памяти —
     после перевода их нужно перезапустить (vpn.sh делает это сам)."""
-    from awg_core import ENV_FILE, create_backup, load_env, load_servers
+    from awg_core import (ENV_FILE, create_backup, invalidate_servers_cache, load_env,
+                          load_servers, save_servers)
     from awg_ssh import (awg31_blockers, awg_versions_local,
                          ssh_clone_awg_to_slave, ssh_get_awg_versions)
 
@@ -663,7 +693,7 @@ def migrate_to_awg31(skip_unready_slaves: bool = False) -> tuple:
         return False, ["Это слейв: параметры AWG приходят с основного сервера.",
                        "Запустите перевод на основном — слейвы он переведёт сам."], 0
     current = load_env(ENV_FILE)
-    if is_awg3(gen_obfs(current)):
+    if is_awg3(gen_obfs(current)) and not regen:
         return False, ["Сервер уже работает на AWG 3.x — переводить нечего."], 0
     blockers = awg31_blockers(awg_versions_local())
     if blockers:
@@ -686,8 +716,10 @@ def migrate_to_awg31(skip_unready_slaves: bool = False) -> tuple:
                        "пускать клиентов:", *unready, *_UPGRADE_HINT], len(unready)
 
     try:
-        backup = create_backup("pre_awg31")
-        new_env = gen_awg31_env(current)
+        backup = create_backup("pre_regen" if regen else "pre_awg31")
+        new_env = gen_awg31_env()
+        if new_port:
+            new_env["SERVER_PORT"] = str(new_port)
     except Exception as e:
         return False, [f"Перевод не начат — бэкап или генерация ключа не удались: {e}"], 0
     obfs = gen_obfs({**current, **new_env})
@@ -702,12 +734,17 @@ def migrate_to_awg31(skip_unready_slaves: bool = False) -> tuple:
             with open(path) as f:
                 saved[path] = f.read()
         try:
-            _write_private(AWG_CONF, _set_interface_params(
-                saved[AWG_CONF], server_lines, ("ListenPort",)))
+            server_conf = _set_interface_params(saved[AWG_CONF], server_lines, ("ListenPort",))
+            if new_port:
+                server_conf = _replace_iface_param(server_conf, "ListenPort", str(new_port))
+            _write_private(AWG_CONF, server_conf)
             for path in conf_paths:
-                _write_private(path, _set_interface_params(
+                text = _set_interface_params(
                     saved[path], client_lines, ("Address", "DNS"),
-                    drop_extra=("MTU",), keepalive=keepalive))
+                    drop_extra=("MTU",), keepalive=keepalive)
+                if new_port:
+                    text = _replace_endpoint_port(text, new_port)
+                _write_private(path, text)
             _write_private(ENV_FILE, _env_with_updates(saved[ENV_FILE], new_env))
             err = _restart_awg_iface()
             if not err and (
@@ -715,6 +752,8 @@ def migrate_to_awg31(skip_unready_slaves: bool = False) -> tuple:
                 or _iface_param("random-trailers") != "on"
             ):
                 err = "интерфейс поднялся без параметров 3.1 — утилиты и модуль ядра разных версий?"
+            if not err and new_port and _iface_param("listen-port") != str(new_port):
+                err = f"интерфейс слушает не порт {new_port} — занят другим процессом?"
         except Exception as e:
             err = str(e)
         if err:
@@ -724,21 +763,36 @@ def migrate_to_awg31(skip_unready_slaves: bool = False) -> tuple:
                 back = _restart_awg_iface()
             except Exception as e:
                 back = str(e)
-            return False, [f"Перевод не удался: {err}",
+            return False, [f"{'Перевыпуск' if regen else 'Перевод'} не удался: {err}",
                            "Файлы возвращены как были, " + (
                                "AWG перезапущен на прежних параметрах." if not back else
                                f"но AWG не поднялся: {back} — systemctl restart awg-quick@{AWG_IFACE}"),
-                           f"Бэкап до перевода: {backup}"], 0
+                           f"Бэкап до {'перевыпуска' if regen else 'перевода'}: {backup}"], 0
 
     # Этот процесс дальше выдаёт конфиги уже с новыми параметрами
     srv.update(new_env)
-    report = ["✅ Основной сервер работает на AWG 3.1.",
+    report = [("✅ Параметры AWG 3.1 перевыпущены." if regen
+               else "✅ Основной сервер работает на AWG 3.1."),
               f"   Конфигов клиентов переписано: {len(conf_paths)}",
-              f"   Бэкап до перевода: {backup}"]
+              f"   Бэкап до {'перевыпуска' if regen else 'перевода'}: {backup}"]
+    if new_port:
+        # Бот берёт порт для конфигов из servers.json. Слейв получает ListenPort
+        # основного при переклоне, и его awg_port пишет ssh_clone_awg_to_slave —
+        # здесь только основной
+        try:
+            invalidate_servers_cache()
+            servers = load_servers()
+            for s in servers:
+                if s.get("is_primary"):
+                    s["awg_port"] = int(new_port)
+            save_servers(servers)
+            report.append(f"   Порт AWG: {new_port}/UDP")
+        except Exception as e:
+            report.append(f"⚠️ servers.json: порт не обновлён ({e}) — бот выдаст старый порт")
     for server, label in ready:
         try:
             ssh_clone_awg_to_slave(server)
-            report.append(f"✅ {label}: переведён")
+            report.append(f"✅ {label}: {'обновлён' if regen else 'переведён'}")
         except Exception as e:
             report.append(f"❌ {label}: {e}")
     if unready:

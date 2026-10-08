@@ -615,8 +615,38 @@ def ssh_clone_awg_to_slave(server: dict) -> None:
                 "обфускация на слейве не применилась (" + "; ".join(diff) + "). "
                 "Сверьте версии: awg --version и cat /sys/module/amneziawg/version"
             )
+
+        # Слейв слушает порт основного (ListenPort из клона): сверяем и пишем его
+        # в servers.json — бот берёт порт для конфигов слейва оттуда. Так порт
+        # сходится при любом клоне: добавлении, «Синхронизировать», перевыпуске
+        m = re.search(r"^\s*ListenPort\s*=\s*(\d+)", primary_conf, re.M)
+        if m:
+            _, stdout, _ = client.exec_command("awg show awg0 listen-port 2>/dev/null", timeout=5)
+            slave_port = stdout.read().decode().strip()
+            if slave_port != m.group(1):
+                raise RuntimeError(
+                    f"слейв слушает порт {slave_port or '?'}, а не {m.group(1)} — "
+                    "порт на слейве занят другим процессом?"
+                )
+            _store_server_port(server, int(m.group(1)))
     finally:
         client.close()
+
+
+def _store_server_port(server: dict, port: int) -> None:
+    """awg_port сервера в servers.json (по id). Не вышло — только в лог: AWG уже
+    работает, а порт поправит следующая синхронизация."""
+    from awg_core import invalidate_servers_cache, load_servers, save_servers
+    try:
+        invalidate_servers_cache()
+        servers = load_servers()
+        for s in servers:
+            if s.get("id") == server.get("id") and s.get("awg_port") != port:
+                s["awg_port"] = port
+                save_servers(servers)
+                break
+    except Exception as e:
+        logger.warning(f"servers.json: порт {port} для {server.get('id')} не записан: {e}")
 
 
 def ssh_sync_peer_to_slave(server: dict, name: str, pub: str, psk: str, ip: str) -> None:
