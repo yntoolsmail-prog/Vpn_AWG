@@ -1371,7 +1371,3 @@ else
     echo -e "  bash /root/setup.sh --ssh"
 fi
 echo ""
-
-# Дренаж оставшегося ввода — предотвращает "curl: (23) Failure writing output"
-# при запуске через bash <(curl ...). Скрипт завершён, ошибка косметическая.
-dd bs=65536 count=8 of=/dev/null 2>/dev/null || true
