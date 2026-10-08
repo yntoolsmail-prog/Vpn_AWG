@@ -278,14 +278,16 @@ async def confirm_restore(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(
             f"✅ Конфиги восстановлены!{fixes_note}\n\n"
             f"Автобэкап сохранён: {auto_backup}\n\n"
-            f"⏳ Перезапускаю AWG и бота..."
+            f"⏳ Перезапускаю AWG, бота и веб-панель — около 15 секунд. Когда бот "
+            f"поднимется, он пришлёт итог: запустились ли AWG и веб-панель.\n"
+            f"Если через минуту сообщения нет — на сервере: systemctl status awg-bot"
         )
     except Exception as e:
         logger.error(f"restore: отчёт не отправлен: {e}")
     finally:
         # 4. Поднимаем AWG с новым конфигом, перезапускаем веб-панель и бота —
         #    в любом случае: оба держат server.env в памяти
-        restart_after_restore(BOT_SERVICE)
+        restart_after_restore(BOT_SERVICE, notify=query.message.chat_id)
     return ConversationHandler.END
 
 # ══════════════════════════════════════════════════════════════════════════════

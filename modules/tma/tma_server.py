@@ -887,7 +887,7 @@ def backup_restore(user_id, filename):
 
     # Поднимаем AWG, перезапускаем бота и саму веб-панель (через 2 сек, не
     # блокируем ответ): оба держат server.env в памяти
-    restart_after_restore(TMA_SERVICE)
+    restart_after_restore(TMA_SERVICE, notify=user_id)
     return jsonify({
         "ok":          True,
         "auto_backup": os.path.basename(auto_backup),

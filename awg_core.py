@@ -887,7 +887,7 @@ def _resolve_domains(domains: list, timeout: float = 5.0) -> dict:
     return out
 
 
-def restart_after_restore(caller: str):
+def restart_after_restore(caller: str, notify: int | None = None):
     """После восстановления бэкапа: поднять AWG и перезапустить бота и веб-панель.
 
     Оба процесса читают server.env один раз, при импорте. Не перезапущенный
@@ -899,7 +899,18 @@ def restart_after_restore(caller: str):
     старыми параметрами. Вызвавший сервис (caller) — последним: systemctl
     restart убивает его cgroup вместе с этим скриптом. Остальные — try-restart:
     выключенную веб-панель не запускать. sleep 2 — чтобы успел уйти ответ
-    пользователю."""
+    пользователю.
+
+    notify — чат админа: перезапущенный бот пришлёт туда итог, поднялись ли AWG
+    и веб-панель (send_start_hello по флагу RESTART_FLAG_FILE с пометкой
+    «restore»). Сам себя перезапускающий бот своё «⏳ Перезапускаю…» обновить
+    уже не может, и без итога было не понять, закончилось ли всё."""
+    if notify:
+        try:
+            with open(RESTART_FLAG_FILE, "w") as f:
+                f.write(f"{notify}\nrestore\n")
+        except Exception as e:
+            logger.warning(f"restart_after_restore: флаг уведомления не записан: {e}")
     others = [s for s in (BOT_SERVICE, TMA_SERVICE) if s != caller]
     cmds = ["sleep 2", f"systemctl start {AWG_SERVICE}"]
     cmds += [f"systemctl try-restart {s}" for s in others]

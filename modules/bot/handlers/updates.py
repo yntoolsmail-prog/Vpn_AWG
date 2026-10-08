@@ -129,18 +129,50 @@ async def do_repo_update(query, sha: str):
             parse_mode="Markdown",
         )
 
+def _restore_status_lines() -> list:
+    """Итог перезапуска после восстановления бэкапа: AWG и веб-панель."""
+    from awg_core import AWG_IFACE, AWG_SERVICE, TMA_SERVICE
+
+    def _active(unit: str) -> bool:
+        r = subprocess.run(["systemctl", "is-active", unit], capture_output=True, text=True)
+        return r.stdout.strip() == "active"
+
+    out = []
+    if _active(AWG_SERVICE) and os.path.isdir(f"/sys/class/net/{AWG_IFACE}"):
+        out.append("🟢 AWG работает")
+    else:
+        out.append(f"🔴 AWG не запустился. На сервере: journalctl -u {AWG_SERVICE} -n 30")
+    tma_installed = subprocess.run(["systemctl", "cat", TMA_SERVICE],
+                                   capture_output=True).returncode == 0
+    if tma_installed:
+        out.append("🟢 Веб-панель работает" if _active(TMA_SERVICE) else
+                   f"🔴 Веб-панель не запустилась. На сервере: journalctl -u {TMA_SERVICE} -n 30")
+    elif TMA_URL:
+        # Веб-панель в бэкап не входит как программа: на новом сервере её
+        # ставят заново — после того как DNS домена указывает сюда (сертификат)
+        out.append("ℹ️ Веб-панель на этом сервере не установлена — после смены "
+                   "A-записи домена: bash /root/setup.sh --modules → TMA")
+    return out
+
+
 async def send_start_hello(context: ContextTypes.DEFAULT_TYPE):
     """Job: запускается через 5 секунд после старта бота.
-    Шлёт сообщение ТОЛЬКО если есть флаг-файл с chat_id пользователя который нажал кнопку.
-    При автоматическом рестарте systemd флага нет — молчим, не спамим."""
+    Шлёт сообщение ТОЛЬКО если есть флаг-файл: первая строка — chat_id того, кто
+    перезапустил бота, вторая (необязательная) — причина. При автоматическом
+    рестарте systemd флага нет — молчим, не спамим. Причина «restore» (флаг
+    пишет restart_after_restore) — итог восстановления бэкапа: поднялись ли AWG
+    и веб-панель. Бот перезапускает сам себя и своё «⏳ Перезапускаю…» обновить
+    уже не может."""
     from awg_core import RESTART_FLAG_FILE
     if not os.path.exists(RESTART_FLAG_FILE):
         return  # автоматический рестарт — не беспокоим
 
     try:
         with open(RESTART_FLAG_FILE) as f:
-            chat_id = int(f.read().strip())
+            parts = f.read().split()
         os.remove(RESTART_FLAG_FILE)
+        chat_id = int(parts[0])
+        reason  = parts[1] if len(parts) > 1 else ""
     except Exception:
         try:
             os.remove(RESTART_FLAG_FILE)
@@ -148,13 +180,20 @@ async def send_start_hello(context: ContextTypes.DEFAULT_TYPE):
             pass
         return
 
+    text = "✅ Бот перезапущен и готов к работе."
+    if reason == "restore":
+        status = _restore_status_lines()
+        head = ("✅ Восстановление завершено, бот перезапущен."
+                if not any(l.startswith("🔴") for l in status) else
+                "⚠️ Восстановление завершено, бот перезапущен, но не всё запустилось:")
+        text = head + "\n\n" + "\n".join(status)
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("📋 Открыть меню", callback_data="back")],
     ])
     try:
         await context.bot.send_message(
             chat_id=chat_id,
-            text="✅ Бот перезапущен и готов к работе.",
+            text=text,  # без parse_mode: в подсказках имена служб с «@»
             reply_markup=kb,
         )
     except Exception as e:
