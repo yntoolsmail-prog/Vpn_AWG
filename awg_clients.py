@@ -490,6 +490,13 @@ AWG31_DEFAULTS = {
     "MAX_HANDSHAKE_ATTEMPTS": "15-20",
     "RANDOM_TRAILERS":        "on",
     "DISABLE_COOKIES":        "on",
+    # Набивка пакетов данных: случайные 10–100 байт вместо хвоста RandomTrailers
+    # «до размера самого большого пакета потока». Без ограничения каждое мелкое
+    # подтверждение раздувалось в среднем на ~650 байт: при скачивании отправка
+    # росла с ~6% до ~27% от объёма, и на мобильном интернете, где отправка узкая,
+    # тормозило и скачивание. Размеры остаются случайными (не кратны 16), хвост
+    # хендшейка — прежний. Набивка внутри шифра — параметр односторонний
+    "CONTENT_PADDING_ADDITION": "10-100",
     "CLIENT_MTU":             "1376",
     "PERSISTENT_KEEPALIVE":   "25-35",
 }
@@ -557,7 +564,9 @@ def gen_awg31_env() -> dict:
       страхуют, если ключ защиты когда-нибудь выключат. Диапазоны нельзя: с
       RandomTrailers тип опознаётся по «размер ≥ и H в диапазоне», и широкий
       диапазон изредка выдавал бы пакет данных за хендшейк.
-    • I1 — gen_i1(), меняется при каждом хендшейке."""
+    • I1 — gen_i1(), меняется при каждом хендшейке.
+    • Набивка пакетов данных ограничена (CONTENT_PADDING_ADDITION из
+      AWG31_DEFAULTS) — см. комментарий там."""
     import random
     rnd = random.SystemRandom()
     env = dict(AWG31_DEFAULTS)
@@ -824,6 +833,37 @@ def _replace_iface_param(text: str, key: str, value: str) -> str:
     return "\n".join(out)
 
 
+def _upsert_iface_param(text: str, key: str, value: str,
+                        after: str = "HeaderProtectionKey") -> str:
+    """key = value в [Interface]: строка есть — меняется, нет — встаёт после
+    строки after, а без неё — последней строкой секции."""
+    lines = text.split("\n")
+    section, start, end, anchor = "", None, None, None
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if s.startswith("[") and s.endswith("]"):
+            if section == "[interface]" and end is None:
+                end = i
+            section = s.lower()
+            if section == "[interface]":
+                start = i
+            continue
+        if section == "[interface]" and "=" in s and not s.startswith("#"):
+            k = s.split("=", 1)[0].strip().lower()
+            if k == key.lower():
+                lines[i] = f"{key} = {value}"
+                return "\n".join(lines)
+            if k == after.lower():
+                anchor = i
+    if start is None:
+        return text
+    if anchor is None:
+        stop = end if end is not None else len(lines)
+        anchor = max((i for i in range(start, stop) if lines[i].strip()), default=start)
+    lines.insert(anchor + 1, f"{key} = {value}")
+    return "\n".join(lines)
+
+
 def set_junk_count(jc: int = None) -> tuple:
     """Новый Jc (по умолчанию случайный из JC_RANGE) на работающем сервере: JC в
     server.env — для новых устройств, Jc во всех clients/*.conf — бот собирает
@@ -870,4 +910,67 @@ def set_junk_count(jc: int = None) -> tuple:
                       "слейв покажет расхождение Jc — сначала перезапустите AWG")
     report.append("Новый Jc получат новые устройства и перекачанные конфиги; "
                   "уже выданные работают и со старым.")
+    return True, report
+
+
+def set_padding_addition(value: str = None) -> tuple:
+    """Ограничение набивки пакетов данных (ContentPaddingAddition, по умолчанию из
+    AWG31_DEFAULTS) на работающем сервере 3.x — по образцу set_junk_count:
+    CONTENT_PADDING_ADDITION в server.env (новые устройства), строка во всех
+    clients/*.conf (перекачиваемый конфиг собирается из файла устройства) и в
+    awg0.conf, к интерфейсу — `awg set … content-padding-addition` без перезапуска.
+    Набивка лежит внутри шифра, получатель её просто отбрасывает: параметр
+    односторонний, выданные конфиги продолжают работать, а ускорение на устройстве
+    наступает после перекачки его конфига — набивку того, что отправляет устройство,
+    задаёт оно само. Слейвы получат по «Синхронизировать» вместе с awg0.conf.
+    На сервере 2.0 отказывается: ключ 3.x старые утилиты не разберут, и интерфейс
+    не поднимется. Бот и TMA держат server.env в памяти — после вызова их
+    перезапускают. Возвращает (ok, отчёт)."""
+    from awg_core import ENV_FILE
+    value = value or AWG31_DEFAULTS["CONTENT_PADDING_ADDITION"]
+    try:
+        with open(AWG_CONF) as f:
+            server_awg3 = is_awg3(conf_awg_params(f.read()))
+    except Exception as e:
+        return False, [f"Не удалось прочитать {AWG_CONF}: {e}"]
+    if not server_awg3:
+        return False, ["Сервер на AWG 2.0: ограничение набивки — параметр 3.x, сначала "
+                       "перевод на 3.1 (он задаёт его сам)"]
+    try:
+        with awg_file_lock():
+            changed = 0
+            for path in [AWG_CONF] + [f"{CLIENTS_DIR}/{n}.conf" for n in get_all_clients()]:
+                with open(path) as f:
+                    text = f.read()
+                # Файл устройства без параметров 3.x к этому серверу и так не
+                # подключится, а с ключом 3.x стал бы конфигом «под 3.1»
+                if path != AWG_CONF and not is_awg3(conf_awg_params(text)):
+                    continue
+                new = _upsert_iface_param(text, "ContentPaddingAddition", value)
+                if new != text:
+                    _write_private(path, new)
+                    changed += 1
+            with open(ENV_FILE) as f:
+                env_text = f.read()
+            _write_private(ENV_FILE, _env_with_updates(env_text,
+                                                       {"CONTENT_PADDING_ADDITION": value}))
+    except Exception as e:
+        return False, [f"Не удалось записать ContentPaddingAddition = {value}: {e}"]
+    report = [f"ContentPaddingAddition = {value}: server.env, awg0.conf и файлы "
+              f"устройств ({changed} шт.)"]
+    try:
+        r = subprocess.run(["awg", "set", AWG_IFACE, "content-padding-addition", value],
+                           capture_output=True, text=True, timeout=10)
+        err = (r.stderr or "").strip() if r.returncode else ""
+    except Exception as e:
+        err = str(e)
+    if not err and _iface_param("content-padding-addition") == value:
+        report.append("Интерфейс: применено без перезапуска")
+    else:
+        report.append("Интерфейс: применится при следующем перезапуске AWG "
+                      f"({err or 'awg set не подтвердил'})")
+    report.append("Слейвы получат ограничение по «Синхронизировать» — до этого "
+                  "подключения через них работают как раньше.")
+    report.append("Ускорение на устройстве — после перекачки его конфига; уже "
+                  "выданные конфиги работают и без ограничения.")
     return True, report

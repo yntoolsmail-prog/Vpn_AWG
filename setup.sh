@@ -1024,6 +1024,10 @@ SERVER_PUBLIC=$(cat /etc/amnezia/amneziawg/server_public.key)
 #  • Jc 4–6, как у AmneziaVPN (JC_RANGE): I1, мусор и хендшейк уходят одной
 #    пачкой, а есть сети, пропускающие от нового потока только первые ~10
 #    пакетов, — при Jc 9–10 хендшейк терялся и клиент подключался со 2-й попытки.
+#  • ContentPaddingAddition 10–100: набивка пакетов данных — случайные 10–100
+#    байт, а не хвост RandomTrailers «до самого большого пакета потока». Иначе
+#    каждое мелкое подтверждение раздувается в среднем на ~650 байт, и на
+#    мобильном интернете, где отправка узкая, тормозит и скачивание.
 read JC JMIN JMAX S1 S2 S3 S4 H1 H2 H3 H4 < <(python3 -c "
 import random
 r = random.SystemRandom()
@@ -1040,6 +1044,7 @@ if [[ "$AWG31" -eq 1 ]]; then
     MAX_HANDSHAKE_ATTEMPTS="15-20"
     RANDOM_TRAILERS="on"
     DISABLE_COOKIES="on"
+    CONTENT_PADDING_ADDITION="10-100"
     CLIENT_MTU="1376"
     PERSISTENT_KEEPALIVE="25-35"
     I1=$(python3 -c "
@@ -1049,7 +1054,7 @@ n, zone, qt = r.randint(6, 14), r.choice(('com', 'net', 'org')), r.choice(('0001
 print(f'<r 2><b 0x01000001000000000001><b 0x{n:02x}><rc {n}>'
       f'<b 0x{len(zone):02x}{zone.encode().hex()}00{qt}000100002904d0000000000000>')")
     info "Jc=$JC Jmin=$JMIN Jmax=$JMAX S1=$S1 S2=$S2 S3=$S3 S4=$S4 H1=$H1 H2=$H2 H3=$H3 H4=$H4"
-    info "Защита заголовков, RandomTrailers, DisableCookies, тайминги-диапазоны, I1"
+    info "Защита заголовков, RandomTrailers, DisableCookies, тайминги-диапазоны, I1, набивка 10–100"
 else
     log "Генерация параметров обфускации AWG 2.0..."
     # Как ставилось до ветки experimental, но без i1 = <число>: тегов в нём не
@@ -1074,6 +1079,7 @@ log "Создание конфига интерфейса ${VPN_IFACE}..."
     # I1 — только в конфигах клиентов: его шлёт инициатор хендшейка
     if [[ "$AWG31" -eq 1 ]]; then
         printf "HeaderProtectionKey = %s\n" "$HEADER_PROTECTION_KEY"
+        printf "ContentPaddingAddition = %s\n" "$CONTENT_PADDING_ADDITION"
         printf "RekeyAfterTime = %s\nRekeyTimeout = %s\nRejectAfterTime = %s\n" \
             "$REKEY_AFTER_TIME" "$REKEY_TIMEOUT" "$REJECT_AFTER_TIME"
         printf "KeepaliveTimeout = %s\nMaxHandshakeAttempts = %s\n" \
@@ -1192,8 +1198,9 @@ printf "JC=%s\nJMIN=%s\nJMAX=%s\nS1=%s\nS2=%s\nH1=%s\nH2=%s\nH3=%s\nH4=%s\n" \
     >> /etc/amnezia/amneziawg/server.env
 if [[ "$AWG31" -eq 1 ]]; then
     # I1 в кавычках: server.env подключается через source, а < > без них — перенаправление
-    printf "S3=%s\nS4=%s\nI1='%s'\nHEADER_PROTECTION_KEY=%s\n" \
-        "$S3" "$S4" "$I1" "$HEADER_PROTECTION_KEY" >> /etc/amnezia/amneziawg/server.env
+    printf "S3=%s\nS4=%s\nI1='%s'\nHEADER_PROTECTION_KEY=%s\nCONTENT_PADDING_ADDITION=%s\n" \
+        "$S3" "$S4" "$I1" "$HEADER_PROTECTION_KEY" "$CONTENT_PADDING_ADDITION" \
+        >> /etc/amnezia/amneziawg/server.env
     printf "REKEY_AFTER_TIME=%s\nREKEY_TIMEOUT=%s\nREJECT_AFTER_TIME=%s\nKEEPALIVE_TIMEOUT=%s\nMAX_HANDSHAKE_ATTEMPTS=%s\n" \
         "$REKEY_AFTER_TIME" "$REKEY_TIMEOUT" "$REJECT_AFTER_TIME" "$KEEPALIVE_TIMEOUT" \
         "$MAX_HANDSHAKE_ATTEMPTS" >> /etc/amnezia/amneziawg/server.env

@@ -147,6 +147,31 @@ run_diagnostics() {
             echo "  не установлен — apt install mtr-tiny"
         fi
         echo ""
+        echo "--- MTR до клиентов (адреса последних подключений, 10 циклов) ---"
+        # Путь до 8.8.8.8 ничего не говорит о пути до провайдеров клиентов: так был
+        # пойман маршрут слейва с потерями ~30% на стыке во Франкфурте — клиенты
+        # тормозили, а сервер и 8.8.8.8 были в порядке. Потери, появившиеся на
+        # одном хопе и державшиеся до конца маршрута, — настоящие; на одном хопе
+        # посередине — обычно роутер просто не отвечает на mtr
+        if command -v mtr &>/dev/null; then
+            local CLIENT_IPS
+            CLIENT_IPS=$(awg show "$VPN_IFACE" dump 2>/dev/null | awk -v now="$(date +%s)" '
+                NR > 1 && $5 > 0 && now - $5 < 1800 && $3 != "(none)" {
+                    ep = $3; sub(/:[0-9]+$/, "", ep); gsub(/[][]/, "", ep)
+                    if (!(ep in seen)) { seen[ep] = 1; print $5, ep }
+                }' | sort -rn | awk '{print $2}' | head -3)
+            if [[ -z "$CLIENT_IPS" ]]; then
+                echo "  нет клиентов с хендшейком за последние 30 мин"
+            else
+                local CIP
+                for CIP in $CLIENT_IPS; do
+                    echo "  → ${CIP}"
+                    mtr --report --report-cycles 10 --no-dns "$CIP" 2>/dev/null \
+                        | sed 's/^/    /' || echo "    ошибка mtr"
+                done
+            fi
+        fi
+        echo ""
         echo "--- Основной сетевой интерфейс ---"
         local HOST_IFACE
         HOST_IFACE=$(ip route get 8.8.8.8 2>/dev/null | awk '/dev/{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}' | head -1)

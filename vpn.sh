@@ -1233,7 +1233,11 @@ _awg31_apply() {
 # потока только первые ~10 пакетов, хендшейк терялся — подключение со второй
 # попытки через 3–7 с или никак. Jc односторонний: выданные конфиги со старым
 # значением продолжают работать
-_fix_jc_only() {
+# Точечная правка одного одностороннего параметра на работающем сервере 3.x:
+# $1 — функция из awg_clients (set_junk_count, set_padding_addition). Бот и TMA
+# на время записи останавливаются — оба держат server.env в памяти и иначе
+# выдавали бы новым устройствам прежнее значение
+_awg31_quick_fix() {
     local SVC RUNNING=()
     for SVC in "$BOT_SERVICE" awg-tma; do
         systemctl is-active --quiet "$SVC" 2>/dev/null && RUNNING+=("$SVC")
@@ -1241,12 +1245,11 @@ _fix_jc_only() {
     [[ ${#RUNNING[@]} -gt 0 ]] && systemctl stop "${RUNNING[@]}"
     echo ""
     PYTHONPATH="$PY_DIR" python3 -c '
-import sys
-from awg_core import set_junk_count
-ok, report = set_junk_count()
+import sys, awg_core
+ok, report = getattr(awg_core, sys.argv[1])()
 print("\n".join(report))
 sys.exit(0 if ok else 1)
-' | sed 's/^/  /'
+' "$1" | sed 's/^/  /'
     [[ ${#RUNNING[@]} -gt 0 ]] && systemctl start "${RUNNING[@]}"
     source "$ENV_FILE"
 }
@@ -1273,6 +1276,12 @@ _awg31_weak_spots() {
     fi
     if [[ "$SERVER_PORT" == "51820" ]]; then
         echo "   • Порт 51820 — стандартный порт WireGuard"
+        FOUND=0
+    fi
+    if [[ -z "$CONTENT_PADDING_ADDITION" ]]; then
+        echo "   • Набивка пакетов данных не ограничена: мелкие пакеты (подтверждения)"
+        echo "     раздуваются в среднем на ~650 байт — при скачивании отправка ~27% от"
+        echo "     объёма вместо ~6%, на мобильном интернете заметно медленнее"
         FOUND=0
     fi
     return $FOUND
@@ -1305,13 +1314,18 @@ manage_awg31() {
             echo -e "  ${YELLOW}Что в параметрах хуже эталона:${NC}"
             _awg31_weak_spots
         else
-            echo "  Параметры в порядке: случайные H1–H4, свой I1, Jc 4–6, порт не 51820."
+            echo "  Параметры в порядке: случайные H1–H4, свой I1, Jc 4–6, порт не 51820,"
+            echo "  набивка пакетов данных ограничена."
         fi
         echo ""
         echo "  1) Перевыпустить все параметры 3.1 — полностью новый набор"
         echo "     (выданные конфиги перестанут подключаться: всем — новый конфиг из бота)"
         if [[ "$JC" =~ ^[0-9]+$ ]] && (( JC > 6 )); then
             echo "  2) Только Jc 4–6 (выданные конфиги продолжат работать)"
+        fi
+        if [[ -z "$CONTENT_PADDING_ADDITION" ]]; then
+            echo "  3) Только ограничить набивку 10–100 (выданные конфиги продолжат работать;"
+            echo "     быстрее станет на устройствах, перекачавших конфиг)"
         fi
         echo "  0) Назад"
         echo ""
@@ -1321,15 +1335,18 @@ manage_awg31() {
                 echo ""
                 echo "  Будет сгенерировано с нуля: Jc, размеры мусора, S1–S4, H1–H4, ключ защиты"
                 echo "  заголовков, I1 (меняется при каждом хендшейке). Тайминги, RandomTrailers,"
-                echo "  DisableCookies, MTU — как у AmneziaVPN. Перед этим — бэкап pre_regen_*,"
-                echo "  при сбое файлы возвращаются; слейвы обновляются сами."
+                echo "  DisableCookies, MTU — как у AmneziaVPN, набивка данных 10–100. Перед"
+                echo "  этим — бэкап pre_regen_*, при сбое файлы возвращаются; слейвы обновляются сами."
                 _ask_new_port
                 echo ""
                 read -p "  Перевыпустить? Напишите «да»: " CONFIRM
                 [[ "${CONFIRM,,}" == "да" ]] && _awg31_apply 1 "$NEW_PORT"
                 ;;
             2)
-                [[ "$JC" =~ ^[0-9]+$ ]] && (( JC > 6 )) && _fix_jc_only
+                [[ "$JC" =~ ^[0-9]+$ ]] && (( JC > 6 )) && _awg31_quick_fix set_junk_count
+                ;;
+            3)
+                [[ -z "$CONTENT_PADDING_ADDITION" ]] && _awg31_quick_fix set_padding_addition
                 ;;
         esac
         press_enter; return
