@@ -8,6 +8,7 @@
 #         setup.sh --update  — обновить все файлы проекта
 #         setup.sh --modules — управление модулями
 #         setup.sh --ssh     — настройка защиты SSH
+#         setup.sh --slim    — облегчить систему (слабый ВПС: < 1 ГБ памяти, < 4 ГБ диска)
 # =============================================================================
 # Version: 3.2
 
@@ -76,6 +77,9 @@ if [[ -n "$_REEXEC_BRANCH" ]]; then
     REPO_BRANCH="$_REEXEC_BRANCH"
 elif [[ "${1}" == "--tma" || "${1}" == "--ssh" || "${1}" == "--modules" ]]; then
     [[ -n "$_saved_branch" ]] && REPO_BRANCH="$_saved_branch"
+elif [[ "${1}" == "--slim" && -n "$_saved_branch" ]]; then
+    # На установленном сервере — его ветка; на чистом — меню, как при установке
+    REPO_BRANCH="$_saved_branch"
 else
     _api=$(curl -fsSL --max-time 8 \
         "https://api.github.com/repos/${REPO_ORG}/${REPO_NAME}/branches" 2>/dev/null) || true
@@ -151,7 +155,7 @@ fi
 if [[ "$_LIB_READY" -ne 1 ]]; then
     info "Загружаю вспомогательные скрипты (ветка ${REPO_BRANCH})..."
     mkdir -p /root/lib
-    for _f in colors.sh utils.sh diagnostics.sh ssh_setup.sh modules_setup.sh; do
+    for _f in colors.sh utils.sh diagnostics.sh ssh_setup.sh modules_setup.sh slim.sh; do
         curl -fsSL --max-time 30 "${REPO_RAW}/lib/${_f}" -o "/root/lib/${_f}.new" \
             && mv "/root/lib/${_f}.new" "/root/lib/${_f}" \
             || { rm -f "/root/lib/${_f}.new"
@@ -165,6 +169,14 @@ fi
 source "$_LIB/modules_setup.sh"
 # shellcheck source=lib/ssh_setup.sh
 source "$_LIB/ssh_setup.sh"
+# slim.sh появился позже остальных: в /root/lib установки до 10.2026 его нет,
+# пока не прошёл --update. Без него просто нет облегчения.
+if [[ ! -f "$_LIB/slim.sh" ]]; then
+    curl -fsSL --max-time 30 "${REPO_RAW}/lib/slim.sh" -o "$_LIB/slim.sh.new" 2>/dev/null \
+        && mv "$_LIB/slim.sh.new" "$_LIB/slim.sh" || rm -f "$_LIB/slim.sh.new"
+fi
+# shellcheck source=lib/slim.sh
+[[ -f "$_LIB/slim.sh" ]] && source "$_LIB/slim.sh"
 
 # ── Режим ─────────────────────────────────────────────────────────────────────
 # SLAVE_MODE=1 → устанавливаем только AWG + модули, без бота/TMA/Python
@@ -201,6 +213,7 @@ PROJECT_FILES=(
     "lib/diagnostics.sh:/root/lib/diagnostics.sh"
     "lib/ssh_setup.sh:/root/lib/ssh_setup.sh"
     "lib/modules_setup.sh:/root/lib/modules_setup.sh"
+    "lib/slim.sh:/root/lib/slim.sh"
     # Опциональные модули (пропускаются если не установлены)
     "modules/tma/tma_server.py:/root/modules/tma/tma_server.py"
     "tma/index.html:${AWG_DIR}/tma/index.html"
@@ -349,6 +362,13 @@ if [[ "${1}" == "--ssh" ]]; then
     exit 0
 fi
 
+# ── Режим --slim ──────────────────────────────────────────────────────────────
+if [[ "${1}" == "--slim" ]]; then
+    declare -F slim_system > /dev/null || err "Нет lib/slim.sh — обновите проект: bash /root/setup.sh --update"
+    slim_system || true
+    exit 0
+fi
+
 # ── Режим --modules ───────────────────────────────────────────────────────────
 if [[ "${1}" == "--modules" ]]; then
     [[ ! -f "/root/modules.conf" ]] && \
@@ -415,6 +435,13 @@ if [[ "$UBUNTU_MAJOR" -gt 24 ]]; then
     warn "Ubuntu ${UBUNTU_VERSION} не тестировалась. Продолжаем..."
 fi
 
+# ── Облегчение слабого ВПС ────────────────────────────────────────────────────
+# До проверки ядра: облегчение меняет ядро на linux-virtual (иногда вместе с
+# новой версией), и проверка ниже сразу предложит перезагрузку.
+if declare -F slim_offer > /dev/null; then
+    slim_offer || true
+fi
+
 # ── Проверка ядра ─────────────────────────────────────────────────────────────
 export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=a
@@ -422,7 +449,22 @@ export NEEDRESTART_MODE=a
 CURRENT_KERNEL=$(uname -r)
 apt-get update -qq
 
-NEW_KERNEL=$(apt list --upgradable 2>/dev/null | grep "^linux-image-generic/" | awk -F'[ /]' '{print $2}' | head -1)
+# Обновляем тот вариант ядра, что стоит: обычный (generic) или облегчённый
+# для виртуалок (virtual — после --slim). Раньше смотрели только generic:
+# на облегчённом сервере обновление не находилось, а при «обновить» generic
+# вернул бы прошивки и драйверы для железа (~800 МБ).
+_KMETA=$(apt list --upgradable 2>/dev/null | grep -oE '^linux-image-(generic|virtual)(-hwe-[0-9.]+)?/' | head -1 | tr -d /)
+NEW_KERNEL=""
+[[ -n "$_KMETA" ]] && NEW_KERNEL=$(apt list --upgradable 2>/dev/null | grep "^${_KMETA}/" | awk '{print $2}' | head -1)
+# Новее работающего уже стоит (автообновления, облегчение), но не загружено:
+# модуль AWG собрался бы под старое ядро
+_KERNEL_PENDING=0
+_LATEST_KERNEL=$(ls /boot/vmlinuz-* 2>/dev/null | sed 's|^/boot/vmlinuz-||' | sort -V | tail -1)
+if [[ -z "$NEW_KERNEL" && -n "$_LATEST_KERNEL" && "$_LATEST_KERNEL" != "$CURRENT_KERNEL" ]] \
+   && [[ "$(printf '%s\n' "$CURRENT_KERNEL" "$_LATEST_KERNEL" | sort -V | tail -1)" == "$_LATEST_KERNEL" ]]; then
+    _KERNEL_PENDING=1
+    NEW_KERNEL="${_LATEST_KERNEL} (уже установлено, нужна перезагрузка)"
+fi
 
 if [[ -n "$NEW_KERNEL" ]]; then
     echo ""
@@ -437,7 +479,11 @@ if [[ -n "$NEW_KERNEL" ]]; then
     echo -e "  совпадать с загруженным ядром. Без обновления"
     echo -e "  установка завершится ошибкой."
     echo ""
-    echo -e "  ${CYAN}1)${NC} Обновить ядро и перезагрузиться ${GREEN}(рекомендуется)${NC}"
+    if [[ "$_KERNEL_PENDING" -eq 1 ]]; then
+        echo -e "  ${CYAN}1)${NC} Перезагрузиться ${GREEN}(рекомендуется)${NC}"
+    else
+        echo -e "  ${CYAN}1)${NC} Обновить ядро и перезагрузиться ${GREEN}(рекомендуется)${NC}"
+    fi
     echo -e "  ${CYAN}2)${NC} Продолжить без обновления ${RED}(может не заработать)${NC}"
     echo -e "  ${CYAN}0)${NC} Выйти"
     echo ""
@@ -454,8 +500,10 @@ if [[ -n "$NEW_KERNEL" ]]; then
         exit 0
     elif [[ "$KERNEL_CHOICE" == "1" ]]; then
         echo ""
-        log "Обновление ядра..."
-        apt-get install -y -qq linux-image-generic linux-headers-generic
+        if [[ "$_KERNEL_PENDING" -eq 0 ]]; then
+            log "Обновление ядра..."
+            apt-get install -y -qq "$_KMETA" "${_KMETA/image/headers}"
+        fi
         echo ""
         echo -e "${GREEN}${BOLD}  Ядро обновлено. Сервер перезагрузится через 5 секунд.${NC}"
         echo -e "${GREEN}  После перезагрузки запустите установщик снова.${NC}"
