@@ -202,6 +202,14 @@ def _resolve_allowed_ips(name: str, use_excl: bool) -> str:
     return get_allowed_ips_for_client(name)
 
 
+# curl к Telegram API с повтором соединения: на части хостингов в РФ каждое
+# третье соединение с api.telegram.org не устанавливается (698138, 10.2026).
+# Зависшее соединение через 3 с бросаем и открываем новое — до 3 раз;
+# поэтому и таймауты subprocess ниже с запасом на повторы.
+_TG_CURL = ["curl", "-s", "--connect-timeout", "3", "--retry", "3",
+            "--retry-delay", "1", "-X", "POST"]
+
+
 def _send_file_via_bot(chat_id: int, filename: str, content: str,
                        caption: str = "") -> bool:
     """Отправляет текстовый файл пользователю через Telegram sendDocument."""
@@ -214,13 +222,13 @@ def _send_file_via_bot(chat_id: int, filename: str, content: str,
     try:
         result = subprocess.run(
             [
-                "curl", "-s", "-X", "POST",
+                *_TG_CURL,
                 f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument",
                 "-F", f"chat_id={chat_id}",
                 "-F", f"caption={caption}",
                 "-F", f"document=@{tmp_path};filename={filename}",
             ],
-            capture_output=True, timeout=15,
+            capture_output=True, timeout=30,
         )
         return result.returncode == 0
     except Exception:
@@ -522,13 +530,13 @@ def device_send_qr(user_id, name):
     try:
         result = subprocess.run(
             [
-                "curl", "-s", "-X", "POST",
+                *_TG_CURL,
                 f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
                 "-F", f"chat_id={user_id}",
                 "-F", f"caption={caption}",
                 "-F", f"photo=@{tmp_path};type=image/png",
             ],
-            capture_output=True, timeout=15,
+            capture_output=True, timeout=30,
         )
         if result.returncode == 0:
             return jsonify({"ok": True})
@@ -815,13 +823,13 @@ def backup_send(user_id, filename):
     try:
         result = subprocess.run(
             [
-                "curl", "-s", "-X", "POST",
+                *_TG_CURL,
                 f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument",
                 "-F", f"chat_id={user_id}",
                 "-F", f"caption=💾 {filename}",
                 "-F", f"document=@{path};filename={filename}",
             ],
-            capture_output=True, timeout=30,
+            capture_output=True, timeout=60,
         )
         if result.returncode == 0:
             return jsonify({"ok": True})

@@ -3,11 +3,14 @@
 # Version: 3.0
 # Вся бизнес-логика — в awg_core.py и sites_data.py
 import os, subprocess, logging, json, time, tempfile, shutil, re, asyncio, threading, ipaddress
+import httpx
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo, BotCommand
+from telegram.error import TelegramError
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
     MessageHandler, filters, ContextTypes, ConversationHandler, PicklePersistence
 )
+from telegram.request import HTTPXRequest
 from awg_core import (
     ADMIN_ID, AWG_CONF, AWG_IFACE, BOT_SERVICE, BOT_TOKEN, BW_LOG_FILE,
     CLIENTS_DIR, CONFIG_FILE, ENV_FILE, EXCL_EXT, QRENCODE_BIN,
@@ -721,14 +724,40 @@ async def post_init(application) -> None:
         BotCommand("start",  "🏠 Главная"),
         BotCommand("cancel", BTN_CANCEL),
     ]
-    await application.bot.set_my_commands(commands)
-    logger.info("Команды бота зарегистрированы: /start /cancel")
+    # post_init в повторы запуска не входит: сбой здесь ронял бы весь бот,
+    # а команды у Telegram и так сохранены с прошлых запусков
+    try:
+        await application.bot.set_my_commands(commands)
+        logger.info("Команды бота зарегистрированы: /start /cancel")
+    except TelegramError as e:
+        logger.warning(f"Команды бота не зарегистрированы (будут с прошлого запуска): {e}")
+
+
+def _tg_request(pool_size: int) -> HTTPXRequest:
+    """Клиент Telegram API с повтором соединения.
+
+    На части хостингов в РФ соединения с api.telegram.org теряются целиком
+    (698138, 10.2026: 7 из 10, остальные висят без ответа), и бот падал на
+    ConnectTimeout при запуске, а ответы пользователям пропадали. Повтор
+    открывает новое соединение (другой порт — обычно проходит), ожидание
+    соединения 3 с вместо 5: зависшее уже не оживёт. Там, где связь чистая,
+    повторы не срабатывают.
+    """
+    limits = httpx.Limits(max_connections=pool_size, max_keepalive_connections=pool_size)
+    return HTTPXRequest(
+        connection_pool_size=pool_size,
+        connect_timeout=3.0,
+        httpx_kwargs={"transport": httpx.AsyncHTTPTransport(retries=3, limits=limits)},
+    )
 
 
 def main():
     os.makedirs("/etc/awg-bot", exist_ok=True)
     persistence = PicklePersistence(filepath="/etc/awg-bot/bot_persistence.pkl")
-    app = Application.builder().token(BOT_TOKEN).post_init(post_init).persistence(persistence).build()
+    # Размеры пулов — как у PTB по умолчанию: 256 для обычных запросов, 1 для getUpdates
+    app = (Application.builder().token(BOT_TOKEN)
+           .request(_tg_request(256)).get_updates_request(_tg_request(1))
+           .post_init(post_init).persistence(persistence).build())
 
     reg_conv = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
@@ -902,7 +931,10 @@ def main():
 
     logger.info(f"Бот запущен. Admin ID: {ADMIN_ID}")
     print(f"\n\033[0;32m✓ Бот запущен! Admin ID: {ADMIN_ID}\033[0m\n")
-    app.run_polling(drop_pending_updates=True)
+    # Сбой связи при запуске (getMe, deleteWebhook) — повтор, а не падение и
+    # перезапуск systemd через 10 с. Совсем нет связи — после 5 попыток выход,
+    # дальше перезапускает systemd, как раньше.
+    app.run_polling(drop_pending_updates=True, bootstrap_retries=5)
 
 if __name__ == "__main__":
     main()
