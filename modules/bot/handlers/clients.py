@@ -1,5 +1,5 @@
-import os, tempfile, shutil, re, asyncio, subprocess
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+import os, tempfile, shutil, re, asyncio, subprocess, html
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaDocument
 from telegram.ext import ContextTypes, ConversationHandler
 from awg_core import (
     ADMIN_ID, AWG_IFACE, CLIENTS_DIR, EXCL_EXT, QRENCODE_BIN,
@@ -162,6 +162,11 @@ async def _show_server_select(query, name: str, user_id: int, action: str):
         return
 
     rows = []
+    # Все серверы разом — для .conf и ссылок; QR так не отдаём: картинка на
+    # каждый сервер — это экраны прокрутки
+    if action in ("conf", "share") and sum(1 for s in servers if s.get("endpoints")) > 1:
+        rows.append([InlineKeyboardButton("📦 Получить ВСЕ",
+                        callback_data=f"{action}_all_{name}")])
     for si, srv in enumerate(servers):
         if not srv.get("endpoints"):
             continue
@@ -278,8 +283,137 @@ def _make_vpn_filename(name: str, srv_name: str = None) -> str:
     return _make_conf_filename(name, srv_name).replace(".conf", ".vpn")
 
 
+async def _deny_foreign(query, name: str) -> bool:
+    """True — устройство не этого пользователя, выдачу останавливаем. Экран выбора
+    сервера права проверяет, но кнопки выдачи (conf_auto_…, qr_s0_e1_…,
+    share_all_…) несут имя устройства в своих данных, а данные кнопки приходят
+    от клиента — полагаться, что их не подменили, нельзя: в конфиге приватный ключ."""
+    if can_access_device(query.from_user.id, name):
+        return False
+    await query.answer("⛔ Это не ваше устройство.", show_alert=True)
+    return True
+
+
+def _auto_endpoint(srv: dict) -> str | None:
+    """Адрес сервера по умолчанию: первый домен, без доменов — первый адрес."""
+    eps = srv.get("endpoints", [])
+    ep = next((e for e in eps if e.get("type") == "domain"), eps[0] if eps else None)
+    return ep["value"] if ep else None
+
+
+def _srv_label(srv: dict) -> str:
+    """«🇨🇿 CZE Чехия» — как на кнопках выбора сервера."""
+    parts = (srv.get("emoji", "🖥"), srv.get("name", ""), srv.get("country", ""))
+    return " ".join(p for p in parts if p)
+
+
+def _link_html(label: str, ep: str, prt, link: str) -> str:
+    """Ссылка vpn:// (~1500 символов) в сворачиваемой цитате: в чате — пара строк
+    вместо нескольких экранов, по нажатию раскрывается. Внутри моноширинный текст —
+    нажатие по нему копирует ссылку целиком."""
+    return (f"{html.escape(label)} — {html.escape(ep)}:{prt}\n"
+            f"<blockquote expandable><code>{html.escape(link)}</code></blockquote>")
+
+
+_LINKS_FOOTER = ("Ссылка свёрнута: нажмите, чтобы раскрыть, нажатие по ссылке копирует её.\n"
+                 "В AmneziaVPN: «+» → вставить ссылку.")
+
+
+async def _send_docs(query, docs: list, caption: str):
+    """Файлы одним сообщением-альбомом (по 10 — больше Telegram в альбом не
+    берёт), подпись — под последним. Один файл — обычным документом: альбом
+    бывает только из 2–10."""
+    for i in range(0, len(docs), 10):
+        chunk = docs[i:i + 10]
+        last  = i + 10 >= len(docs)
+        if len(chunk) == 1:
+            content, filename = chunk[0]
+            await query.message.reply_document(
+                document=content, filename=filename,
+                caption=caption if last else None,
+                parse_mode="Markdown" if last else None)
+            continue
+        media = [InputMediaDocument(media=content, filename=filename) for content, filename in chunk]
+        if last:
+            media[-1] = InputMediaDocument(media=chunk[-1][0], filename=chunk[-1][1],
+                                           caption=caption, parse_mode="Markdown")
+        await query.message.reply_media_group(media=media)
+
+
+async def send_all(query, name: str, action: str):
+    """«📦 Получить ВСЕ»: конфиги на все серверы разом, у каждого — адрес по
+    умолчанию (_auto_endpoint). conf — альбом .conf-файлов одним сообщением;
+    share — ссылки одним сообщением в сворачиваемых цитатах (не влезают в 4096
+    символов — несколькими) и альбом .vpn-файлов."""
+    if await _deny_foreign(query, name):
+        return
+    targets = []
+    for srv in load_servers():
+        ep = _auto_endpoint(srv)
+        if ep:
+            targets.append((srv, ep, srv.get("awg_public_key") or SERVER_PUBLIC,
+                            str(srv.get("awg_port") or SERVER_PORT)))
+    if not targets:
+        await query.answer("Нет доступных эндпоинтов.", show_alert=True)
+        return
+    short = device_short_name(name)
+
+    if action == "conf":
+        allowed_ips = await asyncio.get_running_loop().run_in_executor(
+            None, get_allowed_ips_for_client, name)
+        docs, lines = [], []
+        for srv, ep, spub, sprt in targets:
+            content = (make_conf_for_client_ep(name, ep, spub, sprt, allowed_ips) or "").encode()
+            if not content:
+                continue
+            docs.append((content, _make_conf_filename(name, srv.get("name", ""))))
+            lines.append(f"{_md(_srv_label(srv))} — `{ep}:{sprt}`")
+        if not docs:
+            await query.message.reply_text(f"❌ Не удалось собрать конфиги для {name}")
+            return
+        excl_note = "" if allowed_ips == "0.0.0.0/0" else "\n🌐 С исключениями сайтов"
+        await _send_docs(query, docs,
+                         f"📄 Конфиги *{_md(short)}* для AmneziaWG:\n" + "\n".join(lines)
+                         + excl_note + "\n\nИмпортируйте нужный в AmneziaWG.")
+    else:
+        keys = get_client_keys(name)
+        if not keys:
+            await query.message.reply_text(f"❌ Не удалось прочитать ключи для {name}")
+            return
+        blocks, docs = [], []
+        for srv, ep, spub, sprt in targets:
+            emoji = srv.get("emoji", "")
+            link = make_vpn_link(
+                keys["priv"], keys["pub"], keys["ip"], keys["psk"],
+                keys.get("obfs", gen_obfs()), f"{emoji} {name}".strip() if emoji else name,
+                endpoint=ep, server_public=spub, server_port=sprt)
+            label = _srv_label(srv)
+            blocks.append((len(link) + len(label) + len(ep) + 16, _link_html(label, ep, sprt, link)))
+            docs.append((link.encode(), _make_vpn_filename(name, srv.get("name", ""))))
+        # Предел сообщения — 4096 символов; ссылка ~1500, так что две-три на сообщение
+        header = f"🔗 <b>Ссылки AmneziaVPN — {html.escape(short)}</b>"
+        msgs, cur, size = [], [], len(header) + len(_LINKS_FOOTER)
+        for n, block in blocks:
+            if cur and size + n > 3800:
+                msgs.append(cur)
+                cur, size = [], len(header) + len(_LINKS_FOOTER)
+            cur.append(block)
+            size += n
+        msgs.append(cur)
+        for part in msgs:
+            await query.message.reply_text(
+                header + "\n\n" + "\n\n".join(part) + "\n\n" + _LINKS_FOOTER,
+                parse_mode="HTML", disable_web_page_preview=True)
+        await _send_docs(query, docs,
+                         f"📤 Файлы для AmneziaVPN — *{_md(short)}*\n"
+                         f"Вставьте в приложении: + → Открыть файл")
+    await show_device(query, name, query.from_user.id)
+
+
 async def _do_send_action(query, name: str, action: str, ep: str, server: dict):
     """Выполняет нужное действие (conf/qr/share) с конкретным эндпоинтом и сервером."""
+    if await _deny_foreign(query, name):
+        return
     spub      = server.get("awg_public_key") or SERVER_PUBLIC
     sprt      = str(server.get("awg_port") or SERVER_PORT)
     srv_name  = server.get("name", "")
@@ -295,6 +429,8 @@ async def _do_send_action(query, name: str, action: str, ep: str, server: dict):
 
 async def do_send_conf(query, name: str, ep_key: str):
     """Генерирует .conf в памяти (с сохранёнными исключениями) и отправляет в чат."""
+    if await _deny_foreign(query, name):
+        return
     allowed_ips = await asyncio.get_running_loop().run_in_executor(None, get_allowed_ips_for_client, name)
     short    = device_short_name(name)
     ep       = resolve_endpoint(ep_key)
@@ -318,6 +454,8 @@ async def do_send_conf(query, name: str, ep_key: str):
 
 async def do_send_qr(query, name: str, ep_key: str):
     """Генерирует .conf в памяти (с сохранёнными исключениями) → QR → отправляет."""
+    if await _deny_foreign(query, name):
+        return
     allowed_ips = await asyncio.get_running_loop().run_in_executor(None, get_allowed_ips_for_client, name)
     short   = device_short_name(name)
     ep      = resolve_endpoint(ep_key)
@@ -361,6 +499,8 @@ async def do_send_qr(query, name: str, ep_key: str):
 
 async def do_send_share(query, name: str, ep_key: str):
     """Генерирует vpn:// ссылку и .vpn файл на лету, отправляет в чат."""
+    if await _deny_foreign(query, name):
+        return
     keys = get_client_keys(name)
     if not keys:
         await query.message.reply_text(f"❌ Не удалось прочитать ключи для {name}")
@@ -375,10 +515,9 @@ async def do_send_share(query, name: str, ep_key: str):
     vpn_bytes = vpn_link.encode()
     # Сначала ссылка — потом файл
     await query.message.reply_text(
-        f"🔗 Ссылка AmneziaVPN *{short}* ({ep_label})\n"
-        f"🌐 Endpoint: `{ep}:{SERVER_PORT}`\n\n"
-        f"Нажмите чтобы скопировать:\n`{vpn_link}`",
-        parse_mode="Markdown"
+        f"🔗 <b>Ссылка AmneziaVPN — {html.escape(short)}</b>\n\n"
+        + _link_html(ep_label, ep, SERVER_PORT, vpn_link) + "\n\n" + _LINKS_FOOTER,
+        parse_mode="HTML", disable_web_page_preview=True
     )
     await query.message.reply_document(
         document=vpn_bytes,
@@ -471,11 +610,11 @@ async def do_send_share_direct(query, name: str, ep: str,
         endpoint=ep, server_public=spub, server_port=sprt
     )
     vpn_bytes = vpn_link.encode()
+    label = " ".join(p for p in (srv_emoji, srv_name) if p) or "Сервер"
     await query.message.reply_text(
-        f"🔗 Ссылка AmneziaVPN *{short}*\n"
-        f"🌐 Endpoint: `{ep}:{prt}`\n\n"
-        f"Нажмите чтобы скопировать:\n`{vpn_link}`",
-        parse_mode="Markdown"
+        f"🔗 <b>Ссылка AmneziaVPN — {html.escape(short)}</b>\n\n"
+        + _link_html(label, ep, prt, vpn_link) + "\n\n" + _LINKS_FOOTER,
+        parse_mode="HTML", disable_web_page_preview=True
     )
     await query.message.reply_document(
         document=vpn_bytes,

@@ -73,7 +73,7 @@ from handlers.clients import (
     show_my_devices, show_device, show_all_clients,
     show_conf_ep_select, show_qr_ep_select, show_share_ep_select, show_server_eps,
     do_send_conf, do_send_qr, do_send_share,
-    do_send_conf_direct, do_send_qr_direct, do_send_share_direct,
+    do_send_conf_direct, do_send_qr_direct, do_send_share_direct, send_all,
     do_delete, confirm_delete,
     add_device_entry, receive_device_name, cancel_add_device,
 )
@@ -572,6 +572,9 @@ async def _button_dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if ep:
                         from handlers.clients import _do_send_action
                         await _do_send_action(query, n, "conf", ep["value"], srv)
+        elif rest.startswith("all_"):
+            # conf_all_{name} → «📦 Получить ВСЕ»: .conf на все серверы одним альбомом
+            await send_all(query, rest[4:], "conf")
         elif rest.startswith("adv_"):
             # conf_adv_{name} → расширенная настройка (полный список)
             from handlers.clients import _show_ep_select
@@ -642,6 +645,9 @@ async def _button_dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if ep:
                         from handlers.clients import _do_send_action
                         await _do_send_action(query, n, "share", ep["value"], srv)
+        elif rest.startswith("all_"):
+            # share_all_{name} → «📦 Получить ВСЕ»: ссылки одним сообщением + альбом .vpn
+            await send_all(query, rest[4:], "share")
         elif rest.startswith("adv_"):
             from handlers.clients import _show_ep_select
             await _show_ep_select(query, rest[4:], user_id, "share")
