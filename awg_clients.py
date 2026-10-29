@@ -449,29 +449,38 @@ def save_client_excl(name: str, data: dict):
         json.dump(data, f)
 
 
+def slot_ip(ip: str, slot: int = 0) -> str:
+    """Адрес устройства для выхода каскада K: A.B.C.N → A.B.(C+K).N. По нему
+    вход выбирает выход (cascade.sh); 0 — основной адрес, это «Авто»."""
+    if not slot:
+        return ip
+    a, b, c, n = ip.split(".")
+    return f"{a}.{b}.{int(c) + int(slot)}.{n}"
+
+
 def make_conf_for_client(name: str, endpoint: str,
-                         allowed_ips: str = "0.0.0.0/0") -> str | None:
+                         allowed_ips: str = "0.0.0.0/0", slot: int = 0) -> str | None:
     """Генерирует .conf для клиента с заданным эндпоинтом и AllowedIPs.
     Возвращает строку конфига или None если ключи не найдены."""
     keys = get_client_keys(name)
     if not keys:
         return None
     return make_wg_conf(
-        keys["priv"], keys["ip"], keys["psk"], keys["obfs"],
+        keys["priv"], slot_ip(keys["ip"], slot), keys["psk"], keys["obfs"],
         endpoint=endpoint, allowed_ips=allowed_ips,
     )
 
 
 def make_conf_for_client_ep(name: str, endpoint: str,
                              server_public: str = None, server_port: str = None,
-                             allowed_ips: str = "0.0.0.0/0") -> str | None:
+                             allowed_ips: str = "0.0.0.0/0", slot: int = 0) -> str | None:
     """Генерирует .conf для клиента с конкретным сервером (ключ/порт) и эндпоинтом.
-    Используется при мультисерверной конфигурации."""
+    Используется при мультисерверной конфигурации. slot — выход каскада (slot_ip)."""
     keys = get_client_keys(name)
     if not keys:
         return None
     return make_wg_conf(
-        keys["priv"], keys["ip"], keys["psk"], keys["obfs"],
+        keys["priv"], slot_ip(keys["ip"], slot), keys["psk"], keys["obfs"],
         endpoint=endpoint, allowed_ips=allowed_ips,
         server_public=server_public, server_port=server_port,
     )

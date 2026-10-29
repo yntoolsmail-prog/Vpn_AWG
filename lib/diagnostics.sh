@@ -733,6 +733,17 @@ print(f'  Абс. пик:    {allp.get(\"load\",0)} Mbit/s  ↓{allp.get(\"rx\",
         vnstat -i "${HOST_IFACE:-eth0}" --months 2>/dev/null | tail -10 || echo "  vnstat недоступен"
         echo ""
 
+        # ── КАСКАД ───────────────────────────────────────────────────────────
+        # Вход или выход (cascade.sh, docs/CASCADE.md): туннели, состояние
+        # выходов, список российских сетей. На серверах без каскада — пропуск
+        if [[ -f /root/cascade.sh ]] && [[ -d /etc/amnezia/amneziawg/cascade || -f /etc/amnezia/amneziawg/awgx0.conf ]]; then
+            echo "━━━ КАСКАД ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            bash /root/cascade.sh status 2>&1
+            echo "--- Последние события службы ---"
+            journalctl -u awg-cascade -n 10 --no-pager -o cat 2>/dev/null || echo "  журнала нет"
+            echo ""
+        fi
+
         # ── БЭКАПЫ ───────────────────────────────────────────────────────────
         echo "━━━ БЭКАПЫ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         local BFILES=( "$BACKUP_DIR"/*.tar.gz )

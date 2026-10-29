@@ -40,6 +40,7 @@ from awg_core import (
     load_servers, post_restore_fixup, restart_after_restore,
 )
 from awg_ssh import PARAMIKO_AVAILABLE, ssh_sync_peer_to_slave
+import awg_cascade as cas
 from awg_stats import _histogram_for_tma
 from sites_data import DEFAULT_SELECTED
 
@@ -163,11 +164,27 @@ def _make_conf_filename(name: str, srv_name: str = "") -> str:
     """Формирует имя файла конфига: User.ServerName.Device.conf — аналогично боту."""
     if not srv_name:
         return f"{name}.conf"
-    srv_clean = re.sub(r"[^\w]", "", srv_name.replace(" ", "_"))
+    srv_clean = re.sub(r"[^\w-]", "", srv_name.replace(" ", "_"))
     parts = name.split(".", 1)
     if len(parts) == 2:
         return f"{parts[0]}.{srv_clean}.{parts[1]}.conf"
     return f"{name}.{srv_clean}.conf"
+
+
+def _cascade_target(srv_id: str) -> tuple:
+    """(слот, ключ сервера, порт) по id пункта выдачи: «cas-k0» — «Авто», «cas-kK» —
+    выход K через вход (awg_cascade.issue_options), иначе — прямой сервер."""
+    spub, sprt = SERVER_PUBLIC, SERVER_PORT
+    if srv_id.startswith("cas-"):
+        opt = cas.find_option(srv_id[4:])
+        if opt:
+            srv = opt["srv"]
+            return opt["slot"], srv.get("awg_public_key") or spub, str(srv.get("awg_port") or sprt)
+        return 0, spub, sprt
+    for s in load_servers():
+        if s.get("id") == srv_id:
+            return 0, s.get("awg_public_key") or spub, str(s.get("awg_port") or sprt)
+    return 0, spub, sprt
 
 
 def _sync_new_peer_to_slaves(name: str, keys: dict) -> None:
@@ -385,15 +402,20 @@ def api_endpoints(user_id):
 @app.route("/api/servers")
 @require_auth
 def api_servers(user_id):
-    """Список серверов с эндпоинтами (для выбора при генерации конфига)."""
-    servers = load_servers()
+    """Пункты выдачи с эндпоинтами (для выбора при генерации конфига) — те же, что в
+    боте (awg_cascade.issue_options). Прямой сервер — со своим id; пункты каскада —
+    id «cas-k0» («Авто») и «cas-kK» (выход K через вход), адреса — входа. name — метка
+    в имени файла, label — подпись кнопки."""
     result = []
-    for srv in servers:
+    for opt in cas.issue_options():
+        srv = opt["srv"]
         result.append({
-            "id":        srv.get("id", ""),
-            "name":      srv.get("name", ""),
-            "emoji":     srv.get("emoji", "🖥"),
-            "country":   srv.get("country", ""),
+            "id":        srv.get("id", "") if opt["kind"] == "direct" else f"cas-{opt['key']}",
+            "name":      opt["tag"],
+            "label":     opt["label"],
+            "kind":      opt["kind"],
+            "emoji":     opt["emoji"] or "🖥",
+            "country":   opt["country"],
             "is_primary": srv.get("is_primary", False),
             "endpoints": [
                 {
@@ -416,15 +438,16 @@ def device_qr(user_id, name):
         return jsonify({"error": "Нет доступа"}), 403
     endpoint    = request.args.get("endpoint") or SERVER_ENDPOINT
     use_excl    = request.args.get("use_excl", "").lower() in ("1", "true")
+    slot, spub, sprt = _cascade_target(request.args.get("srv_id", ""))
     allowed_ips = _resolve_allowed_ips(name, use_excl)
-    conf_text   = make_conf_for_client(name, endpoint, allowed_ips)
+    conf_text   = make_conf_for_client_ep(name, endpoint, spub, sprt, allowed_ips, slot=slot)
     if conf_text is None:
         return jsonify({"error": "Устройство не найдено"}), 404
     too_large = use_excl and len(conf_text.encode()) > 2900
     if too_large:
         # Генерируем QR без исключений — только базовое подключение
         allowed_ips = "0.0.0.0/0"
-        conf_text   = make_conf_for_client(name, endpoint, allowed_ips)
+        conf_text   = make_conf_for_client_ep(name, endpoint, spub, sprt, allowed_ips, slot=slot)
     try:
         png_bytes = subprocess.check_output(
             [QRENCODE_BIN, "-t", "PNG", "-s", "6", "-o", "-"],
@@ -448,17 +471,13 @@ def device_vpnlink(user_id, name):
     endpoint  = request.args.get("endpoint") or SERVER_ENDPOINT
     srv_id    = request.args.get("srv_id", "")
     srv_emoji = request.args.get("srv_emoji", "")
-    spub, sprt = SERVER_PUBLIC, SERVER_PORT
-    if srv_id:
-        for s in load_servers():
-            if s.get("id") == srv_id:
-                spub = s.get("awg_public_key") or SERVER_PUBLIC
-                sprt = str(s.get("awg_port") or SERVER_PORT)
-                break
+    slot, spub, sprt = _cascade_target(srv_id)
     vpn_display_name = f"{srv_emoji} {name}".strip() if srv_emoji else name
+    if srv_id and not srv_id.startswith("cas-") and cas.cascade_active(load_servers()):
+        vpn_display_name += " · напрямую"
     try:
         link = make_vpn_link(
-            keys["priv"], keys["pub"], keys["ip"], keys["psk"], keys["obfs"],
+            keys["priv"], keys["pub"], cas.slot_ip(keys["ip"], slot), keys["psk"], keys["obfs"],
             name=vpn_display_name, endpoint=endpoint,
             server_public=spub, server_port=sprt,
         )
@@ -477,8 +496,9 @@ def device_send(user_id, name):
     endpoint    = body.get("endpoint") or SERVER_ENDPOINT
     use_excl    = bool(body.get("use_excl", False))
     srv_name    = body.get("srv_name", "")
+    slot, spub, sprt = _cascade_target(str(body.get("srv_id", "")))
     allowed_ips = _resolve_allowed_ips(name, use_excl)
-    conf_text   = make_conf_for_client(name, endpoint, allowed_ips)
+    conf_text   = make_conf_for_client_ep(name, endpoint, spub, sprt, allowed_ips, slot=slot)
     if conf_text is None:
         return jsonify({"error": "Устройство не найдено"}), 404
     short      = device_short_name(name)
@@ -486,7 +506,7 @@ def device_send(user_id, name):
     filename   = _make_conf_filename(name, srv_name)
     caption    = (
         f"📄 Конфиг {short}\n"
-        f"🌐 Endpoint: {endpoint}:{SERVER_PORT}{excl_note}\n\n"
+        f"🌐 Endpoint: {endpoint}:{sprt}{excl_note}\n\n"
         f"Импортируйте в AmneziaWG."
     )
     ok = _send_file_via_bot(user_id, filename, conf_text, caption)
@@ -504,8 +524,9 @@ def device_send_qr(user_id, name):
     body        = request.get_json(silent=True) or {}
     endpoint    = body.get("endpoint") or SERVER_ENDPOINT
     use_excl    = bool(body.get("use_excl", False))
+    slot, spub, sprt = _cascade_target(str(body.get("srv_id", "")))
     allowed_ips = _resolve_allowed_ips(name, use_excl)
-    conf_text   = make_conf_for_client(name, endpoint, allowed_ips)
+    conf_text   = make_conf_for_client_ep(name, endpoint, spub, sprt, allowed_ips, slot=slot)
     if conf_text is None:
         return jsonify({"error": "Устройство не найдено"}), 404
     conf_bytes = conf_text.encode()
@@ -522,7 +543,7 @@ def device_send_qr(user_id, name):
     excl_note  = "\n🌐 С исключениями сайтов" if use_excl and allowed_ips != "0.0.0.0/0" else ""
     caption    = (
         f"📱 QR-код AmneziaWG — {short}\n"
-        f"🌐 Endpoint: {endpoint}:{SERVER_PORT}{excl_note}"
+        f"🌐 Endpoint: {endpoint}:{sprt}{excl_note}"
     )
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
         tf.write(png_bytes)

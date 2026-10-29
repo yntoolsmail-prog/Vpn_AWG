@@ -352,8 +352,11 @@ cmd_exit_up() {
 }
 
 cmd_exit_peer() {
-    [[ -n "${1:-}" ]] || die "Нужен токен входа: cascade.sh exit-peer 'ТОКЕН'"
-    load_token "$1"
+    local tok=${1:-}
+    # «-» — токен из stdin: так его передаёт бот, чтобы ключ не светился в списке процессов
+    [[ "$tok" == - ]] && { IFS= read -r tok || true; }
+    [[ -n "$tok" ]] || die "Нужен токен входа: cascade.sh exit-peer 'ТОКЕН'"
+    load_token "$tok"
     [[ ${T[role]} == entry ]] || die "Это токен выхода, а нужен токен ВХОДА (его печатает entry-add)"
     local conf="$AWG_DIR/$EXIT_IF.conf" slot
     [[ -f "$conf" ]] || die "Выход не поднят: сначала cascade.sh exit-up"
@@ -451,6 +454,7 @@ cmd_entry_add() {
             --no-auto) auto=0; shift ;;
             --ip)      myip=$2; shift 2 ;;
             AWGX1:*)   tok=$1; shift ;;
+            -)         IFS= read -r tok || true; shift ;;
             *) die "Неизвестный параметр: ${1:0:30}" ;;
         esac
     done
@@ -1010,6 +1014,32 @@ cmd_status() {
     [[ $any == 1 ]] || echo "Каскад на этом сервере не настроен."
 }
 
+# Состояние строками KEY=VALUE — для бота (awg_cascade.py)
+cmd_info() {
+    local k now line
+    now=$(date +%s)
+    echo "VERSION=$(md5sum < "$SELF" | cut -c1-8)"
+    if [[ -f "$AWG_DIR/$EXIT_IF.conf" ]]; then
+        echo "EXIT_SLOT=$(exit_slot)"
+        echo "EXIT_PORT=$(exit_port)"
+        echo "EXIT_UP=$(ip link show "$EXIT_IF" >/dev/null 2>&1 && echo 1 || echo 0)"
+        echo "EXIT_ENTRIES=$(awk '$1 == "#" && $2 == "Entry:" {printf "%s%s", s, $3; s = " "}' "$AWG_DIR/$EXIT_IF.conf")"
+    fi
+    load_exits 2>/dev/null
+    [[ ${#EXITS[@]} -gt 0 || ${#SLOTS[@]} -gt 0 ]] || return 0
+    echo "ENTRY_EXITS=${EXITS[*]}"
+    echo "ENTRY_SLOTS=${SLOTS[*]}"
+    [[ ${#EXITS[@]} -gt 0 ]] && echo "ENTRY_NO=$(env_get "$STATE/exits/${EXITS[0]}.env" ENTRY)"
+    echo "DAEMON=$(daemon_running && echo 1 || echo 0)"
+    echo "RU_COUNT=$(ipset list -t cascade_ru 2>/dev/null | awk '/Number of entries/ {print $4}')"
+    echo "RU_AGE=$([[ -f "$STATE/ru.zone" ]] && echo $((now - $(stat -c %Y "$STATE/ru.zone"))) || echo -1)"
+    for k in "${EXITS[@]}"; do
+        # слот состояние с_какого_времени пинг_мс возраст_хендшейка порядок_в_Авто
+        line=$(awk -v k="$k" '$1 == k {print $2, $3, $4, $5; exit}' "$RUN/health" 2>/dev/null)
+        echo "HEALTH_$k=${line:-unknown 0 - -1} ${AUTO[$k]}"
+    done
+}
+
 cmd_down() {
     need_root
     local k f
@@ -1102,6 +1132,7 @@ case "${1:-}" in
     ru-update)   shift; need_root; cmd_ru_update ;;
     daemon)      shift; cmd_daemon ;;
     status)      shift; cmd_status ;;
+    info)        shift; cmd_info ;;
     down)        shift; cmd_down ;;
     client-conf) shift; need_root; cmd_client_conf "$@" ;;
     *)           usage ;;

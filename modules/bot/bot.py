@@ -76,7 +76,7 @@ from handlers.clients import (
     show_my_devices, show_device, show_all_clients,
     show_conf_ep_select, show_qr_ep_select, show_share_ep_select, show_server_eps,
     do_send_conf, do_send_qr, do_send_share,
-    do_send_conf_direct, do_send_qr_direct, do_send_share_direct, send_all,
+    do_send_conf_direct, do_send_qr_direct, do_send_share_direct, send_all, send_option,
     do_delete, confirm_delete,
     add_device_entry, receive_device_name, cancel_add_device,
 )
@@ -87,6 +87,8 @@ from handlers.servers import (
     srv_checkdns, srv_del_confirm, srv_del_ok, srv_detach_ok, srv_sync_now,
     show_srv_edit, srv_edit_field_start, srv_edit_receive, srv_edit_force, srv_edit_cancel,
     srv_adddomain_start, srv_adddomain_pick, srv_adddomain_receive,
+    srv_issue_toggle, srv_mkentry_confirm, srv_mkentry_ok, srv_unentry_confirm,
+    srv_unentry_ok, srv_relink, _check_cascade,
 )
 from handlers.maintenance import (
     show_status, do_diagnostics,
@@ -423,6 +425,22 @@ async def _button_dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_servers_list(query)
     elif data.startswith("srv_card_") and is_admin:
         await show_server_card(query, int(data[9:]))
+    # ── Каскад: выдача и роль входа (handlers/servers.py) ──
+    elif re.fullmatch(r"srv_iss_[dva]_\d+", data) and is_admin:
+        await srv_issue_toggle(query, data[8], int(data[10:]))
+    elif re.fullmatch(r"srv_slotset_[va]_\d+_\d+", data) and is_admin:
+        _, _, f, idx, slot = data.split("_")
+        await srv_issue_toggle(query, f, int(idx), take_slot=int(slot))
+    elif re.fullmatch(r"srv_mkentry_ok_\d+", data) and is_admin:
+        await srv_mkentry_ok(query, int(data[15:]))
+    elif re.fullmatch(r"srv_mkentry_\d+", data) and is_admin:
+        await srv_mkentry_confirm(query, int(data[12:]))
+    elif re.fullmatch(r"srv_unentry_ok_\d+", data) and is_admin:
+        await srv_unentry_ok(query, int(data[15:]))
+    elif re.fullmatch(r"srv_unentry_\d+", data) and is_admin:
+        await srv_unentry_confirm(query, int(data[12:]))
+    elif re.fullmatch(r"srv_relink_\d+", data) and is_admin:
+        await srv_relink(query, int(data[11:]))
     elif data.startswith("srv_detach_") and is_admin:
         await srv_detach_ok(query, int(data[11:]))
     elif data.startswith("srv_del_ok_") and is_admin:
@@ -575,6 +593,10 @@ async def _button_dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if ep:
                         from handlers.clients import _do_send_action
                         await _do_send_action(query, n, "conf", ep["value"], srv)
+        elif re.match(r"k\d+_.", rest):
+            # conf_k{K}_{name} → каскад: k0 — «Авто», kK — выход K через вход
+            key, n = rest.split("_", 1)
+            await send_option(query, n, "conf", key)
         elif rest.startswith("all_"):
             # conf_all_{name} → «📦 Получить ВСЕ»: .conf на все серверы одним альбомом
             await send_all(query, rest[4:], "conf")
@@ -614,6 +636,10 @@ async def _button_dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if ep:
                         from handlers.clients import _do_send_action
                         await _do_send_action(query, n, "qr", ep["value"], srv)
+        elif re.match(r"k\d+_.", rest):
+            # qr_k{K}_{name} → каскад: k0 — «Авто», kK — выход K через вход
+            key, n = rest.split("_", 1)
+            await send_option(query, n, "qr", key)
         elif rest.startswith("adv_"):
             from handlers.clients import _show_ep_select
             await _show_ep_select(query, rest[4:], user_id, "qr")
@@ -648,6 +674,10 @@ async def _button_dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if ep:
                         from handlers.clients import _do_send_action
                         await _do_send_action(query, n, "share", ep["value"], srv)
+        elif re.match(r"k\d+_.", rest):
+            # share_k{K}_{name} → каскад: k0 — «Авто», kK — выход K через вход
+            key, n = rest.split("_", 1)
+            await send_option(query, n, "share", key)
         elif rest.startswith("all_"):
             # share_all_{name} → «📦 Получить ВСЕ»: ссылки одним сообщением + альбом .vpn
             await send_all(query, rest[4:], "share")
@@ -928,6 +958,8 @@ def main():
     # Сверка синхронизации со slave-серверами — каждые 30 минут, первая через 3 минуты.
     # Пишет админу сама, чтобы о рассинхроне не приходилось узнавать из меню.
     app.job_queue.run_repeating(_check_slaves_sync, interval=1800, first=180)
+    # Каскад: состояние выходов на входах — раз в минуту, админу только смена состояния
+    app.job_queue.run_repeating(_check_cascade, interval=60, first=90)
 
     logger.info(f"Бот запущен. Admin ID: {ADMIN_ID}")
     print(f"\n\033[0;32m✓ Бот запущен! Admin ID: {ADMIN_ID}\033[0m\n")

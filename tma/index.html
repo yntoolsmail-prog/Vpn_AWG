@@ -1188,6 +1188,13 @@ function openServerPicker() {
 
 // Экран 1: список серверов как «флаг название страна» — пользователь видит только страну,
 // эндпоинт выбирается автоматически (предпочтительно домен). Аналог _show_server_select в боте.
+// Подпись пункта выдачи: сервер отдаёт готовую (label — «🌍 Авто», «🇳🇱 NLD Голландия»,
+// при каскаде прямые — с «· напрямую»); name — метка в имени файла, не для показа
+function _srvLabel(srv) {
+  if (srv.label) return srv.label;
+  return `${srv.emoji} ${srv.name}` + (srv.country ? ' ' + srv.country : '');
+}
+
 function _showServerCountries() {
   const body = document.getElementById('server-picker-body');
   const back = document.getElementById('server-picker-back');
@@ -1200,12 +1207,11 @@ function _showServerCountries() {
   const usable = _servers.filter(s => (s.endpoints || []).length > 0);
 
   let html = usable.map(srv => {
-    const country = srv.country ? ' ' + _esc(srv.country) : '';
     const isSel = _isServerSelected(srv);
     return `<button class="btn ${isSel ? 'btn-green' : 'btn-ghost'}"
                     style="text-align:left;justify-content:flex-start;gap:8px"
                     onclick="_pickServerAuto('${_esc(srv.id)}')">
-              ${srv.emoji} ${_esc(srv.name)}${country}
+              ${_esc(_srvLabel(srv))}
             </button>`;
   }).join('');
 
@@ -1233,7 +1239,7 @@ function _showServerEndpoints() {
       🔢 <b>IP</b> — только если домен не работает: при смене IP потребуется заново скачать конфиг.
     </div>`;
 
-  const rows = _servers.flatMap(srv => (srv.endpoints || []).map(ep => {
+  const rows = _servers.filter(srv => srv.kind !== 'via').flatMap(srv => (srv.endpoints || []).map(ep => {
     const isSel = ep.value === _selectedEndpoint;
     const typeIcon = ep.type === 'domain' ? '🌐' : '🔢';
     const vfMark   = ep.verified ? ' ✅' : '';
@@ -1241,7 +1247,7 @@ function _showServerEndpoints() {
                     style="text-align:left;justify-content:flex-start;gap:8px"
                     onclick="selectServerEndpoint('${_esc(ep.value)}','${_esc(srv.emoji+' '+ep.value)}','${_esc(srv.name)}','${_esc(srv.id)}','${_esc(srv.emoji)}')">
               ${typeIcon} ${srv.emoji} ${_esc(ep.value)}${vfMark} &nbsp;
-              <span style="color:var(--text-dim);font-size:11px">(${_esc(srv.name)})</span>
+              <span style="color:var(--text-dim);font-size:11px">(${_esc(srv.kind === 'auto' ? 'вход → Авто' : _srvLabel(srv))})</span>
             </button>`;
   })).join('');
 
@@ -1263,7 +1269,7 @@ function _pickServerAuto(srvId) {
   if (!srv || !srv.endpoints || !srv.endpoints.length) return;
   const ep = srv.endpoints.find(e => e.type === 'domain') || srv.endpoints[0];
   _selectedEndpoint   = ep.value;
-  _selectedServerName = `${srv.emoji} ${srv.name}` + (srv.country ? ' ' + srv.country : '');
+  _selectedServerName = _srvLabel(srv);
   _selectedSrvRawName = srv.name || '';
   _selectedSrvId      = srv.id || '';
   _selectedSrvEmoji   = srv.emoji || '';
@@ -1389,7 +1395,7 @@ async function sendConf(name) {
   try {
     const resp = await API(`/api/devices/${encodeURIComponent(name)}/send`, {
       method: 'POST',
-      body: JSON.stringify({ endpoint, use_excl: useExcl, srv_name: srvName }),
+      body: JSON.stringify({ endpoint, use_excl: useExcl, srv_name: srvName, srv_id: _selectedSrvId || '' }),
     });
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || 'Ошибка');
@@ -1446,7 +1452,7 @@ async function showQR(name) {
   const note = document.getElementById('qr-note');
   if (note) { note.textContent = ''; note.style.display = 'none'; }
   try {
-    const qs = `endpoint=${encodeURIComponent(endpoint)}&use_excl=${useExcl ? '1' : '0'}`;
+    const qs = `endpoint=${encodeURIComponent(endpoint)}&use_excl=${useExcl ? '1' : '0'}&srv_id=${encodeURIComponent(_selectedSrvId || '')}`;
     const resp = await API(`/api/devices/${encodeURIComponent(name)}/qr?${qs}`);
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || 'Ошибка');

@@ -18,6 +18,7 @@ from awg_core import (
     ssh_get_slave_peer_count as _ssh_get_slave_peer_count,
     ssh_get_slave_sys_stats as _ssh_get_slave_sys_stats,
 )
+import awg_cascade as cas
 from .common import _md, back_kb, WAITING_SRV_DOMAIN, WAITING_SRV_EDIT_VALUE, WAITING_SRV_EDIT_FORCE, BTN_BACK, BTN_BACK_MENU, BTN_CANCEL, BTN_BACK_CARD
 
 
@@ -154,11 +155,13 @@ async def show_servers_list(query):
         domain_eps  = [e["value"] for e in eps if e.get("type") == "domain"]
         ep_text     = ", ".join(domain_eps) if domain_eps else "нет доменов"
 
-        lines.append(f"{emoji} {name} *({role})*")
+        lines.append(f"{emoji} {name} *({role})* · {cas.status_label(srv)}")
         if is_pri:
             lines.append(_srv_block_primary())
         else:
             lines.append(slave_blocks.get(i, "⚠️ нет данных"))
+        if cas.is_entry(srv):
+            lines.append(_cascade_summary(srv, servers))
         lines.append(f"\nЕндпоинты: {ep_text}\n")
 
     rows = []
@@ -267,6 +270,7 @@ async def show_server_card(query, srv_idx: int):
 
     text = (
         f"{emoji} *{name}*" + (" _(Основной)_" if is_pri else " _(Слейв)_") + "\n"
+        f"Статус: {cas.status_label(srv)}\n"
         f"SSH: `{ssh.get('login', 'root')}@{ssh.get('ip', '—')}:{ssh.get('port', 22)}`\n"
         f"AWG-порт: `{port}`\n\n"
         f"*Эндпоинты:*\n{ep_text}"
@@ -276,6 +280,8 @@ async def show_server_card(query, srv_idx: int):
         [InlineKeyboardButton("➕ Добавить домен", callback_data=f"srv_adddomain_{srv_idx}")],
         [InlineKeyboardButton("✏️ Редактировать", callback_data=f"srv_edit_{srv_idx}")],
     ]
+    text += await _cascade_card_text(srv, servers)
+    rows += _cascade_card_rows(srv, srv_idx, servers)
 
     if not is_pri:
         loop = asyncio.get_event_loop()
@@ -607,6 +613,14 @@ async def srv_del_ok(query, srv_idx: int):
     name  = srv.get("name", "Сервер")
     emoji = srv.get("emoji", "🖥")
 
+    # Каскад — до остановки AWG: вход снимается с выходов, выход — со входов, его
+    # слот запоминается у входов (on_delete меняет servers на месте)
+    cascade_note = ""
+    if cas.is_entry(srv) or srv.get("slot"):
+        await query.edit_message_text(f"⏳ Снимаю *{emoji} {name}* с каскада…", parse_mode="Markdown")
+        notes = await asyncio.get_running_loop().run_in_executor(None, cas.on_delete, servers, srv)
+        cascade_note = "".join(f"\n{_md(n)}" for n in notes)
+
     stop_note = ""
     if _PARAMIKO_AVAILABLE:
         ssh = srv.get("ssh", {})
@@ -636,7 +650,7 @@ async def srv_del_ok(query, srv_idx: int):
     servers.pop(srv_idx)
     save_servers(servers)
     await query.edit_message_text(
-        f"✅ Сервер *{emoji} {name}* удалён.{stop_note}{moved_note}",
+        f"✅ Сервер *{emoji} {name}* удалён.{stop_note}{moved_note}{cascade_note}",
         reply_markup=back_kb("servers"),
         parse_mode="Markdown"
     )
@@ -657,6 +671,9 @@ async def srv_detach_ok(query, srv_idx: int):
         return
     name  = srv.get("name", "Сервер")
     emoji = srv.get("emoji", "🖥")
+    # Каскад на сервере продолжает работать как есть, но номер его выхода другому
+    # серверу не выдаётся — входы всё ещё ведут этот слот через него
+    cas.forget(servers, srv)
     servers.pop(srv_idx)
     save_servers(servers)
     await query.edit_message_text(
@@ -1199,3 +1216,301 @@ async def srv_adddomain_receive(update, context: ContextTypes.DEFAULT_TYPE):
         ]])
     )
     return ConversationHandler.END
+
+
+# ── Каскад: вход и выходы (awg_cascade.py, docs/CASCADE.md) ───────────────────
+
+# Последнее известное состояние входов {id входа: (время, health)}: пишут
+# _check_cascade (раз в минуту) и карточка входа, шапка «Серверы» только читает —
+# без SSH на каждый показ
+_cascade_cache: dict = {}
+# Что уже сообщено админу: {(id входа, слот): "up"|"down", (id, "daemon"): bool, (id, "ru"): bool}
+_cascade_seen: dict = {}
+# Связка — фоновой задачей, по одной за раз: обработчики PTB идут по очереди, и
+# связка на минуту-две иначе заморозила бы бота для всех. Ссылки на задачи держим,
+# иначе их может собрать сборщик мусора
+_CASCADE_RUNNING = asyncio.Event()
+_CASCADE_TASKS: set = set()
+
+
+def _exit_name(servers: list, k: int) -> str:
+    x = next((s for s in servers if s.get("slot") == k), None)
+    return cas.srv_label(x) if x else f"Выход {k}"
+
+
+def _cascade_summary(srv: dict, servers: list) -> str:
+    """Строка входа в шапке «Серверы» — из кэша, без SSH."""
+    c = _cascade_cache.get(srv.get("id"))
+    if not c:
+        return "🔀 Выходы: данные будут в течение минуты"
+    h = c[1]
+    parts = [{"up": "✅", "down": "❌"}.get(e["state"], "…") + " " + _md(_exit_name(servers, k))
+             for k, e in sorted(h.get("exits", {}).items())]
+    s = "🔀 Выходы: " + (", ".join(parts) if parts else "нет")
+    if not h.get("daemon"):
+        s += "\n⚠️ Служба каскада не запущена"
+    return s
+
+
+async def _cascade_card_text(srv: dict, servers: list) -> str:
+    if cas.is_entry(srv):
+        try:
+            h = await asyncio.wait_for(
+                asyncio.get_running_loop().run_in_executor(None, cas.health, srv), timeout=20)
+        except Exception as e:
+            return f"\n\n*Каскад:* ⚠️ нет данных: {_md(str(e)[:100])}"
+        _cascade_cache[srv.get("id")] = (time.time(), h)
+        lines = ["", "", f"*Каскад — вход {srv.get('entry_no')}:*"]
+        lines.append("Служба работает" if h["daemon"] else
+                     "⚠️ Служба не запущена — нажмите «Пересвязать выходы»")
+        lines.append(f"Российских сетей: {h['ru_count']}" if h["ru_count"] else
+                     "⚠️ Список российских сетей пуст — всё идёт через выходы")
+        for k, e in sorted(h["exits"].items()):
+            name = _md(_exit_name(servers, k))
+            if e["state"] == "up":
+                rtt = f" — {e['rtt']} мс" if e["rtt"] not in ("", "-") else ""
+                lines.append(f"✅ {name}{rtt}")
+            elif e["state"] == "down":
+                lines.append(f"❌ {name} — не отвечает, его устройства на живых выходах")
+            else:
+                lines.append(f"… {name} — проверяется")
+        if not h["exits"]:
+            lines.append("Выходов нет: включите «Через вход» или «В Авто» у зарубежных серверов.")
+        return "\n".join(lines)
+    lines = ["", "", "*Выдача потребителям:*",
+             "🔗 напрямую — конфиг на этот сервер, как раньше"]
+    if cas.entries(servers):
+        lines += ["🚪 через вход — отдельной страной через российский вход",
+                  "🌍 в «Авто» — делит устройства «Авто» с другими выходами"]
+    return "\n".join(lines)
+
+
+def _cascade_card_rows(srv: dict, idx: int, servers: list) -> list:
+    rows = []
+    if cas.is_entry(srv):
+        rows.append([InlineKeyboardButton("🔄 Пересвязать выходы", callback_data=f"srv_relink_{idx}")])
+        rows.append([InlineKeyboardButton("⛔ Перестать быть входом", callback_data=f"srv_unentry_{idx}")])
+        return rows
+    i = cas.issue_of(srv)
+    mark = lambda on: "✅" if on else "⬜"
+    rows.append([InlineKeyboardButton(f"{mark(i['direct'])} Напрямую — домен / IP",
+                                      callback_data=f"srv_iss_d_{idx}")])
+    if cas.entries(servers):
+        rows.append([InlineKeyboardButton(f"{mark(i['via'])} Через вход — отдельной страной",
+                                          callback_data=f"srv_iss_v_{idx}")])
+        rows.append([InlineKeyboardButton(f"{mark(i['auto'])} В «Авто»",
+                                          callback_data=f"srv_iss_a_{idx}")])
+    if not srv.get("is_primary"):
+        rows.append([InlineKeyboardButton("🔀 Сделать входом", callback_data=f"srv_mkentry_{idx}")])
+    return rows
+
+
+def _card_kb(srv_id: str) -> InlineKeyboardMarkup:
+    idx = next((i for i, s in enumerate(load_servers()) if s.get("id") == srv_id), None)
+    if idx is None:
+        return back_kb("servers")
+    return InlineKeyboardMarkup([[InlineKeyboardButton(BTN_BACK_CARD, callback_data=f"srv_card_{idx}")]])
+
+
+async def _cascade_bg(query, srv_id: str, title: str, fn, *args):
+    """Долгая операция каскада фоновой задачей: сразу «⏳», отчёт — в то же сообщение."""
+    if _CASCADE_RUNNING.is_set():
+        await query.answer("⏳ Каскад уже настраивается — дождитесь отчёта.", show_alert=True)
+        return
+    _CASCADE_RUNNING.set()
+    msg = query.message
+    try:
+        await query.edit_message_text(
+            f"⏳ {title}…\n\nДо пары минут: на серверах ставятся пакеты и поднимаются "
+            "туннели. Отчёт придёт сюда.")
+    except Exception:
+        pass
+
+    async def run():
+        try:
+            lines = await asyncio.get_running_loop().run_in_executor(None, fn, *args)
+        except Exception as e:
+            logging.getLogger(__name__).exception("cascade: %s", title)
+            lines = [f"❌ {e}"]
+        finally:
+            _CASCADE_RUNNING.clear()
+        _cascade_cache.clear()
+        # Без parse_mode: в отчёте тексты ошибок с серверов
+        text = f"{title} — итог\n\n" + ("\n".join(lines) or "✅ Готово")
+        try:
+            await msg.edit_text(text[:4000], reply_markup=_card_kb(srv_id))
+        except Exception:
+            await msg.reply_text(text[:4000], reply_markup=_card_kb(srv_id))
+
+    t = asyncio.get_running_loop().create_task(run())
+    _CASCADE_TASKS.add(t)
+    t.add_done_callback(_CASCADE_TASKS.discard)
+
+
+async def srv_issue_toggle(query, f: str, srv_idx: int, take_slot: int = None):
+    """Кнопка выдачи в карточке: d — напрямую, v — через вход, a — в «Авто»."""
+    servers = load_servers()
+    if srv_idx >= len(servers) or f not in ("d", "v", "a"):
+        await query.answer("Сервер не найден.", show_alert=True)
+        return
+    srv = servers[srv_idx]
+    field = {"d": "direct", "v": "via", "a": "auto"}[f]
+    value = not cas.issue_of(srv)[field]
+    if field == "direct":
+        cas.set_issue(srv["id"], field, value)
+        await show_server_card(query, srv_idx)
+        return
+    becomes_exit = value and not cas.is_exit(srv)
+    if becomes_exit and take_slot is None and not srv.get("slot"):
+        retired = cas.retired_slots(servers)
+        if retired:
+            rows = [[InlineKeyboardButton("🆕 Новый номер", callback_data=f"srv_slotset_{f}_{srv_idx}_0")]]
+            rows += [[InlineKeyboardButton(f"♻️ Слот {k} — был {label}",
+                                           callback_data=f"srv_slotset_{f}_{srv_idx}_{k}")]
+                     for k, label in retired.items()]
+            rows.append([InlineKeyboardButton(BTN_BACK_CARD, callback_data=f"srv_card_{srv_idx}")])
+            await query.edit_message_text(
+                f"{cas.srv_label(srv)} становится выходом.\n\n"
+                "Можно занять слот удалённого сервера: его конфиги «через вход» "
+                "сразу пойдут через этот сервер, перекачивать ничего не нужно. "
+                "Или выдать новый номер.",
+                reply_markup=InlineKeyboardMarkup(rows))
+            return
+    other = "auto" if field == "via" else "via"
+    stops_exit = cas.is_exit(srv) and not value and not cas.issue_of(srv)[other]
+    if not becomes_exit and not stops_exit:
+        # Выход им и остаётся: «через вход» — только выдача, «Авто» — одна команда входам
+        lines = await asyncio.get_running_loop().run_in_executor(
+            None, cas.set_issue, srv["id"], field, value)
+        if lines:
+            await query.answer("\n".join(lines)[:190], show_alert=True)
+        await show_server_card(query, srv_idx)
+        return
+    title = (f"{cas.srv_label(srv)}: связываю с входом" if becomes_exit
+             else f"{cas.srv_label(srv)}: снимаю выход")
+    await _cascade_bg(query, srv["id"], title, cas.set_issue, srv["id"], field, value,
+                      take_slot or None)
+
+
+async def srv_mkentry_confirm(query, srv_idx: int):
+    servers = load_servers()
+    if srv_idx >= len(servers) or servers[srv_idx].get("is_primary"):
+        await query.answer("Входом может быть только слейв.", show_alert=True)
+        return
+    srv = servers[srv_idx]
+    extra = "\n• он перестанет быть выходом;" if cas.is_exit(srv) else ""
+    await query.edit_message_text(
+        f"🔀 Сделать {cas.srv_label(srv)} входом?\n\n"
+        "Вход — российский сервер, к которому подключаются устройства. Российские "
+        "сайты он выпускает сам, остальное ведёт туннелями на выходы.\n"
+        "• выдача напрямую на него выключится — он дверь, а не страна;"
+        f"{extra}\n"
+        "• бот свяжет его со всеми выходами — до пары минут.\n\n"
+        "Пользователи со старыми конфигами переезжают на вход сменой A-записи "
+        "домена на IP входа — это делается отдельно.",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Сделать входом", callback_data=f"srv_mkentry_ok_{srv_idx}")],
+            [InlineKeyboardButton(BTN_BACK_CARD, callback_data=f"srv_card_{srv_idx}")],
+        ]))
+
+
+async def srv_mkentry_ok(query, srv_idx: int):
+    servers = load_servers()
+    if srv_idx >= len(servers):
+        await query.answer("Сервер не найден.", show_alert=True)
+        return
+    srv = servers[srv_idx]
+    await _cascade_bg(query, srv["id"], f"{cas.srv_label(srv)}: делаю входом",
+                      cas.make_entry, srv["id"])
+
+
+async def srv_unentry_confirm(query, srv_idx: int):
+    servers = load_servers()
+    if srv_idx >= len(servers) or not cas.is_entry(servers[srv_idx]):
+        await query.answer("Это не вход.", show_alert=True)
+        return
+    srv = servers[srv_idx]
+    await query.edit_message_text(
+        f"⛔ {cas.srv_label(srv)} перестанет быть входом.\n\n"
+        "Каскад на нём погаснет: устройства, подключённые к нему, будут выходить в "
+        "интернет с его российского IP. Сам AWG и устройства не трогаются — это "
+        "останется обычный слейв без выдачи (включить — в карточке).",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("⛔ Да, снять роль входа", callback_data=f"srv_unentry_ok_{srv_idx}")],
+            [InlineKeyboardButton(BTN_BACK_CARD, callback_data=f"srv_card_{srv_idx}")],
+        ]))
+
+
+async def srv_unentry_ok(query, srv_idx: int):
+    servers = load_servers()
+    if srv_idx >= len(servers):
+        await query.answer("Сервер не найден.", show_alert=True)
+        return
+    srv = servers[srv_idx]
+    await _cascade_bg(query, srv["id"], f"{cas.srv_label(srv)}: снимаю роль входа",
+                      cas.unmake_entry, srv["id"])
+
+
+async def srv_relink(query, srv_idx: int):
+    servers = load_servers()
+    if srv_idx >= len(servers) or not cas.is_entry(servers[srv_idx]):
+        await query.answer("Это не вход.", show_alert=True)
+        return
+    srv = servers[srv_idx]
+    await _cascade_bg(query, srv["id"], f"{cas.srv_label(srv)}: пересвязываю выходы",
+                      cas.relink, srv["id"])
+
+
+async def _check_cascade(context):
+    """Job раз в минуту: состояние выходов на каждом входе. Админу — только на смену
+    состояния: выход упал / ожил, служба каскада не работает, список российских
+    сетей устарел. Первый проход после запуска бота молчит. Потерю связи со
+    входом сообщает _check_slaves_sync."""
+    servers = load_servers()
+    loop = asyncio.get_running_loop()
+    for e in cas.entries(servers):
+        eid = e.get("id")
+        try:
+            h = await asyncio.wait_for(loop.run_in_executor(None, cas.health, e), timeout=30)
+        except Exception:
+            continue
+        first = eid not in _cascade_cache
+        _cascade_cache[eid] = (time.time(), h)
+        ename = cas.srv_label(e)
+        msgs = []
+        for k, x in sorted(h["exits"].items()):
+            if x["state"] not in ("up", "down"):
+                continue
+            old = _cascade_seen.get((eid, k))
+            _cascade_seen[(eid, k)] = x["state"]
+            if first or old is None or old == x["state"]:
+                continue
+            name = _exit_name(servers, k)
+            if x["state"] == "down":
+                msgs.append(f"🚪❌ Выход {name} не отвечает (вход {ename}).\n\n"
+                            "Его устройства уже на живых выходах, конфиги его слота — "
+                            "через «Авто». Вернутся сами, когда выход оживёт.")
+            else:
+                msgs.append(f"🚪✅ Выход {name} снова работает (вход {ename}).")
+        flags = {"daemon": h["daemon"],
+                 "ru": h["ru_count"] > 0 and 0 <= h["ru_age"] < 3 * 86400}
+        for key, ok in flags.items():
+            old = _cascade_seen.get((eid, key))
+            _cascade_seen[(eid, key)] = ok
+            if first or old is None or old == ok:
+                continue
+            if key == "daemon":
+                msgs.append(f"✅ На входе {ename} служба каскада снова работает." if ok else
+                            f"⚠️ На входе {ename} не работает служба каскада: отказы выходов "
+                            "не обрабатываются. Карточка входа → «🔄 Пересвязать выходы».")
+            else:
+                msgs.append(f"✅ Список российских сетей на {ename} обновлён." if ok else
+                            f"⚠️ Список российских сетей на {ename} пуст или старше 3 суток — "
+                            "новые российские сети пойдут через выход. На входе: "
+                            "bash /root/cascade.sh ru-update")
+        for m in msgs:
+            try:
+                # Без parse_mode: в подписях серверов бывают «_» и «*»
+                await context.bot.send_message(ADMIN_ID, m)
+            except Exception:
+                pass

@@ -190,6 +190,7 @@ PROJECT_FILES=(
     "awg_clients.py:/root/awg_clients.py"
     "awg_stats.py:/root/awg_stats.py"
     "awg_ssh.py:/root/awg_ssh.py"
+    "awg_cascade.py:/root/awg_cascade.py"
     "sites_data.py:/root/sites_data.py"
     "module_loader.py:/root/module_loader.py"
     # Бот

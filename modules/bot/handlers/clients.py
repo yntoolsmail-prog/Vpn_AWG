@@ -12,6 +12,7 @@ from awg_core import (
     remove_client_from_awg, resolve_endpoint, save_client_excl,
     fmt_handshake, fmt_bytes, SERVER_PUBLIC,
 )
+import awg_cascade as cas
 from .common import _md, back_kb, sites_keyboard, _tma_button, IMG_BASE, WAITING_DEVICE_NAME, BTN_BACK, BTN_BACK_MENU, BTN_BACK_CARD, BTN_CANCEL, BTN_MY_DEVICES
 import logging
 
@@ -138,8 +139,28 @@ def _action_icon(action: str) -> str:
 def _action_label(action: str) -> str:
     return {"conf": "Скачать .conf", "qr": "QR-код", "share": "Поделиться"}.get(action, action)
 
+def _usable_options(servers: list = None) -> list:
+    """Пункты выдачи (awg_cascade.issue_options), у которых есть адрес: [(пункт, адрес)]."""
+    out = []
+    for o in cas.issue_options(servers):
+        ep = cas.auto_endpoint(o["srv"])
+        if ep:
+            out.append((o, ep))
+    return out
+
+
+def _option_cb(action: str, opt: dict, name: str) -> str:
+    """Данные кнопки пункта: прямой сервер — прежний {action}_auto_{si}_…, пункты
+    каскада — {action}_k{K}_… (k0 — «Авто»)."""
+    if opt["kind"] == "direct":
+        return f"{action}_auto_{opt['si']}_{name}"
+    return f"{action}_{opt['key']}_{name}"
+
+
 async def _show_server_select(query, name: str, user_id: int, action: str):
-    """Первый экран выбора: одна кнопка на сервер + Расширенная настройка."""
+    """Первый экран выбора: кнопка на каждый пункт выдачи + Расширенная настройка.
+    Без каскада пункты — серверы, как раньше; с каскадом — «🌍 Авто», выходы
+    через вход и прямые серверы (awg_cascade.issue_options)."""
     if not can_access_device(user_id, name):
         await query.answer("⛔ Это не ваше устройство.", show_alert=True)
         return
@@ -147,35 +168,25 @@ async def _show_server_select(query, name: str, user_id: int, action: str):
     short = device_short_name(name)
     icon  = _action_icon(action)
 
-    all_eps = [(si, ei, srv, ep)
-               for si, srv in enumerate(servers)
-               for ei, ep in enumerate(srv.get("endpoints", []))]
-
-    if not all_eps:
+    usable = _usable_options(servers)
+    if not usable:
         await query.answer("Нет доступных эндпоинтов.", show_alert=True)
         return
 
-    # Один эндпоинт — сразу отправляем без лишних экранов
-    if len(all_eps) == 1:
-        si, ei, srv, ep = all_eps[0]
-        await _do_send_action(query, name, action, ep["value"], srv)
+    # Один пункт с одним адресом — сразу отправляем без лишних экранов
+    if len(usable) == 1 and len(usable[0][0]["srv"].get("endpoints", [])) == 1:
+        opt, ep = usable[0]
+        await _do_send_action(query, name, action, ep, opt["srv"], opt["slot"])
         return
 
     rows = []
-    # Все серверы разом — для .conf и ссылок; QR так не отдаём: картинка на
+    # Все пункты разом — для .conf и ссылок; QR так не отдаём: картинка на
     # каждый сервер — это экраны прокрутки
-    if action in ("conf", "share") and sum(1 for s in servers if s.get("endpoints")) > 1:
+    if action in ("conf", "share") and len(usable) > 1:
         rows.append([InlineKeyboardButton("📦 Получить ВСЕ",
                         callback_data=f"{action}_all_{name}")])
-    for si, srv in enumerate(servers):
-        if not srv.get("endpoints"):
-            continue
-        emoji   = srv.get("emoji", "🖥")
-        sname   = srv.get("name", f"Сервер {si + 1}")
-        country = srv.get("country", "")
-        label   = f"{emoji} {sname}" + (f" {country}" if country else "")
-        rows.append([InlineKeyboardButton(label,
-                        callback_data=f"{action}_auto_{si}_{name}")])
+    for opt, _ in usable:
+        rows.append([InlineKeyboardButton(opt["label"], callback_data=_option_cb(action, opt, name))])
 
     rows.append([InlineKeyboardButton("🔧 Расширенная настройка",
                     callback_data=f"{action}_adv_{name}")])
@@ -197,8 +208,14 @@ async def _show_ep_select(query, name: str, user_id: int, action: str):
     short = device_short_name(name)
     icon  = _action_icon(action)
 
+    # Адреса тех серверов, что есть в выдаче: прямые и входы (адрес входа — это «Авто»)
+    active = cas.cascade_active(servers)
     all_eps = []
     for si, srv in enumerate(servers):
+        if cas.is_entry(srv) and not active:
+            continue
+        if not cas.is_entry(srv) and not cas.issue_of(srv)["direct"]:
+            continue
         for ei, ep in enumerate(srv.get("endpoints", [])):
             all_eps.append((si, ei, srv, ep))
 
@@ -210,6 +227,10 @@ async def _show_ep_select(query, name: str, user_id: int, action: str):
     for si, ei, srv, ep in all_eps:
         emoji  = srv.get("emoji", "🖥")
         sname  = srv.get("name", f"Сервер {si + 1}")
+        if cas.is_entry(srv):
+            emoji, sname = "🌍", f"вход {sname} → Авто"
+        elif active:
+            sname += " · напрямую"
         ep_val = ep["value"]
         is_domain = ep.get("type") == "domain"
         type_icon = "🌐" if is_domain else "🔢"
@@ -271,7 +292,7 @@ def _make_conf_filename(name: str, srv_name: str = None) -> str:
     """Формирует имя файла: User.SERVER.Device.conf"""
     if not srv_name:
         return f"{name}.conf"
-    srv_clean = re.sub(r'[^\w]', '', srv_name.replace(' ', '_'))
+    srv_clean = re.sub(r'[^\w-]', '', srv_name.replace(' ', '_'))
     parts = name.split(".", 1)
     if len(parts) == 2:
         return f"{parts[0]}.{srv_clean}.{parts[1]}.conf"
@@ -292,19 +313,6 @@ async def _deny_foreign(query, name: str) -> bool:
         return False
     await query.answer("⛔ Это не ваше устройство.", show_alert=True)
     return True
-
-
-def _auto_endpoint(srv: dict) -> str | None:
-    """Адрес сервера по умолчанию: первый домен, без доменов — первый адрес."""
-    eps = srv.get("endpoints", [])
-    ep = next((e for e in eps if e.get("type") == "domain"), eps[0] if eps else None)
-    return ep["value"] if ep else None
-
-
-def _srv_label(srv: dict) -> str:
-    """«🇨🇿 CZE Чехия» — как на кнопках выбора сервера."""
-    parts = (srv.get("emoji", "🖥"), srv.get("name", ""), srv.get("country", ""))
-    return " ".join(p for p in parts if p)
 
 
 def _link_html(label: str, ep: str, prt, link: str) -> str:
@@ -341,18 +349,17 @@ async def _send_docs(query, docs: list, caption: str):
 
 
 async def send_all(query, name: str, action: str):
-    """«📦 Получить ВСЕ»: конфиги на все серверы разом, у каждого — адрес по
-    умолчанию (_auto_endpoint). conf — альбом .conf-файлов одним сообщением;
+    """«📦 Получить ВСЕ»: конфиги на все пункты выдачи разом (_usable_options), у
+    каждого — адрес по умолчанию. conf — альбом .conf-файлов одним сообщением;
     share — ссылки одним сообщением в сворачиваемых цитатах (не влезают в 4096
     символов — несколькими) и альбом .vpn-файлов."""
     if await _deny_foreign(query, name):
         return
     targets = []
-    for srv in load_servers():
-        ep = _auto_endpoint(srv)
-        if ep:
-            targets.append((srv, ep, srv.get("awg_public_key") or SERVER_PUBLIC,
-                            str(srv.get("awg_port") or SERVER_PORT)))
+    for opt, ep in _usable_options():
+        srv = opt["srv"]
+        targets.append((opt, ep, srv.get("awg_public_key") or SERVER_PUBLIC,
+                        str(srv.get("awg_port") or SERVER_PORT)))
     if not targets:
         await query.answer("Нет доступных эндпоинтов.", show_alert=True)
         return
@@ -362,12 +369,13 @@ async def send_all(query, name: str, action: str):
         allowed_ips = await asyncio.get_running_loop().run_in_executor(
             None, get_allowed_ips_for_client, name)
         docs, lines = [], []
-        for srv, ep, spub, sprt in targets:
-            content = (make_conf_for_client_ep(name, ep, spub, sprt, allowed_ips) or "").encode()
+        for opt, ep, spub, sprt in targets:
+            content = (make_conf_for_client_ep(name, ep, spub, sprt, allowed_ips,
+                                               slot=opt["slot"]) or "").encode()
             if not content:
                 continue
-            docs.append((content, _make_conf_filename(name, srv.get("name", ""))))
-            lines.append(f"{_md(_srv_label(srv))} — `{ep}:{sprt}`")
+            docs.append((content, _make_conf_filename(name, opt["tag"])))
+            lines.append(f"{_md(opt['label'])} — `{ep}:{sprt}`")
         if not docs:
             await query.message.reply_text(f"❌ Не удалось собрать конфиги для {name}")
             return
@@ -381,15 +389,15 @@ async def send_all(query, name: str, action: str):
             await query.message.reply_text(f"❌ Не удалось прочитать ключи для {name}")
             return
         blocks, docs = [], []
-        for srv, ep, spub, sprt in targets:
-            emoji = srv.get("emoji", "")
+        for opt, ep, spub, sprt in targets:
+            emoji = opt["emoji"]
             link = make_vpn_link(
-                keys["priv"], keys["pub"], keys["ip"], keys["psk"],
-                keys.get("obfs", gen_obfs()), f"{emoji} {name}".strip() if emoji else name,
+                keys["priv"], keys["pub"], cas.slot_ip(keys["ip"], opt["slot"]), keys["psk"],
+                keys.get("obfs", gen_obfs()), _vpn_title(name, emoji, opt["kind"]),
                 endpoint=ep, server_public=spub, server_port=sprt)
-            label = _srv_label(srv)
+            label = opt["label"]
             blocks.append((len(link) + len(label) + len(ep) + 16, _link_html(label, ep, sprt, link)))
-            docs.append((link.encode(), _make_vpn_filename(name, srv.get("name", ""))))
+            docs.append((link.encode(), _make_vpn_filename(name, opt["tag"])))
         # Предел сообщения — 4096 символов; ссылка ~1500, так что две-три на сообщение
         header = f"🔗 <b>Ссылки AmneziaVPN — {html.escape(short)}</b>"
         msgs, cur, size = [], [], len(header) + len(_LINKS_FOOTER)
@@ -410,20 +418,39 @@ async def send_all(query, name: str, action: str):
     await show_device(query, name, query.from_user.id)
 
 
-async def _do_send_action(query, name: str, action: str, ep: str, server: dict):
-    """Выполняет нужное действие (conf/qr/share) с конкретным эндпоинтом и сервером."""
+def _vpn_title(name: str, emoji: str, kind: str = "") -> str:
+    """Название в AmneziaVPN: «🇳🇱 Ivan.Phone», прямой при каскаде — с пометкой,
+    чтобы не путать с тем же сервером через вход."""
+    title = f"{emoji} {name}".strip() if emoji else name
+    return title + " · напрямую" if kind == "direct" and cas.cascade_active(load_servers()) else title
+
+
+async def _do_send_action(query, name: str, action: str, ep: str, server: dict, slot: int = 0):
+    """Выполняет нужное действие (conf/qr/share) с конкретным эндпоинтом и сервером.
+    slot — выход каскада: адрес устройства A.B.(C+K).N (awg_cascade.slot_ip)."""
     if await _deny_foreign(query, name):
         return
     spub      = server.get("awg_public_key") or SERVER_PUBLIC
     sprt      = str(server.get("awg_port") or SERVER_PORT)
-    srv_name  = server.get("name", "")
-    srv_emoji = server.get("emoji", "")
+    srv_name, srv_emoji, _ = cas.describe(server, slot)
+    kind = "direct" if not slot and not cas.is_entry(server) else ""
     if action == "conf":
-        await do_send_conf_direct(query, name, ep, spub, sprt, srv_name)
+        await do_send_conf_direct(query, name, ep, spub, sprt, srv_name, slot)
     elif action == "qr":
-        await do_send_qr_direct(query, name, ep, spub, sprt, srv_name)
+        await do_send_qr_direct(query, name, ep, spub, sprt, srv_name, slot)
     else:
-        await do_send_share_direct(query, name, ep, spub, sprt, srv_name, srv_emoji)
+        await do_send_share_direct(query, name, ep, spub, sprt, srv_name, srv_emoji, slot, kind)
+
+
+async def send_option(query, name: str, action: str, key: str):
+    """Кнопка пункта каскада ({action}_k{K}_{name}): адрес входа по умолчанию и слот K."""
+    opt = cas.find_option(key)
+    ep = cas.auto_endpoint(opt["srv"]) if opt else None
+    if not ep:
+        await query.answer("Этот вариант больше недоступен — откройте выбор сервера заново.",
+                           show_alert=True)
+        return
+    await _do_send_action(query, name, action, ep, opt["srv"], opt["slot"])
 
 # ── Финальная отправка .conf ──────────────────────────────────────────────────
 
@@ -534,12 +561,12 @@ async def do_send_share(query, name: str, ep_key: str):
 
 async def do_send_conf_direct(query, name: str, ep: str,
                                spub: str = None, sprt: str = None,
-                               srv_name: str = None):
+                               srv_name: str = None, slot: int = 0):
     """Отправляет .conf с указанным эндпоинтом и параметрами сервера."""
     allowed_ips = await asyncio.get_running_loop().run_in_executor(None, get_allowed_ips_for_client, name)
     short   = device_short_name(name)
     prt     = sprt or SERVER_PORT
-    content = (make_conf_for_client_ep(name, ep, spub, sprt, allowed_ips) or "").encode()
+    content = (make_conf_for_client_ep(name, ep, spub, sprt, allowed_ips, slot=slot) or "").encode()
     excl_note = "" if allowed_ips == "0.0.0.0/0" else "\n🌐 С исключениями сайтов"
     await query.message.reply_document(
         document=content,
@@ -555,12 +582,12 @@ async def do_send_conf_direct(query, name: str, ep: str,
 
 async def do_send_qr_direct(query, name: str, ep: str,
                              spub: str = None, sprt: str = None,
-                             srv_name: str = None):
+                             srv_name: str = None, slot: int = 0):
     """Отправляет QR с указанным эндпоинтом."""
     allowed_ips = await asyncio.get_running_loop().run_in_executor(None, get_allowed_ips_for_client, name)
     short   = device_short_name(name)
     prt     = sprt or SERVER_PORT
-    content = (make_conf_for_client_ep(name, ep, spub, sprt, allowed_ips) or "").encode()
+    content = (make_conf_for_client_ep(name, ep, spub, sprt, allowed_ips, slot=slot) or "").encode()
     excl_note = "" if allowed_ips == "0.0.0.0/0" else "\n🌐 С исключениями сайтов"
     try:
         # Без временных файлов — в конфиге приватный ключ, а /tmp читаем всеми
@@ -594,7 +621,8 @@ async def do_send_qr_direct(query, name: str, ep: str,
 
 async def do_send_share_direct(query, name: str, ep: str,
                                 spub: str = None, sprt: str = None,
-                                srv_name: str = None, srv_emoji: str = ""):
+                                srv_name: str = None, srv_emoji: str = "",
+                                slot: int = 0, kind: str = ""):
     """Отправляет vpn:// ссылку с указанным эндпоинтом."""
     keys = get_client_keys(name)
     if not keys:
@@ -603,9 +631,9 @@ async def do_send_share_direct(query, name: str, ep: str,
     short    = device_short_name(name)
     prt      = sprt or SERVER_PORT
     # Название в приложении AmneziaVPN: "🇳🇱 Admin.Nout"
-    vpn_display_name = f"{srv_emoji} {name}".strip() if srv_emoji else name
+    vpn_display_name = _vpn_title(name, srv_emoji, kind)
     vpn_link = make_vpn_link(
-        keys["priv"], keys["pub"], keys["ip"], keys["psk"],
+        keys["priv"], keys["pub"], cas.slot_ip(keys["ip"], slot), keys["psk"],
         keys.get("obfs", gen_obfs()), vpn_display_name,
         endpoint=ep, server_public=spub, server_port=sprt
     )
