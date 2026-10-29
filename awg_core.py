@@ -24,7 +24,8 @@ SERVERS_FILE     = "/etc/amnezia/amneziawg/servers.json"
 SUBNET_CACHE_FILE = "/etc/amnezia/amneziawg/subnet_cache.json"
 ADMIN_KEY_PATH   = "/root/.ssh/awg_admin_key"
 SOCKS5_STATE_FILE = "/etc/awg-socks5/bot_state.json"   # модуль socks5: внешний прокси
-# Основной-выход каскада (cascade.sh exit-up): туннель к входам и его состояние
+# Каскад на основном (cascade.sh): туннель выхода к входам и состояние; туннели
+# входа к выходам — awgxK.conf рядом
 CASCADE_EXIT_CONF = "/etc/amnezia/amneziawg/awgx0.conf"
 CASCADE_STATE_DIR = "/etc/amnezia/amneziawg/cascade"
 AWG_LOCK_FILE    = "/etc/amnezia/amneziawg/.awg.lock"
@@ -595,12 +596,15 @@ def create_backup(prefix: str = "awg_backup") -> str:
         for path, arc in ((BW_PEAK_FILE, "bw_peak.json"), (MAINTENANCE_FILE, "maintenance.json"),
                           (f"{os.path.dirname(SERVERS_FILE)}/last_commit.txt", "last_commit.txt"),
                           (BW_LOG_FILE, "awg-bw.log"), (SOCKS5_STATE_FILE, "socks5_state.json"),
-                          # Основной — выход каскада: тот же ключ и порт после
-                          # переезда, входам остаётся сменить только адрес
-                          (CASCADE_EXIT_CONF, os.path.basename(CASCADE_EXIT_CONF)),
                           (CASCADE_STATE_DIR, os.path.basename(CASCADE_STATE_DIR))):
             if os.path.exists(path):
                 tar.add(path, arcname=arc)
+        # Туннели каскада основного: awgx0 — он выход (после переезда тот же ключ и
+        # порт, входам остаётся сменить адрес), awgxK — он вход (те же ключи у выходов)
+        awg_dir = os.path.dirname(CASCADE_EXIT_CONF)
+        for fn in sorted(os.listdir(awg_dir)):
+            if re.fullmatch(r"awgx\d+\.conf", fn):
+                tar.add(f"{awg_dir}/{fn}", arcname=fn)
     return backup_path
 
 # ── Внешний IP сервера ─────────────────────────────────────────────────────────
@@ -897,12 +901,17 @@ def post_restore_fixup() -> list:
         if m:
             report.append(f"📡 Порт AWG: UDP {m.group(1)} — если у хостера есть фаервол "
                           f"в панели, откройте его там")
+        if os.path.exists(CASCADE_EXIT_CONF):
+            with open(CASCADE_EXIT_CONF) as f:
+                m = re.search(r"^\s*ListenPort\s*=\s*(\d+)", f.read(), re.M)
+            if m:
+                report.append(f"📡 Порт выхода каскада: UDP {m.group(1)} — его там же")
     except Exception:
         pass
 
-    # 10. Каскад. Туннели «вход ↔ выход» живут на самих серверах: у входов в
-    #     туннелях — прежний IP основного-выхода, а сам он на новом ВПС ещё не
-    #     поднят (ключ и порт — из бэкапа). Пересвязку делает бот после
+    # 10. Каскад. У входов в туннелях — прежний IP основного-выхода, у выходов в
+    #     фаерволе — прежний IP основного-входа, а его туннели на новом ВПС ещё не
+    #     подняты (ключи и порт — из бэкапа). Пересвязку делает бот после
     #     перезапуска (relink_pending): входы и выходы — слейвы, нужен SSH с
     #     ключом из бэкапа
     try:
@@ -992,9 +1001,13 @@ def _harden_secret_perms():
                     os.chmod(os.path.join(BACKUP_DIR, fn), 0o600)
                 except Exception:
                     pass
-        for p in (USERS_FILE, ENV_FILE, CASCADE_EXIT_CONF):
+        for p in (USERS_FILE, ENV_FILE):
             if os.path.exists(p):
                 os.chmod(p, 0o600)
+        awg_dir = os.path.dirname(CASCADE_EXIT_CONF)
+        for fn in os.listdir(awg_dir):
+            if re.fullmatch(r"awgx\d+\.conf", fn):
+                os.chmod(f"{awg_dir}/{fn}", 0o600)
     except Exception:
         pass
 

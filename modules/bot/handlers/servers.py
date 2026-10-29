@@ -1312,8 +1312,7 @@ def _cascade_card_rows(srv: dict, idx: int, servers: list) -> list:
                                           callback_data=f"srv_iss_v_{idx}")])
         rows.append([InlineKeyboardButton(f"{mark(i['auto'])} В «Авто»",
                                           callback_data=f"srv_iss_a_{idx}")])
-    if not srv.get("is_primary"):
-        rows.append([InlineKeyboardButton("🔀 Сделать входом", callback_data=f"srv_mkentry_{idx}")])
+    rows.append([InlineKeyboardButton("🔀 Сделать входом", callback_data=f"srv_mkentry_{idx}")])
     return rows
 
 
@@ -1406,11 +1405,15 @@ async def srv_issue_toggle(query, f: str, srv_idx: int, take_slot: int = None):
 
 async def srv_mkentry_confirm(query, srv_idx: int):
     servers = load_servers()
-    if srv_idx >= len(servers) or servers[srv_idx].get("is_primary"):
-        await query.answer("Входом может быть только слейв.", show_alert=True)
+    if srv_idx >= len(servers):
+        await query.answer("Сервер не найден.", show_alert=True)
         return
     srv = servers[srv_idx]
     extra = "\n• он перестанет быть выходом;" if cas.is_exit(srv) else ""
+    if srv.get("is_primary"):
+        # Бот живёт на основном: на части российских хостингов связь с Telegram рвётся
+        extra += ("\n• бот останется на этом сервере — если хостинг российский, связь с "
+                  "Telegram на нём бывает хуже, бот повторяет соединения сам;")
     await query.edit_message_text(
         f"🔀 Сделать {cas.srv_label(srv)} входом?\n\n"
         "Вход — российский сервер, к которому подключаются устройства. Российские "
@@ -1447,7 +1450,7 @@ async def srv_unentry_confirm(query, srv_idx: int):
         "Каскад на нём погаснет: устройства, подключённые к нему, с «Авто» будут "
         "выходить в интернет с его российского IP, а конфиги стран через вход "
         "перестанут работать. Сам AWG и устройства не трогаются — это останется "
-        "обычный слейв без выдачи (включить — в карточке).",
+        "обычный сервер без выдачи (включить — в карточке).",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("⛔ Да, снять роль входа", callback_data=f"srv_unentry_ok_{srv_idx}")],
             [InlineKeyboardButton(BTN_BACK_CARD, callback_data=f"srv_card_{srv_idx}")],
