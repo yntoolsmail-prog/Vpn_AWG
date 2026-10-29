@@ -88,7 +88,7 @@ from handlers.servers import (
     show_srv_edit, srv_edit_field_start, srv_edit_receive, srv_edit_force, srv_edit_cancel,
     srv_adddomain_start, srv_adddomain_pick, srv_adddomain_receive,
     srv_issue_toggle, srv_mkentry_confirm, srv_mkentry_ok, srv_unentry_confirm,
-    srv_unentry_ok, srv_relink, _check_cascade,
+    srv_unentry_ok, srv_relink, _check_cascade, _cascade_startup,
 )
 from handlers.maintenance import (
     show_status, do_diagnostics,
@@ -960,6 +960,9 @@ def main():
     app.job_queue.run_repeating(_check_slaves_sync, interval=1800, first=180)
     # Каскад: состояние выходов на входах — раз в минуту, админу только смена состояния
     app.job_queue.run_repeating(_check_cascade, interval=60, first=90)
+    # Пересвязка входов, заказанная перед перезапуском (восстановление бэкапа, смена IP
+    # основного): через минуту — связь с Telegram и слейвами к этому времени есть
+    app.job_queue.run_once(_cascade_startup, when=60)
 
     logger.info(f"Бот запущен. Admin ID: {ADMIN_ID}")
     print(f"\n\033[0;32m✓ Бот запущен! Admin ID: {ADMIN_ID}\033[0m\n")

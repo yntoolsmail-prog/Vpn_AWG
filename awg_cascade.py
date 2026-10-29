@@ -10,10 +10,12 @@
 #   slot: K                      номер выхода: через вход устройство с адресом
 #                                A.B.(C+K).N идёт в него. Остаётся за сервером и после
 #                                выключения — включил снова, и конфиги его слота живы
-#   cascade_retired: {K: подпись}   у входов: слоты удалённых серверов. Их адреса вход
-#                                держит (конфиги уходят в «Авто»), новым серверам номер
-#                                не выдаётся — только явно, «занять слот»
-import hashlib, logging, os, re, subprocess
+#   cascade_retired: {K: подпись}   у основного: слоты удалённых серверов. Их адреса
+#                                вход держит (конфиги уходят в «Авто»), новым серверам
+#                                номер не выдаётся — только явно, «занять слот». У
+#                                основного, а не у входов: он есть всегда, и номера не
+#                                теряются, когда убран последний вход
+import hashlib, logging, os, re, shlex, subprocess
 
 from awg_core import SERVER_IP, load_servers, save_servers
 from awg_clients import slot_ip  # noqa: F401  (реэкспорт для обработчиков)
@@ -22,6 +24,9 @@ from awg_ssh import PARAMIKO_AVAILABLE, _ssh_connect
 logger = logging.getLogger(__name__)
 
 CASCADE_SH = "/root/cascade.sh"
+# Флаг «пересвязать все входы после запуска бота»: ставят восстановление бэкапа и
+# смена IP основного — обе перезапускают бота, и фоновая задача до конца бы не дожила
+RELINK_FLAG = "/etc/amnezia/amneziawg/cascade_relink.flag"
 MAX_SLOT   = 250
 _TOKEN_RE  = re.compile(r"AWGX1:[A-Za-z0-9+/=]+")
 _ANSI_RE   = re.compile(r"\x1b\[[0-9;]*m")
@@ -148,25 +153,53 @@ def describe(srv: dict, slot: int = 0, servers: list = None) -> tuple:
 
 # ── Слоты ─────────────────────────────────────────────────────────────────────
 
+def _primary(servers: list) -> dict | None:
+    return next((s for s in servers if s.get("is_primary")), None)
+
+
 def retired_slots(servers: list) -> dict:
-    """{K: подпись} — слоты удалённых серверов (cascade_retired у входов)."""
+    """{K: подпись} — слоты удалённых серверов: cascade_retired у основного (и у
+    входов — так хранилось в первой версии)."""
     out = {}
-    for e in entries(servers):
-        for k, label in (e.get("cascade_retired") or {}).items():
+    for s in [_primary(servers) or {}] + entries(servers):
+        for k, label in (s.get("cascade_retired") or {}).items():
             if str(k).isdigit():
-                out[int(k)] = label
+                out.setdefault(int(k), label)
     taken = {int(s["slot"]) for s in servers if s.get("slot")}
     return {k: v for k, v in sorted(out.items()) if k not in taken}
 
 
+def free_slots(servers: list, srv: dict = None) -> dict:
+    """{K: подпись} — что можно занять, становясь выходом: слоты удалённых серверов
+    и слоты серверов, которые сейчас не выходы (номер у них остаётся, пока его не
+    забрали). Свой номер srv сюда не входит — его он получит и так."""
+    out = dict(retired_slots(servers))
+    for s in servers:
+        if s is not srv and s.get("slot") and not is_exit(s):
+            out[int(s["slot"])] = srv_label(s) + " (выключен)"
+    return dict(sorted(out.items()))
+
+
 def _retire(servers: list, slot: int, label: str):
-    for e in entries(servers):
-        e.setdefault("cascade_retired", {})[str(slot)] = label
+    p = _primary(servers)
+    if p is not None:
+        p.setdefault("cascade_retired", {})[str(slot)] = label
 
 
 def _unretire(servers: list, slot: int):
-    for e in entries(servers):
-        (e.get("cascade_retired") or {}).pop(str(slot), None)
+    for s in [_primary(servers) or {}] + entries(servers):
+        (s.get("cascade_retired") or {}).pop(str(slot), None)
+
+
+def _take_slot(servers: list, srv: dict, slot: int):
+    """srv занимает номер: из освободившихся или у сервера, который сейчас не выход."""
+    for s in servers:
+        if s is not srv and s.get("slot") == slot:
+            if is_exit(s):
+                raise RuntimeError(f"слот {slot} занят выходом {srv_label(s)}")
+            s.pop("slot", None)
+    _unretire(servers, slot)
+    srv["slot"] = slot
 
 
 def _new_slot(servers: list) -> int:
@@ -181,7 +214,10 @@ def _new_slot(servers: list) -> int:
 # ── Выполнение cascade.sh на серверах ─────────────────────────────────────────
 
 def _host_of(srv: dict) -> str:
-    return SERVER_IP if srv.get("is_primary") else srv.get("ssh", {}).get("ip", "")
+    host = SERVER_IP if srv.get("is_primary") else srv.get("ssh", {}).get("ip", "")
+    if not host:
+        raise RuntimeError(f"{srv_label(srv)}: не известен IP сервера")
+    return shlex.quote(host)
 
 
 def _tail(out: str, n: int = 2) -> str:
@@ -194,6 +230,16 @@ def _run(srv: dict, args: str, stdin: str = "", timeout: int = 600) -> tuple:
     SSH. Возвращает (код, вывод вместе с ошибками)."""
     if RUNNER:
         return RUNNER(srv, args, stdin, timeout)
+    rc, out = _exec(srv, args, stdin, timeout)
+    if rc == 127 and not srv.get("is_primary"):
+        # Скрипта нет — сервер переустановили после прошлой заливки: залить и повторить
+        _SCRIPT_SEEN.pop(srv.get("id"), None)
+        ensure_script(srv)
+        rc, out = _exec(srv, args, stdin, timeout)
+    return rc, out
+
+
+def _exec(srv: dict, args: str, stdin: str, timeout: int) -> tuple:
     cmd = f"bash {CASCADE_SH} {args}"
     if srv.get("is_primary"):
         r = subprocess.run(["bash", "-c", cmd], input=stdin, capture_output=True,
@@ -221,9 +267,16 @@ def _run(srv: dict, args: str, stdin: str = "", timeout: int = 600) -> tuple:
         client.close()
 
 
+# {id сервера: md5 залитой версии} — проверять версию по SSH раз за жизнь
+# процесса, а не на каждый опрос (_check_cascade ходит на входы раз в минуту)
+_SCRIPT_SEEN: dict = {}
+
+
 def ensure_script(srv: dict):
     """Та же версия cascade.sh, что на основном: бот заливает её сам, обновлять
-    каждый сервер вручную не нужно. Основной — источник, ему заливать нечего."""
+    каждый сервер вручную не нужно. Основной — источник, ему заливать нечего.
+    После заливки — перезапуск службы входа: работающая служба держит старую
+    версию в памяти. Перезапуск правила не снимает — трафик не прерывается."""
     if RUNNER or srv.get("is_primary"):
         return
     try:
@@ -233,18 +286,21 @@ def ensure_script(srv: dict):
         raise RuntimeError("на основном нет /root/cascade.sh — обновите проект: "
                            "bash /root/setup.sh --update")
     want = hashlib.md5(data).hexdigest()
+    if _SCRIPT_SEEN.get(srv.get("id")) == want:
+        return
     client = _ssh_connect(srv.get("ssh", {}), timeout=10)
     try:
         _, so, _ = client.exec_command(f"md5sum {CASCADE_SH} 2>/dev/null | cut -c1-32", timeout=10)
-        if so.read().decode().strip() == want:
-            return
-        chan = client.get_transport().open_session()
-        chan.exec_command(f"cat > {CASCADE_SH}.new && chmod 755 {CASCADE_SH}.new "
-                          f"&& mv {CASCADE_SH}.new {CASCADE_SH}")
-        chan.sendall(data)
-        chan.shutdown_write()
-        if chan.recv_exit_status() != 0:
-            raise RuntimeError("не удалось записать /root/cascade.sh")
+        if so.read().decode().strip() != want:
+            chan = client.get_transport().open_session()
+            chan.exec_command(f"cat > {CASCADE_SH}.new && chmod 755 {CASCADE_SH}.new "
+                              f"&& mv {CASCADE_SH}.new {CASCADE_SH} "
+                              f"&& (systemctl try-restart awg-cascade.service 2>/dev/null; true)")
+            chan.sendall(data)
+            chan.shutdown_write()
+            if chan.recv_exit_status() != 0:
+                raise RuntimeError("не удалось записать /root/cascade.sh")
+        _SCRIPT_SEEN[srv.get("id")] = want
     finally:
         client.close()
 
@@ -359,8 +415,7 @@ def set_issue(srv_id: str, field: str, value: bool, take_slot: int = None) -> li
     lines = []
     if not was and (iss["via"] or iss["auto"]):
         if take_slot:
-            srv["slot"] = int(take_slot)
-            _unretire(servers, int(take_slot))
+            _take_slot(servers, srv, int(take_slot))
         elif not srv.get("slot") or any(s is not srv and s.get("slot") == srv.get("slot") for s in servers):
             srv["slot"] = None
             try:
@@ -406,17 +461,17 @@ def make_entry(srv_id: str) -> list:
         for e in entries(servers):
             lines += _unlink(e, srv)
         lines += _down(srv)
+    if srv.get("slot"):
+        # Бывший выход: его номер — в освободившиеся, иначе он достался бы новому
+        # серверу, и конфиги этого слота молча ушли бы в другую страну
+        _retire(servers, int(srv["slot"]), srv_label(srv))
     used = {e.get("entry_no") for e in entries(servers)}
     try:
         n = info(srv).get("ENTRY_NO", "")
     except Exception as err:
         return [f"❌ {srv_label(srv)}: {err}"]
     no = int(n) if n.isdigit() and int(n) not in used else next(i for i in range(1, 201) if i not in used)
-    retired = {}
-    for e in entries(servers):
-        retired.update(e.get("cascade_retired") or {})
-    srv.update(role="entry", entry_no=no, issue={"direct": False, "via": False, "auto": False},
-               cascade_retired=retired)
+    srv.update(role="entry", entry_no=no, issue={"direct": False, "via": False, "auto": False})
     srv.pop("slot", None)
     save_servers(servers)
     exs = exits(servers)
@@ -447,6 +502,10 @@ def unmake_entry(srv_id: str) -> list:
         except Exception as err:
             lines.append(f"⚠️ {srv_label(x)}: {err}")
     lines += _down(srv)
+    # Номера удалённых серверов, хранившиеся у входа (первая версия), — к основному
+    for k, label in (srv.get("cascade_retired") or {}).items():
+        if str(k).isdigit() and not any(s.get("slot") == int(k) for s in servers):
+            _retire(servers, int(k), label)
     for k in ("role", "entry_no", "cascade_retired"):
         srv.pop(k, None)
     srv["issue"] = {"direct": False}
@@ -486,14 +545,64 @@ def relink(srv_id: str) -> list:
 
 def forget(servers: list, srv: dict):
     """«Только убрать из бота»: на серверах ничего не трогаем, но номер его выхода
-    запоминается у входов — новому серверу он не выдаётся (без SSH)."""
+    запоминается у основного — новому серверу он не выдаётся (без SSH)."""
     if srv.get("slot") and not is_entry(srv):
         _retire(servers, int(srv["slot"]), srv_label(srv))
 
 
+def after_ip_change(srv_id: str) -> list:
+    """Сменился IP входа или выхода: у входа в туннелях старый адрес выхода, у выхода
+    в фаерволе — старый адрес входа. Пересвязка обновляет и то и другое."""
+    servers = load_servers()
+    srv = _find(servers, srv_id)
+    if not srv:
+        return []
+    if is_entry(srv):
+        return relink(srv_id)
+    if is_exit(srv):
+        return _link_all(servers, srv)
+    return []
+
+
+def involved(srv: dict) -> bool:
+    return is_entry(srv) or is_exit(srv)
+
+
+def request_relink(reason: str = ""):
+    """Пересвязать все входы после следующего запуска бота (relink_pending)."""
+    try:
+        with open(RELINK_FLAG, "w") as f:
+            f.write(reason + "\n")
+    except OSError as e:
+        logger.warning(f"cascade: флаг пересвязки не записан: {e}")
+
+
+def relink_pending() -> list | None:
+    """Флаг стоит — пересвязать все входы и снять флаг. None — флага нет."""
+    if not os.path.exists(RELINK_FLAG):
+        return None
+    try:
+        with open(RELINK_FLAG) as f:
+            reason = f.read().strip()
+    except OSError:
+        reason = ""
+    lines = [reason] if reason else []
+    servers = load_servers()
+    for e in entries(servers):
+        lines.append(f"🔀 {srv_label(e)}:")
+        lines += ["   " + ln for ln in relink(e["id"])]
+    if not entries(servers):
+        lines.append("Входов нет — пересвязывать нечего.")
+    try:
+        os.remove(RELINK_FLAG)
+    except OSError:
+        pass
+    return lines
+
+
 def on_delete(servers: list, srv: dict) -> list:
     """Перед удалением сервера из бота (srv_del_ok): вход — гасится и снимается с
-    выходов; выход — снимается со входов, его слот запоминается у входов (конфиги
+    выходов; выход — снимается со входов, его слот запоминается у основного (конфиги
     этого слота уходят в «Авто», номер можно занять другим сервером). Меняет
     servers на месте — сохранить их должен вызывающий."""
     lines = []

@@ -23,6 +23,10 @@ EXCL_EXT         = ".excl.json"
 SERVERS_FILE     = "/etc/amnezia/amneziawg/servers.json"
 SUBNET_CACHE_FILE = "/etc/amnezia/amneziawg/subnet_cache.json"
 ADMIN_KEY_PATH   = "/root/.ssh/awg_admin_key"
+SOCKS5_STATE_FILE = "/etc/awg-socks5/bot_state.json"   # модуль socks5: внешний прокси
+# Основной-выход каскада (cascade.sh exit-up): туннель к входам и его состояние
+CASCADE_EXIT_CONF = "/etc/amnezia/amneziawg/awgx0.conf"
+CASCADE_STATE_DIR = "/etc/amnezia/amneziawg/cascade"
 AWG_LOCK_FILE    = "/etc/amnezia/amneziawg/.awg.lock"
 
 # Имена, которые нельзя занять при регистрации: совпадение с ними даёт доступ
@@ -583,6 +587,20 @@ def create_backup(prefix: str = "awg_backup") -> str:
         _mtp_conf = "/etc/proxy-bot/proxy_bot.env"
         if os.path.exists(_mtp_conf):
             tar.add(_mtp_conf, arcname="proxy_bot.env")
+        # Остальное состояние основного: без него переезд терял историю трафика и
+        # пики, дату техобслуживания, настройки SOCKS5 (адрес и пароль внешнего
+        # прокси — заново их не ввести, если не записаны) и отметку обновлений.
+        # Файлы из /etc/amnezia/amneziawg ложатся на место при распаковке, прочие
+        # раскладывает post_restore_fixup
+        for path, arc in ((BW_PEAK_FILE, "bw_peak.json"), (MAINTENANCE_FILE, "maintenance.json"),
+                          (f"{os.path.dirname(SERVERS_FILE)}/last_commit.txt", "last_commit.txt"),
+                          (BW_LOG_FILE, "awg-bw.log"), (SOCKS5_STATE_FILE, "socks5_state.json"),
+                          # Основной — выход каскада: тот же ключ и порт после
+                          # переезда, входам остаётся сменить только адрес
+                          (CASCADE_EXIT_CONF, os.path.basename(CASCADE_EXIT_CONF)),
+                          (CASCADE_STATE_DIR, os.path.basename(CASCADE_STATE_DIR))):
+            if os.path.exists(path):
+                tar.add(path, arcname=arc)
     return backup_path
 
 # ── Внешний IP сервера ─────────────────────────────────────────────────────────
@@ -751,6 +769,9 @@ def post_restore_fixup() -> list:
     _move(f"{base}/bot_persistence.pkl", "/etc/awg-bot/bot_persistence.pkl")
     if _move(f"{base}/proxy_bot.env", "/etc/proxy-bot/proxy_bot.env", 0o600):
         report.append("📡 proxy_bot.env восстановлен")
+    _move(f"{base}/awg-bw.log", BW_LOG_FILE)
+    if _move(f"{base}/socks5_state.json", SOCKS5_STATE_FILE, 0o600):
+        report.append("🧦 Настройки SOCKS5 восстановлены")
 
     # 2. PostUp/PostDown в awg-конфиге ссылаются на внешний интерфейс СТАРОГО VPS.
     #    iptables молча примет правило с несуществующим интерфейсом — NAT просто
@@ -760,28 +781,39 @@ def post_restore_fixup() -> list:
     iface   = load_env(ENV_FILE).get("VPN_IFACE") or srv.get("VPN_IFACE", "awg0")
     conf    = f"{base}/{iface}.conf"
     host_if = get_host_iface()
-    try:
-        with open(conf) as f:
+
+    def _fix_nat(path, own):
+        """Меняет имя интерфейса только в строках PostUp/PostDown и только там,
+        где оно НЕ равно имени своего awg-интерфейса (-i awg0 трогать нельзя)."""
+        with open(path) as f:
             text = f.read()
-        import re as _re
-        # Меняем имя интерфейса только в строках PostUp/PostDown и только там,
-        # где оно НЕ равно имени awg-интерфейса (-i awg0 трогать нельзя).
         out_lines, changed = [], 0
         for line in text.split("\n"):
             if line.strip().startswith(("PostUp", "PostDown")):
-                fixed, k = _re.subn(r"(-[oi]\s+)(?!%s\b)[A-Za-z0-9_.@-]+" % _re.escape(iface),
-                                    r"\g<1>" + host_if, line)
+                fixed, k = re.subn(r"(-[oi]\s+)(?!%s\b)[A-Za-z0-9_.@-]+" % re.escape(own),
+                                   r"\g<1>" + host_if, line)
                 changed += k
                 out_lines.append(fixed)
             else:
                 out_lines.append(line)
         if changed:
-            with open(conf, "w") as f:
+            with open(path, "w") as f:
                 f.write("\n".join(out_lines))
-            os.chmod(conf, 0o600)
+            os.chmod(path, 0o600)
+        return changed
+
+    try:
+        if _fix_nat(conf, iface):
             report.append(f"🔀 NAT переключён на интерфейс {host_if}")
     except Exception as e:
         report.append(f"⚠️ PostUp/PostDown: {e}")
+    # Выход каскада выпускает трафик входов в интернет через тот же внешний интерфейс
+    if os.path.exists(CASCADE_EXIT_CONF):
+        try:
+            _fix_nat(CASCADE_EXIT_CONF, os.path.basename(CASCADE_EXIT_CONF)[:-5])
+            os.chmod(CASCADE_EXIT_CONF, 0o600)
+        except Exception as e:
+            report.append(f"⚠️ {os.path.basename(CASCADE_EXIT_CONF)}: {e}")
 
     # 3–4. SERVER_IP в server.env и IP основного в servers.json — от старого сервера
     report += sync_server_ip()[1]
@@ -868,6 +900,30 @@ def post_restore_fixup() -> list:
     except Exception:
         pass
 
+    # 10. Каскад. Туннели «вход ↔ выход» живут на самих серверах: у входов в
+    #     туннелях — прежний IP основного-выхода, а сам он на новом ВПС ещё не
+    #     поднят (ключ и порт — из бэкапа). Пересвязку делает бот после
+    #     перезапуска (relink_pending): входы и выходы — слейвы, нужен SSH с
+    #     ключом из бэкапа
+    try:
+        import awg_cascade
+        invalidate_servers_cache()
+        restored = load_servers()
+        if awg_cascade.entries(restored):
+            awg_cascade.request_relink("🔀 Каскад после восстановления бэкапа:")
+            report.append("🔀 Каскад: после перезапуска бот сам пересвяжет входы с выходами "
+                          "и пришлёт отчёт отдельным сообщением")
+        elif os.path.exists(CASCADE_EXIT_CONF) and not any(awg_cascade.is_exit(x) for x in restored):
+            # Бэкап старше каскада, а здесь поднят выход: входы по-прежнему
+            # ходят через него, но в боте они теперь обычные слейвы
+            report.append(
+                "⚠️ Каскад: в бэкапе его нет, а на этом сервере поднят выход. Входы "
+                "продолжают работать через него, но в боте они теперь обычные слейвы. "
+                "Вернуть каскад — заново «🔀 Сделать входом» в карточке входа и "
+                "переключатели выдачи у выходов (номер выхода возьмётся с сервера)")
+    except Exception as e:
+        report.append(f"⚠️ Каскад: {e}")
+
     return report
 
 
@@ -936,7 +992,7 @@ def _harden_secret_perms():
                     os.chmod(os.path.join(BACKUP_DIR, fn), 0o600)
                 except Exception:
                     pass
-        for p in (USERS_FILE, ENV_FILE):
+        for p in (USERS_FILE, ENV_FILE, CASCADE_EXIT_CONF):
             if os.path.exists(p):
                 os.chmod(p, 0o600)
     except Exception:

@@ -33,6 +33,9 @@ STATE="$AWG_DIR/cascade"
 RUN="${CASCADE_RUN:-/run/awg-cascade}"
 VPN_IF="${CASCADE_VPN_IF:-awg0}"
 EXIT_IF="${CASCADE_EXIT_IF:-awgx0}"
+# Туннели входа к выходам: ${TUN}K. Другое имя нужно только песочнице, где два
+# входа живут в одной файловой системе и делят /var/run/amneziawg
+TUN="${CASCADE_TUN:-awgx}"
 # Адреса туннелей «вход ↔ выход»: NET.K.1 — выход K, NET.K.(1+E) — вход E
 NET="${CASCADE_NET:-10.249}"
 # Решение о маршруте хранится в битах 16–23 метки пакета и соединения.
@@ -301,7 +304,13 @@ cmd_exit_up() {
         [[ "$(exit_slot)" == "$slot" ]] \
             || die "Выход уже поднят со слотом $(exit_slot). Сменить: cascade.sh down, затем заново"
         say "Выход уже настроен — печатаю его токен заново."
-        ip link show "$EXIT_IF" >/dev/null 2>&1 || iface_up "$EXIT_IF"
+        # Туннель поднят не с этим файлом (восстановлен бэкап поверх работающего
+        # выхода) — входы получат ключ из файла, значит и интерфейс должен его взять
+        if ! ip link show "$EXIT_IF" >/dev/null 2>&1 \
+           || [[ "$(awg show "$EXIT_IF" public-key 2>/dev/null)" != "$(awg pubkey <<<"$(conf_get "$conf" PrivateKey)")" ]] \
+           || [[ "$(awg show "$EXIT_IF" listen-port 2>/dev/null)" != "$(exit_port)" ]]; then
+            iface_up "$EXIT_IF"
+        fi
         [[ -n "$host" ]] && sed -i "s/^HOST=.*/HOST=$host/" "$STATE/exit.env"
         print_exit_token "$host"
         return 0
@@ -435,6 +444,9 @@ load_exits() {
     mapfile -t AUTO_LIST < <(for k in "${EXITS[@]}"; do
         [[ ${AUTO[$k]} -gt 0 ]] && echo "${AUTO[$k]} $k"
     done | sort -n -k1,1 -k2,2 | awk '{print $2}')
+    # Ни один выход не отмечен «в Авто» — «Авто» делится между всеми выходами:
+    # иначе нынешние конфиги (они все «Авто») выходили бы с российского IP входа
+    [[ ${#AUTO_LIST[@]} -gt 0 ]] || AUTO_LIST=("${EXITS[@]}")
 }
 
 load_subnet() {
@@ -443,7 +455,7 @@ load_subnet() {
     IFS=. read -r SA SB SC <<<"$base"
 }
 
-entry_conf() { echo "$AWG_DIR/awgx$1.conf"; }
+entry_conf() { echo "$AWG_DIR/$TUN$1.conf"; }
 
 cmd_entry_add() {
     local tok="" e=1 auto="" myip=""
@@ -478,11 +490,12 @@ cmd_entry_add() {
     mkdir -p "$STATE/exits" "$RUN"
     ensure_pkgs ipset conntrack curl
 
-    local ifc="awgx$k" conf priv
+    local ifc="$TUN$k" conf priv old=""
     conf=$(entry_conf "$k")
     # Ключ входа сохраняется при повторном добавлении — выход уже его знает
     priv=$(conf_get "$conf" PrivateKey)
     [[ -n "$priv" ]] || priv=$(awg genkey)
+    [[ -f "$conf" ]] && old=$(<"$conf")
     {
         echo "[Interface]"
         echo "PrivateKey = $priv"
@@ -504,8 +517,13 @@ cmd_entry_add() {
         echo "Endpoint = ${T[host]}:${T[port]}"
         echo "AllowedIPs = 0.0.0.0/0"
         echo "PersistentKeepalive = 25"
-    } > "$conf"
-    chmod 600 "$conf"
+    } > "$conf.new"
+    chmod 600 "$conf.new"
+    # Пересвязка (бот после восстановления, смены IP, «Пересвязать») не должна
+    # рвать туннель, у которого ничего не поменялось
+    local changed=1
+    [[ "$(<"$conf.new")" == "$old" ]] && ip link show "$ifc" >/dev/null 2>&1 && changed=0
+    mv "$conf.new" "$conf"
     printf 'SLOT=%s\nAUTO=%s\nENTRY=%s\nHOST=%s\n' "$k" "$auto" "$e" "${T[host]}" > "$STATE/exits/$k.env"
     grep -qx "$k" "$STATE/slots" 2>/dev/null || echo "$k" >> "$STATE/slots"
 
@@ -515,7 +533,14 @@ cmd_entry_add() {
         sysctl -qw net.ipv4.conf.all.rp_filter=2
         echo "net.ipv4.conf.all.rp_filter = 2" > /etc/sysctl.d/90-awg-cascade.conf 2>/dev/null
     fi
-    iface_up "$ifc"
+    if [[ $changed == 1 ]]; then
+        iface_up "$ifc"
+    else
+        # Живой туннель мог уйти на другой адрес выхода (ответ пришёл с его
+        # второго IP) — возвращаем записанный, сессия при этом не рвётся
+        awg set "$ifc" peer "${T[pub]}" endpoint "${T[host]}:${T[port]}" 2>/dev/null || true
+        say "Туннель к выходу $k без изменений — не перезапускаю."
+    fi
     [[ -s "$STATE/ru.zone" ]] || cmd_ru_update || warn "Список российских сетей не скачался — пока всё пойдёт через выходы"
     install_units
 
@@ -535,7 +560,7 @@ cmd_entry_del() {
     [[ "$k" =~ ^[0-9]+$ ]] || die "Нужен номер выхода: cascade.sh entry-del K [--forget]"
     if [[ -f "$(entry_conf "$k")" ]]; then
         local e; e=$(env_get "$STATE/exits/$k.env" ENTRY)
-        iface_down "awgx$k"
+        iface_down "$TUN$k"
         rm -f "$(entry_conf "$k")" "$STATE/exits/$k.env"
         say "✅ Выход $k убран со входа, маршруты обновятся в течение ${INTERVAL} с."
         say "   На самом выходе: bash /root/cascade.sh exit-unpeer ${e:-1}"
@@ -784,14 +809,14 @@ apply_static() {
 
     ensure_chain mangle CASCADE_MSS FORWARD
     iptables -t mangle -F CASCADE_MSS
-    iptables -t mangle -A CASCADE_MSS -o awgx+ -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+    iptables -t mangle -A CASCADE_MSS -o "$TUN+" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
     ensure_chain filter CASCADE_FWD FORWARD
     iptables -F CASCADE_FWD
-    iptables -A CASCADE_FWD -i "$VPN_IF" -o awgx+ -j ACCEPT
-    iptables -A CASCADE_FWD -i awgx+ -o "$VPN_IF" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+    iptables -A CASCADE_FWD -i "$VPN_IF" -o "$TUN+" -j ACCEPT
+    iptables -A CASCADE_FWD -i "$TUN+" -o "$VPN_IF" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
     ensure_chain nat CASCADE_NAT POSTROUTING
     iptables -t nat -F CASCADE_NAT
-    iptables -t nat -A CASCADE_NAT -o awgx+ -j MASQUERADE
+    iptables -t nat -A CASCADE_NAT -o "$TUN+" -j MASQUERADE
 
     sync_ip_rules
     ensure_route
@@ -815,7 +840,7 @@ config_sig() {
 # «заморозка» пропускает хендшейк и режет данные, это и есть «подключено без интернета»
 probe() {
     local out rx
-    out=$(ping -q -n -c 2 -i 0.3 -W 2 -I "awgx$1" "$NET.$1.1" 2>/dev/null)
+    out=$(ping -q -n -c 2 -i 0.3 -W 2 -I "$TUN$1" "$NET.$1.1" 2>/dev/null)
     rx=$(awk '/packets transmitted/ {print $4}' <<<"$out")
     if [[ ${rx:-0} -ge 1 ]]; then
         echo "ok $(awk -F/ '/^rtt|^round-trip/ {printf "%.0f", $5}' <<<"$out")"
@@ -831,7 +856,7 @@ health_round() {
     wait
     for k in "${EXITS[@]}"; do
         res=$(<"$RUN/probe.$k")
-        hs=$(awg show "awgx$k" latest-handshakes 2>/dev/null | awk '{print $2; exit}')
+        hs=$(awg show "$TUN$k" latest-handshakes 2>/dev/null | awk '{print $2; exit}')
         HS[$k]=$(( ${hs:-0} > 0 ? now - hs : -1 ))
         if [[ $res == ok* ]]; then
             RTT[$k]=${res#ok }; FAILC[$k]=0; OKC[$k]=$(( ${OKC[$k]:-0} + 1 ))
@@ -990,7 +1015,7 @@ cmd_status() {
             st="" since="" rtt="" hsa=""
             read -r _ st since rtt hsa <<<"$line"
             ep=$(awk -F'[ \t]*=[ \t]*' '$1 == "Endpoint" {print $2; exit}' "$(entry_conf "$k")")
-            tr=$(awg show "awgx$k" transfer 2>/dev/null | awk '{print $2, $3; exit}')
+            tr=$(awg show "$TUN$k" transfer 2>/dev/null | awk '{print $2, $3; exit}')
             case $st in
                 up)   state="✅ работает${rtt:+, $rtt мс}" ;;
                 down) state="❌ не отвечает с $(date -d "@$since" '+%d.%m %H:%M' 2>/dev/null)" ;;
@@ -998,7 +1023,9 @@ cmd_status() {
             esac
             printf '  Выход %s (%s): %s\n      хендшейк %s; «Авто»: %s; через туннель принято %s, отдано %s\n' \
                 "$k" "$ep" "$state" "$(fmt_age "$hsa")" \
-                "$([[ ${AUTO[$k]} -gt 0 ]] && echo "порядок ${AUTO[$k]}" || echo "не участвует")" \
+                "$(if [[ ${AUTO[$k]} -gt 0 ]]; then echo "порядок ${AUTO[$k]}"
+                   elif printf '%s\n' "${AUTO_LIST[@]}" | grep -qx "$k"; then echo "да — ни один не отмечен, «Авто» по всем"
+                   else echo "не участвует"; fi)" \
                 "$(fmt_bytes "${tr%% *}")" "$(fmt_bytes "${tr##* }")"
         done
         if [[ ${#AUTO_LIST[@]} -gt 0 ]] && ip link show "$VPN_IF" >/dev/null 2>&1; then
@@ -1053,7 +1080,7 @@ cmd_down() {
         sleep 1
     fi
     load_exits 2>/dev/null
-    for f in "$AWG_DIR"/awgx*.conf; do
+    for f in "$AWG_DIR"/"$TUN"[0-9]*.conf; do
         [[ -f "$f" ]] || continue
         k=$(basename "$f" .conf)
         [[ "$k" == "$EXIT_IF" ]] && continue

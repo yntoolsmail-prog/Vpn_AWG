@@ -536,6 +536,10 @@ async def _check_server_ip(context):
         logging.getLogger(__name__).warning(f"_check_server_ip: {e}")
     finally:
         if changed:
+            # Основной — выход: у входов в туннелях его прежний IP. Бот сейчас
+            # перезапустится, поэтому пересвязка — после запуска (relink_pending)
+            if any(s.get("is_primary") and cas.involved(s) for s in load_servers()):
+                cas.request_relink("🔀 Каскад после смены IP основного:")
             restart_after_restore(BOT_SERVICE)
 
 
@@ -614,7 +618,7 @@ async def srv_del_ok(query, srv_idx: int):
     emoji = srv.get("emoji", "🖥")
 
     # Каскад — до остановки AWG: вход снимается с выходов, выход — со входов, его
-    # слот запоминается у входов (on_delete меняет servers на месте)
+    # слот запоминается у основного (on_delete меняет servers на месте)
     cascade_note = ""
     if cas.is_entry(srv) or srv.get("slot"):
         await query.edit_message_text(f"⏳ Снимаю *{emoji} {name}* с каскада…", parse_mode="Markdown")
@@ -1002,6 +1006,8 @@ async def srv_edit_receive(update, context: ContextTypes.DEFAULT_TYPE):
     if field == "ip":
         lines += await _srv_domains_report(d.get("srv_id"))
     await status.edit_text("\n".join(lines), reply_markup=_srv_edit_done_kb(srv_idx))
+    if field == "ip":
+        _cascade_after_ip(chat, d.get("srv_id"))
     return ConversationHandler.END
 
 
@@ -1024,6 +1030,8 @@ async def srv_edit_force(update, context: ContextTypes.DEFAULT_TYPE):
         "\n".join(lines),
         reply_markup=_srv_edit_done_kb(srv_idx) if srv_idx is not None else back_kb("servers"),
     )
+    if field == "ip":
+        _cascade_after_ip(query.message.chat, srv_id)
     return ConversationHandler.END
 
 
@@ -1274,8 +1282,12 @@ async def _cascade_card_text(srv: dict, servers: list) -> str:
                 lines.append(f"❌ {name} — не отвечает, его устройства на живых выходах")
             else:
                 lines.append(f"… {name} — проверяется")
-        if not h["exits"]:
-            lines.append("Выходов нет: включите «Через вход» или «В Авто» у зарубежных серверов.")
+        missing = [x for x in cas.exits(servers) if int(x["slot"]) not in h["exits"]]
+        for x in missing:
+            lines.append(f"⚠️ {_md(cas.srv_label(x))} — не связан с этим входом, нажмите «Пересвязать выходы»")
+        if not h["exits"] and not missing:
+            lines.append("Выходов нет: устройства на этом входе выходят в интернет с его IP. "
+                         "Включите «Через вход» или «В Авто» у зарубежных серверов.")
         return "\n".join(lines)
     lines = ["", "", "*Выдача потребителям:*",
              "🔗 напрямую — конфиг на этот сервер, как раньше"]
@@ -1362,18 +1374,18 @@ async def srv_issue_toggle(query, f: str, srv_idx: int, take_slot: int = None):
         return
     becomes_exit = value and not cas.is_exit(srv)
     if becomes_exit and take_slot is None and not srv.get("slot"):
-        retired = cas.retired_slots(servers)
-        if retired:
+        free = cas.free_slots(servers, srv)
+        if free:
             rows = [[InlineKeyboardButton("🆕 Новый номер", callback_data=f"srv_slotset_{f}_{srv_idx}_0")]]
             rows += [[InlineKeyboardButton(f"♻️ Слот {k} — был {label}",
                                            callback_data=f"srv_slotset_{f}_{srv_idx}_{k}")]
-                     for k, label in retired.items()]
+                     for k, label in free.items()]
             rows.append([InlineKeyboardButton(BTN_BACK_CARD, callback_data=f"srv_card_{srv_idx}")])
             await query.edit_message_text(
                 f"{cas.srv_label(srv)} становится выходом.\n\n"
-                "Можно занять слот удалённого сервера: его конфиги «через вход» "
-                "сразу пойдут через этот сервер, перекачивать ничего не нужно. "
-                "Или выдать новый номер.",
+                "Можно занять слот удалённого или выключенного выхода: его конфиги "
+                "«через вход» сразу пойдут через этот сервер, перекачивать ничего не "
+                "нужно. Или выдать новый номер.",
                 reply_markup=InlineKeyboardMarkup(rows))
             return
     other = "auto" if field == "via" else "via"
@@ -1432,9 +1444,10 @@ async def srv_unentry_confirm(query, srv_idx: int):
     srv = servers[srv_idx]
     await query.edit_message_text(
         f"⛔ {cas.srv_label(srv)} перестанет быть входом.\n\n"
-        "Каскад на нём погаснет: устройства, подключённые к нему, будут выходить в "
-        "интернет с его российского IP. Сам AWG и устройства не трогаются — это "
-        "останется обычный слейв без выдачи (включить — в карточке).",
+        "Каскад на нём погаснет: устройства, подключённые к нему, с «Авто» будут "
+        "выходить в интернет с его российского IP, а конфиги стран через вход "
+        "перестанут работать. Сам AWG и устройства не трогаются — это останется "
+        "обычный слейв без выдачи (включить — в карточке).",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("⛔ Да, снять роль входа", callback_data=f"srv_unentry_ok_{srv_idx}")],
             [InlineKeyboardButton(BTN_BACK_CARD, callback_data=f"srv_card_{srv_idx}")],
@@ -1514,3 +1527,54 @@ async def _check_cascade(context):
                 await context.bot.send_message(ADMIN_ID, m)
             except Exception:
                 pass
+
+
+def _cascade_after_ip(chat, srv_id: str):
+    """Сменился IP входа или выхода — пересвязка фоном, отчёт новым сообщением.
+    Без неё у входа в туннеле остался бы прежний адрес выхода, а у выхода в
+    фаерволе — прежний адрес входа."""
+    _, srv = _srv_find(load_servers(), srv_id)
+    if not srv or not cas.involved(srv):
+        return
+
+    async def run():
+        while _CASCADE_RUNNING.is_set():
+            await asyncio.sleep(2)
+        _CASCADE_RUNNING.set()
+        try:
+            lines = await asyncio.get_running_loop().run_in_executor(None, cas.after_ip_change, srv_id)
+        except Exception as e:
+            lines = [f"❌ {e}"]
+        finally:
+            _CASCADE_RUNNING.clear()
+        _cascade_cache.clear()
+        try:
+            await chat.send_message(f"🔀 Каскад после смены IP {cas.srv_label(srv)}:\n\n"
+                                    + ("\n".join(lines) or "✅ Готово"), reply_markup=_card_kb(srv_id))
+        except Exception:
+            pass
+
+    t = asyncio.get_running_loop().create_task(run())
+    _CASCADE_TASKS.add(t)
+    t.add_done_callback(_CASCADE_TASKS.discard)
+
+
+async def _cascade_startup(context):
+    """Через минуту после запуска: пересвязать входы, если это заказали перед
+    перезапуском — восстановление бэкапа или смена IP основного (relink_pending)."""
+    if not os.path.exists(cas.RELINK_FLAG):
+        return
+    _CASCADE_RUNNING.set()
+    try:
+        lines = await asyncio.get_running_loop().run_in_executor(None, cas.relink_pending)
+    except Exception as e:
+        lines = [f"❌ Пересвязка каскада: {e}"]
+    finally:
+        _CASCADE_RUNNING.clear()
+    _cascade_cache.clear()
+    if lines:
+        try:
+            # Без parse_mode: в отчёте тексты ошибок с серверов
+            await context.bot.send_message(ADMIN_ID, "\n".join(lines)[:4000])
+        except Exception:
+            pass
