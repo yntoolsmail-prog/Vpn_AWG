@@ -37,7 +37,7 @@ from awg_core import (
     is_approved, load_client_excl, load_users, make_conf_for_client, make_conf_for_client_ep,
     make_vpn_link, make_wg_conf, process_domain,
     remove_client_from_awg, save_client_excl, save_users, set_maintenance,
-    load_servers, post_restore_fixup,
+    load_servers, post_restore_fixup, restart_after_restore,
 )
 from awg_ssh import PARAMIKO_AVAILABLE, ssh_sync_peer_to_slave
 from awg_stats import _histogram_for_tma
