@@ -214,6 +214,7 @@ PROJECT_FILES=(
     "lib/ssh_setup.sh:/root/lib/ssh_setup.sh"
     "lib/modules_setup.sh:/root/lib/modules_setup.sh"
     "lib/slim.sh:/root/lib/slim.sh"
+    "cascade.sh:/root/cascade.sh"
     # Опциональные модули (пропускаются если не установлены)
     "modules/tma/tma_server.py:/root/modules/tma/tma_server.py"
     "tma/index.html:${AWG_DIR}/tma/index.html"
