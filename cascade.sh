@@ -168,7 +168,10 @@ gen_obfs() {
 # Строки KEY=VALUE в base64 одной строкой: копируется целиком, без переносов.
 # При разборе каждое поле проверяется по своему шаблону — токен вставляет
 # человек, и в конфиг из него не должно попасть ничего лишнего
-token_encode() { printf 'AWGX1:%s\n' "$(printf '%s\n' "$@" | base64 -w0)"; }
+# Последняя строка — контрольная сумма: обрезанный при копировании токен иначе
+# разобрался бы без части параметров обфускации, и туннель молча не поднялся бы
+token_sum() { printf '%s\n' "$@" | md5sum | cut -c1-8; }
+token_encode() { printf 'AWGX1:%s\n' "$(printf '%s\n' "$@" "sum=$(token_sum "$@")" | base64 -w0)"; }
 
 valid_kv() {
     case $1 in
@@ -189,17 +192,23 @@ valid_kv() {
 
 declare -A T
 load_token() {
-    local t="${1//[[:space:]]/}" line k v raw
+    local t="${1//[[:space:]]/}" line k v raw body=() sum=""
     T=()
     [[ "$t" == AWGX1:* ]] || die "Это не токен каскада: он начинается с AWGX1:"
     raw=$(printf '%s' "${t#AWGX1:}" | base64 -d 2>/dev/null) \
-        || die "Токен повреждён — скопируйте его целиком, одной строкой"
+        || die "Токен повреждён — скопируйте строку целиком"
     while IFS= read -r line; do
+        [[ "$line" == sum=* ]] && { sum=${line#sum=}; continue; }
+        body+=("$line")
+    done <<<"$raw"
+    [[ -n "$sum" && "$sum" == "$(token_sum "${body[@]}")" ]] \
+        || die "Токен неполный или повреждён — скопируйте строку целиком"
+    for line in "${body[@]}"; do
         [[ "$line" == *=* ]] || continue
         k=${line%%=*}; v=${line#*=}
         valid_kv "$k" "$v" || die "В токене недопустимое поле: ${k:0:20}"
         T[$k]=$v
-    done <<<"$raw"
+    done
     [[ -n "${T[role]:-}" && -n "${T[slot]:-}" && -n "${T[pub]:-}" ]] || die "Токен неполный"
 }
 
@@ -264,10 +273,9 @@ print_exit_token() {
         [[ -n "$val" ]] && lines+=("$key=$val")
     done
     echo
-    echo "Токен выхода — выполните на входе (строку токена копировать целиком):"
-    echo "  bash /root/cascade.sh entry-add 'ТОКЕН'"
+    echo "Выполните на ВХОДЕ эту команду (строку копировать целиком, токен в ней — ключ туннеля):"
     echo
-    token_encode "${lines[@]}"
+    echo "bash /root/cascade.sh entry-add '$(token_encode "${lines[@]}")'"
     echo
 }
 
@@ -511,10 +519,9 @@ cmd_entry_add() {
     valid_kv ip "$myip" || die "Не определил внешний адрес входа — укажите --ip"
     say "✅ Туннель к выходу $k (${T[host]}) поднят. «Авто»: $([[ $auto -gt 0 ]] && echo "порядок $auto" || echo "не участвует")."
     echo
-    echo "Токен входа — выполните на ВЫХОДЕ $k (строку токена копировать целиком):"
-    echo "  bash /root/cascade.sh exit-peer 'ТОКЕН'"
+    echo "Выполните на ВЫХОДЕ $k эту команду (строку копировать целиком):"
     echo
-    token_encode v=1 role=entry "slot=$k" "entry=$e" "pub=$(awg pubkey <<<"$priv")" "ip=$myip"
+    echo "bash /root/cascade.sh exit-peer '$(token_encode v=1 role=entry "slot=$k" "entry=$e" "pub=$(awg pubkey <<<"$priv")" "ip=$myip")'"
     echo
 }
 
