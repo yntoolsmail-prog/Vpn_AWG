@@ -1290,10 +1290,19 @@ async def _cascade_card_text(srv: dict, servers: list) -> str:
                          "Включите «Через вход» или «В Авто» у зарубежных серверов.")
         return "\n".join(lines)
     lines = ["", "", "*Выдача потребителям:*",
-             "🔗 напрямую — конфиг на этот сервер, как раньше"]
-    if cas.entries(servers):
-        lines += ["🚪 через вход — отдельной страной через российский вход",
-                  "🌍 в «Авто» — делит устройства «Авто» с другими выходами"]
+             "🔗 «Напрямую» — конфиг на этот сервер, как раньше"]
+    if cas.is_exit(srv):
+        i = cas.issue_of(srv)
+        lines += [f"🚪 *Выход {srv['slot']}* — через него вход выпускает в интернет всё, "
+                  "кроме российских сайтов:",
+                  f"{'✅' if i['auto'] else '⬜'} «🌍 Авто» — пункт в списке у пользователей: вход "
+                  "делит устройства между выходами, отмеченными здесь, упал выход — "
+                  "переводит на живой. Все конфиги на домен входа — «Авто»",
+                  f"{'✅' if i['via'] else '⬜'} отдельный пункт «{_md(cas.srv_label(srv))}» — "
+                  "через вход, но только через этот выход"]
+    else:
+        lines.append("🚪 «Сделать выходом» — через этот сервер российский вход будет "
+                     "выпускать зарубежный трафик")
     return "\n".join(lines)
 
 
@@ -1307,11 +1316,15 @@ def _cascade_card_rows(srv: dict, idx: int, servers: list) -> list:
     mark = lambda on: "✅" if on else "⬜"
     rows.append([InlineKeyboardButton(f"{mark(i['direct'])} Напрямую — домен / IP",
                                       callback_data=f"srv_iss_d_{idx}")])
-    if cas.entries(servers):
-        rows.append([InlineKeyboardButton(f"{mark(i['via'])} Через вход — отдельной страной",
-                                          callback_data=f"srv_iss_v_{idx}")])
-        rows.append([InlineKeyboardButton(f"{mark(i['auto'])} В «Авто»",
+    if cas.is_exit(srv):
+        rows.append([InlineKeyboardButton(f"{mark(i['auto'])} Входит в «🌍 Авто»",
                                           callback_data=f"srv_iss_a_{idx}")])
+        rows.append([InlineKeyboardButton(
+            f"{mark(i['via'])} Пункт «{srv.get('emoji', '🖥')} {srv.get('name', '')}» через вход",
+            callback_data=f"srv_iss_v_{idx}")])
+        rows.append([InlineKeyboardButton("⛔ Перестать быть выходом", callback_data=f"srv_unexit_{idx}")])
+    else:
+        rows.append([InlineKeyboardButton("🚪 Сделать выходом", callback_data=f"srv_mkexit_{idx}")])
     rows.append([InlineKeyboardButton("🔀 Сделать входом", callback_data=f"srv_mkentry_{idx}")])
     return rows
 
@@ -1359,7 +1372,8 @@ async def _cascade_bg(query, srv_id: str, title: str, fn, *args):
 
 
 async def srv_issue_toggle(query, f: str, srv_idx: int, take_slot: int = None):
-    """Кнопка выдачи в карточке: d — напрямую, v — через вход, a — в «Авто»."""
+    """Переключатель выдачи в карточке: d — напрямую; у выхода a — входит в «🌍 Авто»,
+    v — отдельный пункт через вход. Стать выходом — «🚪 Сделать выходом»."""
     servers = load_servers()
     if srv_idx >= len(servers) or f not in ("d", "v", "a"):
         await query.answer("Сервер не найден.", show_alert=True)
@@ -1371,36 +1385,101 @@ async def srv_issue_toggle(query, f: str, srv_idx: int, take_slot: int = None):
         cas.set_issue(srv["id"], field, value)
         await show_server_card(query, srv_idx)
         return
-    becomes_exit = value and not cas.is_exit(srv)
-    if becomes_exit and take_slot is None and not srv.get("slot"):
-        free = cas.free_slots(servers, srv)
-        if free:
-            rows = [[InlineKeyboardButton("🆕 Новый номер", callback_data=f"srv_slotset_{f}_{srv_idx}_0")]]
-            rows += [[InlineKeyboardButton(f"♻️ Слот {k} — был {label}",
-                                           callback_data=f"srv_slotset_{f}_{srv_idx}_{k}")]
-                     for k, label in free.items()]
-            rows.append([InlineKeyboardButton(BTN_BACK_CARD, callback_data=f"srv_card_{srv_idx}")])
-            await query.edit_message_text(
-                f"{cas.srv_label(srv)} становится выходом.\n\n"
-                "Можно занять слот удалённого или выключенного выхода: его конфиги "
-                "«через вход» сразу пойдут через этот сервер, перекачивать ничего не "
-                "нужно. Или выдать новый номер.",
-                reply_markup=InlineKeyboardMarkup(rows))
-            return
-    other = "auto" if field == "via" else "via"
-    stops_exit = cas.is_exit(srv) and not value and not cas.issue_of(srv)[other]
-    if not becomes_exit and not stops_exit:
-        # Выход им и остаётся: «через вход» — только выдача, «Авто» — одна команда входам
-        lines = await asyncio.get_running_loop().run_in_executor(
-            None, cas.set_issue, srv["id"], field, value)
-        if lines:
-            await query.answer("\n".join(lines)[:190], show_alert=True)
-        await show_server_card(query, srv_idx)
+    if not cas.is_exit(srv):
+        # Кнопки со старого экрана (до «Сделать выходом»), в том числе выбор номера
+        if take_slot is not None:
+            await srv_mkexit_ok(query, srv_idx, take_slot)
+        else:
+            await srv_mkexit_confirm(query, srv_idx)
         return
-    title = (f"{cas.srv_label(srv)}: связываю с входом" if becomes_exit
-             else f"{cas.srv_label(srv)}: снимаю выход")
-    await _cascade_bg(query, srv["id"], title, cas.set_issue, srv["id"], field, value,
-                      take_slot or None)
+    other = "auto" if field == "via" else "via"
+    if not value and not cas.issue_of(srv)[other]:
+        await query.answer("Выход должен быть хоть где-то в выдаче: в «🌍 Авто» или отдельным "
+                           "пунктом. Убрать выход — «⛔ Перестать быть выходом».", show_alert=True)
+        return
+    # Выход им и остаётся: отдельный пункт — только выдача, «Авто» — одна команда входам
+    lines = await asyncio.get_running_loop().run_in_executor(
+        None, cas.set_issue, srv["id"], field, value)
+    if lines:
+        await query.answer("\n".join(lines)[:190], show_alert=True)
+    await show_server_card(query, srv_idx)
+
+
+async def srv_mkexit_confirm(query, srv_idx: int):
+    """«🚪 Сделать выходом»: что изменится и, если есть свободные номера, какой взять."""
+    servers = load_servers()
+    if srv_idx >= len(servers) or cas.is_entry(servers[srv_idx]):
+        await query.answer("Сервер не найден.", show_alert=True)
+        return
+    srv = servers[srv_idx]
+    label = cas.srv_label(srv)
+    text = (f"🚪 Сделать {label} выходом?\n\n"
+            "Выход — зарубежный сервер, через который российский вход выпускает в "
+            "интернет всё, кроме российских сайтов.\n"
+            "• у пользователей он войдёт в «🌍 Авто» и появится отдельным пунктом "
+            f"«{label}» через вход — любое из двух убирается в карточке;\n"
+            "• выдача напрямую не меняется;\n")
+    text += ("• бот свяжет его со всеми входами — до пары минут." if cas.entries(servers) else
+             "• входа пока нет — связка будет, когда сделаете входом российский сервер.")
+    rows = []
+    free = {} if srv.get("slot") else cas.free_slots(servers, srv)
+    if srv.get("slot"):
+        text += f"\n\nНомер выхода прежний — {srv['slot']}: конфиги этого номера снова пойдут через него."
+    if free:
+        text += ("\n\nМожно занять номер удалённого или выключенного выхода: его конфиги "
+                 "через вход сразу пойдут через этот сервер, перекачивать ничего не нужно. "
+                 "«Новый номер» — если выход уже поднимали на сервере вручную, бот возьмёт тот.")
+        rows.append([InlineKeyboardButton("🆕 Новый номер", callback_data=f"srv_mkexit_ok_{srv_idx}_0")])
+        rows += [[InlineKeyboardButton(f"♻️ Номер {k} — был {lbl}",
+                                       callback_data=f"srv_mkexit_ok_{srv_idx}_{k}")]
+                 for k, lbl in free.items()]
+    else:
+        rows.append([InlineKeyboardButton("✅ Сделать выходом", callback_data=f"srv_mkexit_ok_{srv_idx}_0")])
+    rows.append([InlineKeyboardButton(BTN_BACK_CARD, callback_data=f"srv_card_{srv_idx}")])
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(rows))
+
+
+async def srv_mkexit_ok(query, srv_idx: int, take_slot: int = 0):
+    servers = load_servers()
+    if srv_idx >= len(servers) or cas.is_entry(servers[srv_idx]):
+        await query.answer("Сервер не найден.", show_alert=True)
+        return
+    srv = servers[srv_idx]
+    await _cascade_bg(query, srv["id"], f"{cas.srv_label(srv)}: делаю выходом",
+                      cas.make_exit, srv["id"], take_slot or None)
+
+
+async def srv_unexit_confirm(query, srv_idx: int):
+    servers = load_servers()
+    if srv_idx >= len(servers) or not cas.is_exit(servers[srv_idx]):
+        await query.answer("Это не выход.", show_alert=True)
+        return
+    srv = servers[srv_idx]
+    label = cas.srv_label(srv)
+    last = len(cas.exits(servers)) == 1 and cas.entries(servers)
+    await query.edit_message_text(
+        f"⛔ {label} перестанет быть выходом.\n\n"
+        "• входы снимут туннель к нему, «🌍 Авто» перейдёт на остальные выходы;\n"
+        f"• конфиги пункта «{label}» через вход пойдут через «Авто»;\n"
+        f"• номер {srv['slot']} останется за сервером — сделаете выходом снова, и эти "
+        "конфиги вернутся к нему;\n"
+        "• выдача напрямую и сам AWG не трогаются."
+        + ("\n\n⚠️ Это последний выход: устройства на входе будут выходить в интернет "
+           "с его российского IP." if last else ""),
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("⛔ Да, перестать быть выходом", callback_data=f"srv_unexit_ok_{srv_idx}")],
+            [InlineKeyboardButton(BTN_BACK_CARD, callback_data=f"srv_card_{srv_idx}")],
+        ]))
+
+
+async def srv_unexit_ok(query, srv_idx: int):
+    servers = load_servers()
+    if srv_idx >= len(servers) or not cas.is_exit(servers[srv_idx]):
+        await query.answer("Это не выход.", show_alert=True)
+        return
+    srv = servers[srv_idx]
+    await _cascade_bg(query, srv["id"], f"{cas.srv_label(srv)}: снимаю выход",
+                      cas.unmake_exit, srv["id"])
 
 
 async def srv_mkentry_confirm(query, srv_idx: int):

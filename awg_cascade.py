@@ -399,35 +399,41 @@ def _link_all(servers: list, ex: dict) -> list:
     return out
 
 
-def set_issue(srv_id: str, field: str, value: bool, take_slot: int = None) -> list:
-    """Меняет выдачу сервера (direct / via / auto) и приводит каскад в соответствие:
-    стал выходом — связать со всеми входами (номер: свой прежний, «занятый» take_slot,
-    поднятый на нём вручную или новый); перестал — снять со входов (конфиги его
+def _assign_slot(servers: list, srv: dict, take_slot: int = None):
+    """Номер для нового выхода: «занятый» take_slot, свой прежний, поднятый на
+    сервере вручную (cascade.sh info) или новый."""
+    if take_slot:
+        _take_slot(servers, srv, int(take_slot))
+    elif not srv.get("slot") or any(s is not srv and s.get("slot") == srv.get("slot") for s in servers):
+        srv["slot"] = None
+        try:
+            k = info(srv).get("EXIT_SLOT", "")
+        except Exception:
+            k = ""
+        if k.isdigit() and not any(s.get("slot") == int(k) for s in servers):
+            srv["slot"] = int(k)   # выход уже поднимали вручную — берём его номер
+            _unretire(servers, int(k))
+        else:
+            srv["slot"] = _new_slot(servers)
+
+
+def _apply_issue(srv_id: str, changes: dict, take_slot: int = None) -> list:
+    """Меняет выдачу сервера и приводит каскад в соответствие: стал выходом —
+    номер и связка со всеми входами; перестал — снять со входов (конфиги его
     слота уходят в «Авто») и погасить; поменялось «Авто» — сказать входам.
     Синхронная, с SSH — из run_in_executor. Возвращает строки отчёта."""
     servers = load_servers()
     srv = _find(servers, srv_id)
-    if not srv or is_entry(srv) or field not in ("direct", "via", "auto"):
+    if not srv or is_entry(srv):
         return ["❌ Сервер не найден."]
     was = is_exit(srv)
+    old_auto = issue_of(srv)["auto"]
     iss = issue_of(srv)
-    iss[field] = bool(value)
+    iss.update({k: bool(v) for k, v in changes.items()})
     srv["issue"] = iss
     lines = []
     if not was and (iss["via"] or iss["auto"]):
-        if take_slot:
-            _take_slot(servers, srv, int(take_slot))
-        elif not srv.get("slot") or any(s is not srv and s.get("slot") == srv.get("slot") for s in servers):
-            srv["slot"] = None
-            try:
-                k = info(srv).get("EXIT_SLOT", "")
-            except Exception:
-                k = ""
-            if k.isdigit() and not any(s.get("slot") == int(k) for s in servers):
-                srv["slot"] = int(k)   # выход уже поднимали вручную — берём его номер
-                _unretire(servers, int(k))
-            else:
-                srv["slot"] = _new_slot(servers)
+        _assign_slot(servers, srv, take_slot)
     save_servers(servers)
     now = is_exit(srv)
     if not was and now:
@@ -439,15 +445,34 @@ def set_issue(srv_id: str, field: str, value: bool, take_slot: int = None) -> li
             lines += _unlink(e, srv)
         lines += _down(srv)
         lines.append(f"Выход {srv['slot']} снят. Конфиги его слота работают через «Авто».")
-    elif now and field == "auto":
+    elif now and iss["auto"] != old_auto:
+        k = int(srv["slot"])
         for e in entries(servers):
             try:
-                rc, out = _run(e, f"auto {int(srv['slot'])} {int(srv['slot']) if value else 0}")
+                rc, out = _run(e, f"auto {k} {k if iss['auto'] else 0}")
                 if rc:
                     lines.append(f"⚠️ {srv_label(e)}: {_tail(out)}")
             except Exception as err:
                 lines.append(f"⚠️ {srv_label(e)}: {err}")
     return lines
+
+
+def set_issue(srv_id: str, field: str, value: bool, take_slot: int = None) -> list:
+    """Один переключатель выдачи: direct / via / auto."""
+    if field not in ("direct", "via", "auto"):
+        return ["❌ Сервер не найден."]
+    return _apply_issue(srv_id, {field: value}, take_slot)
+
+
+def make_exit(srv_id: str, take_slot: int = None) -> list:
+    """«Сделать выходом»: в «🌍 Авто» и отдельным пунктом через вход (любое из
+    двух потом убирается в карточке), связка со всеми входами."""
+    return _apply_issue(srv_id, {"via": True, "auto": True}, take_slot)
+
+
+def unmake_exit(srv_id: str) -> list:
+    """«Перестать быть выходом»: входы снимают туннель, номер остаётся за сервером."""
+    return _apply_issue(srv_id, {"via": False, "auto": False})
 
 
 def make_entry(srv_id: str) -> list:

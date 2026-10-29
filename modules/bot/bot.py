@@ -87,7 +87,8 @@ from handlers.servers import (
     srv_checkdns, srv_del_confirm, srv_del_ok, srv_detach_ok, srv_sync_now,
     show_srv_edit, srv_edit_field_start, srv_edit_receive, srv_edit_force, srv_edit_cancel,
     srv_adddomain_start, srv_adddomain_pick, srv_adddomain_receive,
-    srv_issue_toggle, srv_mkentry_confirm, srv_mkentry_ok, srv_unentry_confirm,
+    srv_issue_toggle, srv_mkexit_confirm, srv_mkexit_ok, srv_unexit_confirm, srv_unexit_ok,
+    srv_mkentry_confirm, srv_mkentry_ok, srv_unentry_confirm,
     srv_unentry_ok, srv_relink, _check_cascade, _cascade_startup,
 )
 from handlers.maintenance import (
@@ -431,6 +432,15 @@ async def _button_dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif re.fullmatch(r"srv_slotset_[va]_\d+_\d+", data) and is_admin:
         _, _, f, idx, slot = data.split("_")
         await srv_issue_toggle(query, f, int(idx), take_slot=int(slot))
+    elif re.fullmatch(r"srv_mkexit_ok_\d+_\d+", data) and is_admin:
+        _, _, _, idx, slot = data.split("_")
+        await srv_mkexit_ok(query, int(idx), int(slot))
+    elif re.fullmatch(r"srv_mkexit_\d+", data) and is_admin:
+        await srv_mkexit_confirm(query, int(data[11:]))
+    elif re.fullmatch(r"srv_unexit_ok_\d+", data) and is_admin:
+        await srv_unexit_ok(query, int(data[14:]))
+    elif re.fullmatch(r"srv_unexit_\d+", data) and is_admin:
+        await srv_unexit_confirm(query, int(data[11:]))
     elif re.fullmatch(r"srv_mkentry_ok_\d+", data) and is_admin:
         await srv_mkentry_ok(query, int(data[15:]))
     elif re.fullmatch(r"srv_mkentry_\d+", data) and is_admin:
