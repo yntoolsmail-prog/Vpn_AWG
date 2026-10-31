@@ -8,7 +8,7 @@ from awg_core import (
     gen_obfs, get_all_clients, get_allowed_ips_for_client,
     get_awg_dump, get_combined_awg_dump, get_client_keys, get_client_pub, get_user_clients,
     get_user_name, is_approved, load_client_excl, load_servers,
-    make_conf_for_client, make_conf_for_client_ep, make_vpn_link, vpn_qr_texts,
+    make_conf_for_client, make_conf_for_client_ep, make_vpn_link, qr_stack_png, vpn_qr_texts,
     remove_client_from_awg, resolve_endpoint, save_client_excl,
     fmt_handshake, fmt_bytes, SERVER_PUBLIC,
 )
@@ -639,8 +639,10 @@ async def do_send_vpn_qr(query, name: str, ep: str, server: dict, spub: str, spr
                          srv_emoji: str, slot: int, kind: str, series: bool):
     """QR для сканера AmneziaVPN (vpn_qr_texts), содержимое — как у ссылки vpn://.
     Сначала один плотный код и под ним кнопка «не читается»: она присылает тот же
-    ключ серией, как у самого приложения, — каждый код отдельным сообщением,
-    друг под другом во всю ширину (в альбоме два кода встают в ряд и мельчают)."""
+    ключ серией — коды друг под другом одной картинкой (qr_stack_png), чтобы оба
+    были на одном экране. Альбом ставил их в ряд и мельчил, отдельные сообщения
+    разносили подписью. Сканер собирает куски сам: наводят на оба разом или по
+    очереди, отдельного экрана «отсканировано 1 из 2» на Android нет."""
     link = _device_vpn_link(name, ep, spub, sprt, srv_emoji, slot, kind)
     if not link:
         await query.message.reply_text(f"❌ Не удалось прочитать ключи для {name}")
@@ -652,28 +654,24 @@ async def do_send_vpn_qr(query, name: str, ep: str, server: dict, spub: str, spr
              "В AmneziaVPN: добавить сервер → «QR-код»")
     try:
         texts = vpn_qr_texts(link, series)
-        # Без файлов на диске — в конфиге приватный ключ
-        pngs = [subprocess.check_output([QRENCODE_BIN, "-t", "PNG", "-l", "L", "-s", "8", "-o", "-"],
-                                        input=t.encode()) for t in texts]
-        if len(pngs) == 1:
+        if len(texts) == 1:
+            # Без файлов на диске — в конфиге приватный ключ
+            png = subprocess.check_output([QRENCODE_BIN, "-t", "PNG", "-l", "L", "-s", "8", "-o", "-"],
+                                          input=texts[0].encode())
             # У 2.0 серия — тот же один код: кнопка «2 кода» ничего бы не дала
             cb = None if series or len(vpn_qr_texts(link, True)) < 2 else \
                 _vpn_qr_series_cb(name, server, ep, slot)
             await query.message.reply_photo(
-                photo=pngs[0], parse_mode="Markdown",
+                photo=png, parse_mode="Markdown",
                 caption=head + ", наведите камеру." + (
                     "\n\nНе считывается с экрана — нажмите кнопку ниже: тот же ключ "
                     "двумя кодами покрупнее." if cb else ""),
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
                     "🔍 Не читается — 2 кода крупнее", callback_data=cb)]]) if cb else None)
         else:
-            n = len(pngs)
-            for i, png in enumerate(pngs):
-                await query.message.reply_photo(
-                    photo=png, parse_mode="Markdown",
-                    caption=(f"{head}: наведите камеру на код 1, затем на код 2 ниже — приложение "
-                             f"покажет «отсканировано 1 из {n}», порядок любой.\n\n*Код 1 из {n}*"
-                             if i == 0 else f"*Код {i + 1} из {n}*"))
+            await query.message.reply_photo(
+                photo=qr_stack_png(texts), parse_mode="Markdown",
+                caption=f"{head} и наведите камеру на оба кода — разом или по очереди.")
     except Exception as e:
         await query.message.reply_text(f"❌ Ошибка QR: {e}")
     # Кнопка «2 кода» висит под фото: карточку там не перерисовать — в фото нет текста
