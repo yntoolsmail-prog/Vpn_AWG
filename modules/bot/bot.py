@@ -700,6 +700,33 @@ async def _button_dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await do_send_share(query, parts[1], parts[0])
         else:
             await show_share_ep_select(query, rest, user_id)
+    # ── QR для AmneziaVPN: vq1 — один код, vq2 — серия, как у самого приложения ──
+    elif re.match(r"vq[12]_.", data):
+        action, rest = data[:3], data[4:]
+        from handlers.clients import _do_send_action, _show_ep_select, _show_server_select
+        m = re.match(r"s(\d+)_e(\d+)_(.+)", rest)
+        a = re.match(r"auto_(\d+)_(.+)", rest)
+        if m:
+            si, ei, n = int(m.group(1)), int(m.group(2)), m.group(3)
+            servers = load_servers()
+            if si < len(servers) and ei < len(servers[si].get("endpoints", [])):
+                await _do_send_action(query, n, action, servers[si]["endpoints"][ei]["value"], servers[si])
+        elif a:
+            si, n = int(a.group(1)), a.group(2)
+            servers = load_servers()
+            if si < len(servers):
+                srv = servers[si]
+                ep = next((e for e in srv.get("endpoints", []) if e.get("type") == "domain"),
+                          srv["endpoints"][0] if srv.get("endpoints") else None)
+                if ep:
+                    await _do_send_action(query, n, action, ep["value"], srv)
+        elif re.match(r"k\d+_.", rest):
+            key, n = rest.split("_", 1)
+            await send_option(query, n, action, key)
+        elif rest.startswith("adv_"):
+            await _show_ep_select(query, rest[4:], user_id, action)
+        else:
+            await _show_server_select(query, rest, user_id, action)
     elif data.startswith("del_"):
         await do_delete(query, data[4:], user_id)
     elif data.startswith("confirm_del_"):

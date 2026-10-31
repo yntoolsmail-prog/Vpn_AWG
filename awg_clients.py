@@ -301,6 +301,34 @@ def make_vpn_link(priv, pub, ip, psk, obfs, name, endpoint: str = None,
     return "vpn://" + base64.urlsafe_b64encode(p).decode().rstrip("=")
 
 
+QR_MAGIC = 1984   # qrCodeUtils::qrMagicCode в AmneziaVPN
+QR_CHUNK = 850    # байт сжатого конфига на код — как у самого приложения
+
+
+def vpn_qr_texts(link: str, series: bool) -> list:
+    """Тексты QR для сканера AmneziaVPN из ссылки vpn://.
+
+    Ссылку с «vpn://» сканер не разбирает (ImportController::parseQrCodeChunk
+    декодирует base64 вместе с префиксом и получает мусор), а вставленную текстом —
+    разбирает: поэтому QR со ссылкой «не работал». Один код — та же строка без
+    «vpn://» (плотный: ~1660 символов у 3.1, версия QR 30). Серия — как у самого
+    приложения (qrCodeUtils::generateQrCodeImageSeries): сжатый конфиг кусками по
+    850 байт, каждый — QDataStream (qint16 1984, quint8 число кусков, quint8 номер,
+    QByteArray: quint32 длина + байты) в base64url без «=». Порядок сканирования
+    любой, приложение показывает «отсканировано K из N»."""
+    payload = link[6:] if link.startswith("vpn://") else link
+    if not series:
+        return [payload]
+    raw = base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))
+    n = -(-len(raw) // QR_CHUNK)
+    out = []
+    for i in range(n):
+        piece = raw[i * QR_CHUNK:(i + 1) * QR_CHUNK]
+        blob = struct.pack(">hBBI", QR_MAGIC, n, i, len(piece)) + piece
+        out.append(base64.urlsafe_b64encode(blob).decode().rstrip("="))
+    return out
+
+
 def _remove_peer_from_conf(name: str):
     """Удаляет блок # Client: name … [Peer] … из awg0.conf.
     Останавливает скип на следующем '# Client:' или на секции не-[Peer]."""

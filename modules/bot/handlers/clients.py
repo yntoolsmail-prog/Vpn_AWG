@@ -1,5 +1,5 @@
 import os, tempfile, shutil, re, asyncio, subprocess, html
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaDocument
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaDocument, InputMediaPhoto
 from telegram.ext import ContextTypes, ConversationHandler
 from awg_core import (
     ADMIN_ID, AWG_IFACE, CLIENTS_DIR, EXCL_EXT, QRENCODE_BIN,
@@ -8,7 +8,7 @@ from awg_core import (
     gen_obfs, get_all_clients, get_allowed_ips_for_client,
     get_awg_dump, get_combined_awg_dump, get_client_keys, get_client_pub, get_user_clients,
     get_user_name, is_approved, load_client_excl, load_servers,
-    make_conf_for_client, make_conf_for_client_ep, make_vpn_link,
+    make_conf_for_client, make_conf_for_client_ep, make_vpn_link, vpn_qr_texts,
     remove_client_from_awg, resolve_endpoint, save_client_excl,
     fmt_handshake, fmt_bytes, SERVER_PUBLIC,
 )
@@ -83,6 +83,8 @@ async def show_device(query, name: str, user_id: int):
         [InlineKeyboardButton("📄 Скачать .conf (AmneziaWG)", callback_data=f"conf_{name}")],
         [InlineKeyboardButton("📱 QR-код (AmneziaWG)",        callback_data=f"qr_{name}")],
         [InlineKeyboardButton("📤 Поделиться кодом (AmneziaVPN)", callback_data=f"share_{name}")],
+        [InlineKeyboardButton("📱 QR AmneziaVPN — 1 код",     callback_data=f"vq1_{name}")],
+        [InlineKeyboardButton("📱 QR AmneziaVPN — 2 кода",    callback_data=f"vq2_{name}")],
         [InlineKeyboardButton(excl_label,                      callback_data=f"sites_{name}")],
         [InlineKeyboardButton("🗑 Удалить",                    callback_data=f"del_{name}")],
         [InlineKeyboardButton(BTN_BACK,                      callback_data=back_target)],
@@ -134,10 +136,11 @@ def _server_eps_kb(name: str, action: str, srv_idx: int) -> InlineKeyboardMarkup
     return InlineKeyboardMarkup(rows)
 
 def _action_icon(action: str) -> str:
-    return {"conf": "📄", "qr": "📱", "share": "📤"}.get(action, "📄")
+    return {"conf": "📄", "qr": "📱", "share": "📤", "vq1": "📱", "vq2": "📱"}.get(action, "📄")
 
 def _action_label(action: str) -> str:
-    return {"conf": "Скачать .conf", "qr": "QR-код", "share": "Поделиться"}.get(action, action)
+    return {"conf": "Скачать .conf", "qr": "QR-код", "share": "Поделиться",
+            "vq1": "QR AmneziaVPN — 1 код", "vq2": "QR AmneziaVPN — 2 кода"}.get(action, action)
 
 def _usable_options(servers: list = None) -> list:
     """Пункты выдачи (awg_cascade.issue_options), у которых есть адрес: [(пункт, адрес)]."""
@@ -438,6 +441,9 @@ async def _do_send_action(query, name: str, action: str, ep: str, server: dict, 
         await do_send_conf_direct(query, name, ep, spub, sprt, srv_name, slot)
     elif action == "qr":
         await do_send_qr_direct(query, name, ep, spub, sprt, srv_name, slot)
+    elif action in ("vq1", "vq2"):
+        await do_send_vpn_qr(query, name, ep, spub, sprt, srv_emoji, slot, kind,
+                             series=action == "vq2")
     else:
         await do_send_share_direct(query, name, ep, spub, sprt, srv_name, srv_emoji, slot, kind)
 
@@ -619,24 +625,66 @@ async def do_send_qr_direct(query, name: str, ep: str,
         await query.message.reply_text(f"❌ Ошибка QR: {e}")
     await show_device(query, name, query.from_user.id)
 
+def _device_vpn_link(name: str, ep: str, spub: str, sprt: str, srv_emoji: str,
+                     slot: int, kind: str) -> str | None:
+    """Ссылка vpn:// устройства; None — ключи не прочитать."""
+    keys = get_client_keys(name)
+    if not keys:
+        return None
+    # Название в приложении AmneziaVPN: "🇳🇱 Admin.Nout"
+    return make_vpn_link(
+        keys["priv"], keys["pub"], cas.slot_ip(keys["ip"], slot), keys["psk"],
+        keys.get("obfs", gen_obfs()), _vpn_title(name, srv_emoji, kind),
+        endpoint=ep, server_public=spub, server_port=sprt
+    )
+
+
+async def do_send_vpn_qr(query, name: str, ep: str, spub: str, sprt: str, srv_emoji: str,
+                         slot: int, kind: str, series: bool):
+    """QR для сканера AmneziaVPN: один плотный код или серия, как у самого
+    приложения (vpn_qr_texts). Содержимое — как у ссылки vpn://."""
+    link = _device_vpn_link(name, ep, spub, sprt, srv_emoji, slot, kind)
+    if not link:
+        await query.message.reply_text(f"❌ Не удалось прочитать ключи для {name}")
+        return
+    short = device_short_name(name)
+    prt   = sprt or SERVER_PORT
+    texts = vpn_qr_texts(link, series)
+    head  = (f"📱 QR для AmneziaVPN — *{_md(short)}*\n"
+             f"🌐 Endpoint: `{ep}:{prt}`\n\n"
+             "В AmneziaVPN: добавить сервер → «QR-код»")
+    try:
+        # Без файлов на диске — в конфиге приватный ключ
+        pngs = [subprocess.check_output([QRENCODE_BIN, "-t", "PNG", "-l", "L", "-s", "8", "-o", "-"],
+                                        input=t.encode()) for t in texts]
+        if len(pngs) == 1:
+            await query.message.reply_photo(photo=pngs[0], caption=head + ", наведите камеру.",
+                                            parse_mode="Markdown")
+        else:
+            n = len(pngs)
+            await query.message.reply_media_group(media=[
+                InputMediaPhoto(
+                    png, parse_mode="Markdown",
+                    caption=(f"{head}: наведите камеру на код 1, затем пролистайте к следующему — "
+                             f"приложение покажет «отсканировано 1 из {n}».\n\n*Код 1 из {n}*"
+                             if i == 0 else f"*Код {i + 1} из {n}*"))
+                for i, png in enumerate(pngs)])
+    except Exception as e:
+        await query.message.reply_text(f"❌ Ошибка QR: {e}")
+    await show_device(query, name, query.from_user.id)
+
+
 async def do_send_share_direct(query, name: str, ep: str,
                                 spub: str = None, sprt: str = None,
                                 srv_name: str = None, srv_emoji: str = "",
                                 slot: int = 0, kind: str = ""):
     """Отправляет vpn:// ссылку с указанным эндпоинтом."""
-    keys = get_client_keys(name)
-    if not keys:
+    vpn_link = _device_vpn_link(name, ep, spub, sprt, srv_emoji, slot, kind)
+    if not vpn_link:
         await query.message.reply_text(f"❌ Не удалось прочитать ключи для {name}")
         return
     short    = device_short_name(name)
     prt      = sprt or SERVER_PORT
-    # Название в приложении AmneziaVPN: "🇳🇱 Admin.Nout"
-    vpn_display_name = _vpn_title(name, srv_emoji, kind)
-    vpn_link = make_vpn_link(
-        keys["priv"], keys["pub"], cas.slot_ip(keys["ip"], slot), keys["psk"],
-        keys.get("obfs", gen_obfs()), vpn_display_name,
-        endpoint=ep, server_public=spub, server_port=sprt
-    )
     vpn_bytes = vpn_link.encode()
     label = " ".join(p for p in (srv_emoji, srv_name) if p) or "Сервер"
     await query.message.reply_text(
