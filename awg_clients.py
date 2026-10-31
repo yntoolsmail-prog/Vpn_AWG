@@ -5,7 +5,7 @@ import os, re, subprocess, logging, json, zlib, base64, struct, threading
 logger = logging.getLogger(__name__)
 
 from awg_core import (
-    AWG_CONF, AWG_IFACE, CLIENTS_DIR, EXCL_EXT, QRENCODE_BIN, VPN_SUBNET,
+    AWG_CONF, AWG_IFACE, CLIENTS_DIR, EXCL_EXT, VPN_SUBNET,
     SERVER_ENDPOINT, SERVER_PUBLIC, SERVER_PORT, PRIMARY_DNS, SECONDARY_DNS, srv,
     awg_file_lock,
 )
@@ -330,41 +330,6 @@ def vpn_qr_texts(link: str, series: bool) -> list:
         blob = struct.pack(">hBBI", QR_MAGIC, n, i, len(piece)) + piece
         out.append(base64.urlsafe_b64encode(blob).decode().rstrip("="))
     return out
-
-
-def _qr_modules(text: str) -> list:
-    """Модули QR (True — тёмный) из qrencode -t ASCII: по два символа на модуль."""
-    rows = subprocess.check_output([QRENCODE_BIN, "-t", "ASCII", "-m", "0", "-l", "L", "-o", "-"],
-                                   input=text.encode()).decode().rstrip("\n").split("\n")
-    n = len(rows)
-    return [[r.ljust(2 * n)[2 * i] == "#" for i in range(n)] for r in rows]
-
-
-def qr_stack_png(texts: list, gap: int = 4, margin: int = 4, max_side: int = 1280) -> bytes:
-    """Коды друг под другом одной картинкой PNG, между ними — только тихая зона
-    (gap модулей): оба помещаются на один экран, камера берёт их разом. Сторона —
-    до 1280 px, больше Telegram всё равно ужмёт. Без Pillow — PNG собирается zlib."""
-    mats = [_qr_modules(t) for t in texts]
-    w_mod = max(len(m) for m in mats) + 2 * margin
-    h_mod = sum(len(m) for m in mats) + 2 * margin + gap * (len(mats) - 1)
-    px = max(3, min(10, max_side // max(w_mod, h_mod)))
-    white = b"\xff" * (w_mod * px)
-    rows = [white] * (margin * px)
-    for k, m in enumerate(mats):
-        x0 = (w_mod - len(m)) // 2
-        for line in m:
-            row = bytearray(white)
-            for i, dark in enumerate(line):
-                if dark:
-                    row[(x0 + i) * px:(x0 + i + 1) * px] = b"\x00" * px
-            rows += [bytes(row)] * px
-        rows += [white] * ((gap if k < len(mats) - 1 else margin) * px)
-
-    def chunk(tag: bytes, data: bytes) -> bytes:
-        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data))
-    ihdr = struct.pack(">IIBBBBB", w_mod * px, len(rows), 8, 0, 0, 0, 0)   # 8 бит, оттенки серого
-    idat = zlib.compress(b"".join(b"\x00" + r for r in rows), 9)
-    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", idat) + chunk(b"IEND", b"")
 
 
 def _remove_peer_from_conf(name: str):
