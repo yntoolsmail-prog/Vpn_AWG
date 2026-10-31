@@ -689,7 +689,7 @@ async def _button_dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE):
             key, n = rest.split("_", 1)
             await send_option(query, n, "share", key)
         elif rest.startswith("all_"):
-            # share_all_{name} → «📦 Получить ВСЕ»: ссылки одним сообщением + альбом .vpn
+            # share_all_{name} → «📦 Получить ВСЕ»: ссылки одним сообщением
             await send_all(query, rest[4:], "share")
         elif rest.startswith("adv_"):
             from handlers.clients import _show_ep_select

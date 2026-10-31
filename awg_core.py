@@ -922,14 +922,19 @@ def post_restore_fixup() -> list:
             awg_cascade.request_relink("🔀 Каскад после восстановления бэкапа:")
             report.append("🔀 Каскад: после перезапуска бот сам пересвяжет входы с выходами "
                           "и пришлёт отчёт отдельным сообщением")
-        elif os.path.exists(CASCADE_EXIT_CONF) and not any(awg_cascade.is_exit(x) for x in restored):
-            # Бэкап старше каскада, а здесь поднят выход: входы по-прежнему
-            # ходят через него, но в боте они теперь обычные слейвы
-            report.append(
-                "⚠️ Каскад: в бэкапе его нет, а на этом сервере поднят выход. Входы "
-                "продолжают работать через него, но в боте они теперь обычные слейвы. "
-                "Вернуть каскад — заново «🔀 Сделать входом» в карточке входа и "
-                "переключатели выдачи у выходов (номер выхода возьмётся с сервера)")
+        elif not any(awg_cascade.involved(x) for x in restored):
+            # Бэкап старше каскада, а здесь он поднят: туннели работают, но в боте
+            # серверы теперь без ролей
+            awg_dir = os.path.dirname(CASCADE_EXIT_CONF)
+            tunnels = [fn for fn in os.listdir(awg_dir) if re.fullmatch(r"awgx\d+\.conf", fn)]
+            roles = (["выход"] if "awgx0.conf" in tunnels else []) + \
+                    (["вход"] if any(fn != "awgx0.conf" for fn in tunnels) else [])
+            if roles:
+                report.append(
+                    f"⚠️ Каскад: в бэкапе его нет, а на этом сервере поднят {' и '.join(roles)}. "
+                    "Туннели продолжают работать, но в боте серверы теперь без ролей. "
+                    "Вернуть каскад — заново «🔀 Сделать входом» у входов и «🚪 Сделать "
+                    "выходом» у выходов (номера возьмутся с серверов)")
     except Exception as e:
         report.append(f"⚠️ Каскад: {e}")
 
