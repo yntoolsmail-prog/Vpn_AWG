@@ -441,7 +441,9 @@ async def _do_send_action(query, name: str, action: str, ep: str, server: dict, 
     spub      = server.get("awg_public_key") or SERVER_PUBLIC
     sprt      = str(server.get("awg_port") or SERVER_PORT)
     srv_name, srv_emoji, _ = cas.describe(server, slot)
-    kind = "direct" if not slot and not cas.is_entry(server) else ""
+    # «· напрямую» в названии: прямой сервер и пункт «напрямую» у входа
+    entry_direct = cas.is_entry(server) and slot and slot == cas.direct_slot()
+    kind = "direct" if (not slot and not cas.is_entry(server)) or entry_direct else ""
     if action == "conf":
         await do_send_conf_direct(query, name, ep, spub, sprt, srv_name, slot)
     elif action == "qr":
@@ -638,7 +640,7 @@ def _vpn_qr_series_cb(name: str, server: dict, ep: str, slot: int) -> str | None
     только с кнопки пункта (kK — адрес входа по умолчанию), остальное — сервер и
     адрес из списка; не нашли или длиннее 64 байт (предел Telegram) — без кнопки."""
     if slot:
-        cb = f"vq2_k{slot}_{name}"
+        cb = f"vq2_{cas.option_key(server, slot)}_{name}"
     else:
         servers = load_servers()
         si = next((i for i, s in enumerate(servers) if s.get("id") == server.get("id")), None)

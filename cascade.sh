@@ -10,6 +10,7 @@
 #   A.B.C.N      «Авто»: устройства поровну между выходами, каждое закреплено за своим
 #                (N по модулю числа выходов «Авто»), при отказе его выхода — на живой
 #   A.B.(C+K).N  слот K: выход K, при его отказе — как «Авто»
+#   A.B.(255−C).N  «напрямую»: всё с IP входа, Telegram и force_exit.list — через выход
 # Нынешние конфиги — это A.B.C.N, то есть «Авто», перевыпускать их не нужно.
 #
 #   выход:     cascade.sh exit-up --slot K [--host АДРЕС] [--port P]   печатает токен выхода
@@ -430,6 +431,9 @@ cmd_exit_unpeer() {
 declare -a EXITS=() AUTO_LIST=() SLOTS=()
 declare -A AUTO=()
 SA="" SB="" SC=""
+# Пункт «напрямую» у входа — адреса A.B.(255−C).N: всё с IP входа, Telegram и
+# force_exit.list — через выход. Номера выходов всегда меньше
+DSLOT=""
 
 # SLOTS — все слоты, которые вход когда-либо обслуживал (файл slots) плюс
 # нынешние выходы. Адреса слотов остаются у устройств и после entry-del: иначе
@@ -461,6 +465,7 @@ load_subnet() {
     local base
     base=$(vpn_subnet) || return 1
     IFS=. read -r SA SB SC <<<"$base"
+    DSLOT=$((255 - SC))
 }
 
 entry_conf() { echo "$AWG_DIR/$TUN$1.conf"; }
@@ -491,7 +496,7 @@ cmd_entry_add() {
     [[ "$SA.$SB" != "$NET" ]] || die "Подсеть устройств пересекается с сетью туннелей $NET"
 
     local k=${T[slot]}
-    [[ $((SC + k)) -le 255 ]] || die "Слот $k не помещается в подсеть $SA.$SB.$SC (третий октет > 255)"
+    [[ $((SC + k)) -lt 255 ]] || die "Слот $k не помещается в подсеть $SA.$SB.$SC: адреса $SA.$SB.255.x — пункт «напрямую»"
     # Повторное добавление без --auto сохраняет прежний порядок (cascade.sh auto)
     [[ -n "$auto" ]] || auto=$(env_get "$STATE/exits/$k.env" AUTO)
     [[ "$auto" =~ ^[0-9]+$ ]] || auto=$k
@@ -675,11 +680,14 @@ load_set_from_file() {   # $1 набор, $2 файл со списком сет
     # с другими размерами ругался бы «set with the same name already exists»
     ipset create -exist "$set" hash:net family inet hashsize 16384 maxelem 262144
     # Проверка формата — grep, не awk: mawk (awk по умолчанию в Ubuntu) не знает {n,m}
+    # true в конце: пустой список — grep без совпадений, а при pipefail его код
+    # срывал swap, и удалённая из файла последняя сеть оставалась в наборе
     {
         echo "create ${set}_new hash:net family inet hashsize 16384 maxelem 262144 -exist"
         echo "flush ${set}_new"
         [[ -r "$file" ]] && sed 's/#.*//; s/[[:space:]]//g' "$file" \
             | grep -E '^[0-9]{1,3}(\.[0-9]{1,3}){3}(/[0-9]{1,2})?$' | sed "s/^/add ${set}_new /"
+        true
     } | ipset restore -exist && ipset swap "${set}_new" "$set" && ipset destroy "${set}_new"
 }
 
@@ -732,6 +740,14 @@ write_decide() {
     r+=("-F CASCADE_DECIDE")
     for d in "${PRIVATE_NETS[@]}"; do r+=("-A CASCADE_DECIDE -d $d -j RETURN"); done
     r+=("-A CASCADE_DECIDE -m set --match-set cascade_ru dst -m set ! --match-set cascade_force dst -m set ! --match-set cascade_tg dst -j MARK --set-xmark $MARK_DIRECT/$MASK")
+    # «Напрямую»: всё с IP входа, кроме Telegram и force_exit.list — им выход, как
+    # у своих соединений входа (первый живой из «Авто», иначе любой живой)
+    for k in "${alive_auto[@]}" "${EXITS[@]}"; do alive "$k" && { own=$k; break; }; done
+    if [[ -n "$DSLOT" ]]; then
+        d="$SA.$SB.$((SC + DSLOT)).0/24"
+        r+=("-A CASCADE_DECIDE -m mark --mark 0/$MASK -s $d -m set ! --match-set cascade_tg dst -m set ! --match-set cascade_force dst -j MARK --set-xmark $MARK_DIRECT/$MASK"
+            "-A CASCADE_DECIDE -m mark --mark 0/$MASK -s $d -j MARK --set-xmark $([[ $own -gt 0 ]] && mark_of "$own" || echo "$MARK_ALLDOWN")/$MASK")
+    fi
     for k in "${EXITS[@]}"; do
         alive "$k" && r+=("-A CASCADE_DECIDE -m mark --mark 0/$MASK -s $SA.$SB.$((SC + k)).0/24 -j MARK --set-xmark $(mark_of "$k")/$MASK")
     done
@@ -751,11 +767,10 @@ write_decide() {
     else
         r+=("-A CASCADE_DECIDE -m mark --mark 0/$MASK -j DROP")
     fi
-    # Сам вход ходит в Telegram через выход: первый живой из «Авто», иначе любой
-    # живой, нет живых — напрямую (метка «все мертвы»: такие соединения сбросятся,
-    # когда выход оживёт). Только свои новые соединения — ответы на входящие
-    # (превью ссылок с серверов Telegram) уходят как пришли
-    for k in "${alive_auto[@]}" "${EXITS[@]}"; do alive "$k" && { own=$k; break; }; done
+    # Сам вход ходит в Telegram через тот же выход (own), нет живых — напрямую
+    # (метка «все мертвы»: такие соединения сбросятся, когда выход оживёт). Только
+    # свои новые соединения — ответы на входящие (превью ссылок с серверов
+    # Telegram) уходят как пришли
     r+=("-F CASCADE_OUT"
         "-A CASCADE_OUT -m set ! --match-set cascade_tg dst -j RETURN"
         "-A CASCADE_OUT -j CONNMARK --restore-mark --nfmask $MASK --ctmask $MASK"
@@ -813,7 +828,7 @@ ensure_peer_ips() {
     local pub want
     while read -r pub want; do
         [[ -n "$pub" && -n "$want" ]] && awg set "$VPN_IF" peer "$pub" allowed-ips "$want"
-    done < <(awg show "$VPN_IF" allowed-ips 2>/dev/null | awk -v a="$SA" -v b="$SB" -v c="$SC" -v ks="${SLOTS[*]}" '
+    done < <(awg show "$VPN_IF" allowed-ips 2>/dev/null | awk -v a="$SA" -v b="$SB" -v c="$SC" -v ks="${SLOTS[*]} $DSLOT" '
         BEGIN { m = split(ks, K, " ") }
         {
             split("", have); n = ""; other = ""; cnt = 0
@@ -851,6 +866,7 @@ apply_static() {
             echo "create cascade_tg6_new hash:net family inet6 -exist"
             echo "flush cascade_tg6_new"
             tg_nets | grep -E '^[0-9a-fA-F:]+:[0-9a-fA-F:]*/[0-9]{1,3}$' | sed 's/^/add cascade_tg6_new /'
+            true
         } | ipset restore -exist && ipset swap cascade_tg6_new cascade_tg6 && ipset destroy cascade_tg6_new
         # Ядро без IPv6 — цепочки не будет, write_decide это видит и пропускает
         ip6tables -N CASCADE_OUT6 2>/dev/null
@@ -1083,6 +1099,7 @@ cmd_status() {
         local tg_via tg_n
         tg_via=$(cat "$RUN/tg_via" 2>/dev/null)
         tg_n=$(ipset list -t cascade_tg 2>/dev/null | awk '/Number of entries/ {print $4}')
+        echo "  Пункт «напрямую» ($SA.$SB.$((SC + DSLOT)).x): всё с IP входа, Telegram и force_exit.list — через выход"
         echo "  Telegram самого сервера: $(if [[ ${tg_via:-} =~ ^[1-9][0-9]*$ ]]; then echo "через выход $tg_via"
             elif [[ -n "$tg_via" ]]; then echo "⚠️ напрямую — живых выходов нет"; else echo "…"; fi); сетей ${tg_n:-0} ($([[ -s "$STATE/tg.zone" ]] && echo "список Telegram" || echo "встроенный список"))"
         local st since rtt hsa line tr ep state
@@ -1153,7 +1170,7 @@ cmd_info() {
 # у каждого идут российские сайты. Выход берётся тот, где соединений больше
 device_routes() {
     command -v conntrack >/dev/null || return 0
-    conntrack -L 2>/dev/null | awk -v a="$SA" -v b="$SB" -v c="$SC" '
+    conntrack -L 2>/dev/null | awk -v a="$SA" -v b="$SB" -v c="$SC" -v r="${DSLOT:-999}" '
         { src = ""; mk = -1
           for (i = 1; i <= NF; i++) {
               if (src == "" && substr($i, 1, 4) == "src=") src = substr($i, 5)
@@ -1162,13 +1179,15 @@ device_routes() {
           if (mk < 0 || src == "") next
           split(src, o, ".")
           if (o[1] != a || o[2] != b || o[3] + 0 < c + 0) next
+          # Пункт «напрямую» — устройство на входе, даже если Telegram через выход
+          if (o[3] + 0 == c + r) { direct[o[4]] = 1; dev[o[4]] = 1; next }
           m = int(mk / 65536) % 256
           if (m == 0) next
           k = (m == 1 || m == 255) ? 0 : m - 1
           cnt[o[4] "," k]++; dev[o[4]] = 1 }
         END { for (n in dev) { best = 0; bc = 0
                   for (key in cnt) { split(key, q, ",")
-                      if (q[1] == n && q[2] + 0 > 0 && cnt[key] > bc) { bc = cnt[key]; best = q[2] } }
+                      if (!(n in direct) && q[1] == n && q[2] + 0 > 0 && cnt[key] > bc) { bc = cnt[key]; best = q[2] } }
                   printf "%s%s:%s", sep, n, best; sep = " " } }'
 }
 
@@ -1211,7 +1230,7 @@ cmd_down() {
         | while read -r k; do ip -4 rule del prio "$k"; done
     for f in $(ipset list -n 2>/dev/null | grep -E '^cascade_(ru|force|tg6?|auto_[0-9]+)(_new)?$'); do ipset destroy "$f" 2>/dev/null; done
     if load_subnet; then
-        EXITS=(); SLOTS=()
+        EXITS=(); SLOTS=(); DSLOT=""
         ensure_peer_ips   # без слотов — у устройств остаётся только основной адрес
         # Маршрут /16 добавлял каскад, если у awg0 адрес /24
         [[ "$(conf_get "$AWG_DIR/$VPN_IF.conf" Address)" == */16 ]] || ip -4 route del "$SA.$SB.0.0/16" dev "$VPN_IF" 2>/dev/null

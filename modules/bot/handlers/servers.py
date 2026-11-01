@@ -1311,6 +1311,9 @@ async def _cascade_card_text(srv: dict, servers: list) -> str:
         if not h["exits"] and not missing:
             lines.append("Выходов нет: устройства на этом входе выходят в интернет с его IP. "
                          "Включите «Через вход» или «В Авто» у зарубежных серверов.")
+        lines.append(("✅" if cas.issue_of(srv)["direct"] else "⬜")
+                     + f" «{_md(cas.srv_label(srv))} · напрямую» — пункт в списке у пользователей: "
+                       "всё с IP этого сервера, Telegram — через выход")
         return "\n".join(lines)
     lines = ["", "", "*Выдача потребителям:*",
              "🔗 «Напрямую» — конфиг на этот сервер, как раньше"]
@@ -1332,6 +1335,9 @@ async def _cascade_card_text(srv: dict, servers: list) -> str:
 def _cascade_card_rows(srv: dict, idx: int, servers: list) -> list:
     rows = []
     if cas.is_entry(srv):
+        on = cas.issue_of(srv)["direct"]
+        rows.append([InlineKeyboardButton(f"{'✅' if on else '⬜'} Напрямую — домен / IP",
+                                          callback_data=f"srv_iss_d_{idx}")])
         rows.append([InlineKeyboardButton("🔄 Пересвязать выходы", callback_data=f"srv_relink_{idx}")])
         rows.append([InlineKeyboardButton("⛔ Перестать быть входом", callback_data=f"srv_unentry_{idx}")])
         return rows
@@ -1405,7 +1411,10 @@ async def srv_issue_toggle(query, f: str, srv_idx: int, take_slot: int = None):
     field = {"d": "direct", "v": "via", "a": "auto"}[f]
     value = not cas.issue_of(srv)[field]
     if field == "direct":
-        cas.set_issue(srv["id"], field, value)
+        if cas.is_entry(srv):
+            cas.set_entry_direct(srv["id"], value)
+        else:
+            cas.set_issue(srv["id"], field, value)
         await show_server_card(query, srv_idx)
         return
     if not cas.is_exit(srv):

@@ -11,6 +11,10 @@
 #   slot: K                      номер выхода: через вход устройство с адресом
 #                                A.B.(C+K).N идёт в него. Остаётся за сервером и после
 #                                выключения — включил снова, и конфиги его слота живы
+#   issue.direct у входа         пункт «🇷🇺 RUS · напрямую»: устройство подключается к
+#                                входу и выходит в интернет с его IP, Telegram — через
+#                                выход. Адрес A.B.(255−C).N (direct_slot), его разбирает
+#                                cascade.sh (DSLOT)
 #   cascade_retired: {K: подпись}   у основного: слоты удалённых серверов. Их адреса
 #                                вход держит (конфиги уходят в «Авто»), новым серверам
 #                                номер не выдаётся — только явно, «занять слот». У
@@ -18,7 +22,7 @@
 #                                теряются, когда убран последний вход
 import hashlib, logging, os, re, shlex, subprocess, time
 
-from awg_core import SERVER_IP, load_servers, save_servers
+from awg_core import SERVER_IP, VPN_SUBNET, load_servers, save_servers
 from awg_clients import slot_ip  # noqa: F401  (реэкспорт для обработчиков)
 from awg_ssh import PARAMIKO_AVAILABLE, _ssh_connect
 
@@ -29,6 +33,9 @@ CASCADE_SH = "/root/cascade.sh"
 # смена IP основного — обе перезапускают бота, и фоновая задача до конца бы не дожила
 RELINK_FLAG = "/etc/amnezia/amneziawg/cascade_relink.flag"
 MAX_SLOT   = 250
+# Ключи пунктов «напрямую через вход»: k{ENTRY_DIRECT_BASE + индекс сервера} — не
+# пересекаются с номерами выходов, у каждого входа свой
+ENTRY_DIRECT_BASE = 1000
 _TOKEN_RE  = re.compile(r"AWGX1:[A-Za-z0-9+/=]+")
 _ANSI_RE   = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -42,9 +49,21 @@ def is_entry(srv: dict) -> bool:
     return srv.get("role") == "entry"
 
 
+def direct_slot() -> int:
+    """«Слот» пункта «напрямую» у входа: адрес устройства A.B.(255−C).N. Вход
+    выпускает такие устройства со своего IP, Telegram и force_exit.list — через
+    выход (cascade.sh, DSLOT). Номера выходов всегда меньше."""
+    try:
+        c = int(str(VPN_SUBNET).split(".")[2])
+    except (IndexError, ValueError):
+        c = 0
+    return 255 - c
+
+
 def issue_of(srv: dict) -> dict:
     """Настройки выдачи с умолчаниями: обычный сервер — только напрямую, как до
-    каскада; вход — никак: он дверь, а не страна."""
+    каскада; вход — по умолчанию никак (он дверь, а не страна), «напрямую» у него
+    включает админ: пункт с выходом в интернет с IP входа."""
     i = srv.get("issue") or {}
     entry = is_entry(srv)
     return {"direct": bool(i.get("direct", not entry)),
@@ -78,7 +97,7 @@ def srv_label(srv: dict) -> str:
 def status_label(srv: dict) -> str:
     """Статус для админа: вход задаётся явно, остальное следует из выдачи."""
     if is_entry(srv):
-        return "🔀 Вход"
+        return "🔀 Вход" + (" + 🔗 напрямую" if issue_of(srv)["direct"] else "")
     i = issue_of(srv)
     if is_exit(srv):
         s = f"🚪 Выход {srv['slot']}"
@@ -122,7 +141,16 @@ def issue_options(servers: list = None) -> list:
                              "emoji": x.get("emoji", ""), "name": x.get("name", ""),
                              "country": x.get("country", "")})
     for si, s in enumerate(servers):
-        if is_entry(s) or not s.get("endpoints") or not issue_of(s)["direct"]:
+        if not s.get("endpoints") or not issue_of(s)["direct"]:
+            continue
+        if is_entry(s):
+            # Вход «напрямую»: адрес и ключ входа, выход в интернет с его IP
+            opts.append({"key": f"k{ENTRY_DIRECT_BASE + si}", "kind": "entry_direct",
+                         "slot": direct_slot(), "srv": s, "si": si,
+                         "label": srv_label(s) + " · напрямую",
+                         "tag": s.get("name", "") + "-direct",
+                         "emoji": s.get("emoji", ""), "name": s.get("name", ""),
+                         "country": s.get("country", "") + " · напрямую"})
             continue
         opts.append({"key": f"d{si}", "kind": "direct", "slot": 0, "srv": s, "si": si,
                      "label": srv_label(s) + (" · напрямую" if active else ""),
@@ -136,10 +164,23 @@ def find_option(key: str, servers: list = None) -> dict | None:
     return next((o for o in issue_options(servers) if o["key"] == key), None)
 
 
+def option_key(srv: dict, slot: int, servers: list = None) -> str:
+    """Ключ пункта по серверу и слоту — для кнопок, которые повторяют пункт
+    («2 кода крупнее»): у пункта «напрямую» входа ключ свой, не номер слота."""
+    if slot == direct_slot() and is_entry(srv):
+        o = next((o for o in issue_options(servers) if o["kind"] == "entry_direct"
+                  and o["srv"].get("id") == srv.get("id")), None)
+        if o:
+            return o["key"]
+    return f"k{slot}"
+
+
 def describe(srv: dict, slot: int = 0, servers: list = None) -> tuple:
     """(tag, emoji, подпись) для конфига на сервер srv со слотом slot — когда
     сервер выбран не пунктом списка, а адресом в «Расширенной настройке»."""
     servers = load_servers() if servers is None else servers
+    if slot and slot == direct_slot() and is_entry(srv):
+        return srv.get("name", "") + "-direct", srv.get("emoji", ""), srv_label(srv) + " · напрямую"
     if slot:
         x = next((s for s in servers if s.get("slot") == slot), None)
         if x:
@@ -207,7 +248,7 @@ def _new_slot(servers: list) -> int:
     used = {int(s["slot"]) for s in servers if s.get("slot")}
     used |= set(retired_slots(servers))
     k = max(used | {0}) + 1
-    if k > MAX_SLOT:
+    if k > MAX_SLOT or k >= direct_slot():
         raise RuntimeError("свободных номеров выходов не осталось")
     return k
 
@@ -532,6 +573,19 @@ def _apply_issue(srv_id: str, changes: dict, take_slot: int = None) -> list:
             except Exception as err:
                 lines.append(f"⚠️ {srv_label(e)}: {err}")
     return lines
+
+
+def set_entry_direct(srv_id: str, value: bool) -> list:
+    """Пункт «напрямую» у входа: только выдача, на серверах ничего не меняется —
+    адреса пункта вход держит всегда (cascade.sh). Выключил — уже выданные
+    конфиги продолжают работать."""
+    servers = load_servers()
+    srv = _find(servers, srv_id)
+    if not srv or not is_entry(srv):
+        return ["❌ Вход не найден."]
+    srv["issue"] = {**(srv.get("issue") or {}), "direct": bool(value)}
+    save_servers(servers)
+    return []
 
 
 def set_issue(srv_id: str, field: str, value: bool, take_slot: int = None) -> list:

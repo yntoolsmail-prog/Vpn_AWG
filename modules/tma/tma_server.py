@@ -173,7 +173,8 @@ def _make_conf_filename(name: str, srv_name: str = "") -> str:
 
 def _cascade_target(srv_id: str) -> tuple:
     """(слот, ключ сервера, порт) по id пункта выдачи: «cas-k0» — «Авто», «cas-kK» —
-    выход K через вход (awg_cascade.issue_options), иначе — прямой сервер."""
+    выход K через вход, «cas-k1000+I» — вход I «напрямую» (awg_cascade.issue_options),
+    иначе — прямой сервер."""
     spub, sprt = SERVER_PUBLIC, SERVER_PORT
     if srv_id.startswith("cas-"):
         opt = cas.find_option(srv_id[4:])
@@ -473,7 +474,9 @@ def device_vpnlink(user_id, name):
     srv_emoji = request.args.get("srv_emoji", "")
     slot, spub, sprt = _cascade_target(srv_id)
     vpn_display_name = f"{srv_emoji} {name}".strip() if srv_emoji else name
-    if srv_id and not srv_id.startswith("cas-") and cas.cascade_active(load_servers()):
+    opt = cas.find_option(srv_id[4:]) if srv_id.startswith("cas-") else None
+    if (srv_id and not opt and not srv_id.startswith("cas-") and cas.cascade_active(load_servers())) \
+            or (opt and opt["kind"] == "entry_direct"):
         vpn_display_name += " · напрямую"
     try:
         link = make_vpn_link(
