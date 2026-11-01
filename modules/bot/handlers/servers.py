@@ -1312,7 +1312,7 @@ async def _cascade_card_text(srv: dict, servers: list) -> str:
             lines.append("Выходов нет: устройства на этом входе выходят в интернет с его IP. "
                          "Включите «Через вход» или «В Авто» у зарубежных серверов.")
         lines.append(("✅" if cas.issue_of(srv)["direct"] else "⬜")
-                     + f" «{_md(cas.srv_label(srv))} · напрямую» — пункт в списке у пользователей: "
+                     + f" «{_md(cas.srv_label(srv))}» — пункт в списке у пользователей: "
                        "всё с IP этого сервера, Telegram — через выход")
         return "\n".join(lines)
     lines = ["", "", "*Выдача потребителям:*",

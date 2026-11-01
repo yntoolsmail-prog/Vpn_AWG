@@ -11,7 +11,7 @@
 #   slot: K                      номер выхода: через вход устройство с адресом
 #                                A.B.(C+K).N идёт в него. Остаётся за сервером и после
 #                                выключения — включил снова, и конфиги его слота живы
-#   issue.direct у входа         пункт «🇷🇺 RUS · напрямую»: устройство подключается к
+#   issue.direct у входа         пункт «🇷🇺 RUS Россия»: устройство подключается к
 #                                входу и выходит в интернет с его IP, Telegram — через
 #                                выход. Адрес A.B.(255−C).N (direct_slot), его разбирает
 #                                cascade.sh (DSLOT)
@@ -144,13 +144,14 @@ def issue_options(servers: list = None) -> list:
         if not s.get("endpoints") or not issue_of(s)["direct"]:
             continue
         if is_entry(s):
-            # Вход «напрямую»: адрес и ключ входа, выход в интернет с его IP
+            # Вход «напрямую»: адрес и ключ входа, выход в интернет с его IP.
+            # Подпись и имя файла — как у остальных стран: путать не с чем,
+            # через вход этой страны нет
             opts.append({"key": f"k{ENTRY_DIRECT_BASE + si}", "kind": "entry_direct",
                          "slot": direct_slot(), "srv": s, "si": si,
-                         "label": srv_label(s) + " · напрямую",
-                         "tag": s.get("name", "") + "-direct",
+                         "label": srv_label(s), "tag": s.get("name", ""),
                          "emoji": s.get("emoji", ""), "name": s.get("name", ""),
-                         "country": s.get("country", "") + " · напрямую"})
+                         "country": s.get("country", "")})
             continue
         opts.append({"key": f"d{si}", "kind": "direct", "slot": 0, "srv": s, "si": si,
                      "label": srv_label(s) + (" · напрямую" if active else ""),
@@ -180,7 +181,7 @@ def describe(srv: dict, slot: int = 0, servers: list = None) -> tuple:
     сервер выбран не пунктом списка, а адресом в «Расширенной настройке»."""
     servers = load_servers() if servers is None else servers
     if slot and slot == direct_slot() and is_entry(srv):
-        return srv.get("name", "") + "-direct", srv.get("emoji", ""), srv_label(srv) + " · напрямую"
+        return srv.get("name", ""), srv.get("emoji", ""), srv_label(srv)
     if slot:
         x = next((s for s in servers if s.get("slot") == slot), None)
         if x:

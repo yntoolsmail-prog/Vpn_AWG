@@ -474,9 +474,7 @@ def device_vpnlink(user_id, name):
     srv_emoji = request.args.get("srv_emoji", "")
     slot, spub, sprt = _cascade_target(srv_id)
     vpn_display_name = f"{srv_emoji} {name}".strip() if srv_emoji else name
-    opt = cas.find_option(srv_id[4:]) if srv_id.startswith("cas-") else None
-    if (srv_id and not opt and not srv_id.startswith("cas-") and cas.cascade_active(load_servers())) \
-            or (opt and opt["kind"] == "entry_direct"):
+    if srv_id and not srv_id.startswith("cas-") and cas.cascade_active(load_servers()):
         vpn_display_name += " · напрямую"
     try:
         link = make_vpn_link(

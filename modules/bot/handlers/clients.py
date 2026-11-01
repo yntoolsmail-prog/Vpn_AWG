@@ -441,9 +441,7 @@ async def _do_send_action(query, name: str, action: str, ep: str, server: dict, 
     spub      = server.get("awg_public_key") or SERVER_PUBLIC
     sprt      = str(server.get("awg_port") or SERVER_PORT)
     srv_name, srv_emoji, _ = cas.describe(server, slot)
-    # «· напрямую» в названии: прямой сервер и пункт «напрямую» у входа
-    entry_direct = cas.is_entry(server) and slot and slot == cas.direct_slot()
-    kind = "direct" if (not slot and not cas.is_entry(server)) or entry_direct else ""
+    kind = "direct" if not slot and not cas.is_entry(server) else ""
     if action == "conf":
         await do_send_conf_direct(query, name, ep, spub, sprt, srv_name, slot)
     elif action == "qr":
