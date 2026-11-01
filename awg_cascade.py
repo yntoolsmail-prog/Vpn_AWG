@@ -326,7 +326,7 @@ ROUTES_TTL = 300   # данные старше — выход устройств
 
 def health(srv: dict) -> dict:
     """Состояние входа: {daemon, ru_count, ru_age, exits: {K: {state, since, rtt, hs, auto}},
-    slots, routes: {N: K}}."""
+    slots, routes: {N: K}, tg_via, tg_count}."""
     d = info(srv)
     routes = {}
     for pair in d.get("ROUTES", "").split():
@@ -344,7 +344,10 @@ def health(srv: dict) -> dict:
     return {"daemon": d.get("DAEMON") == "1", "ru_count": num(d.get("RU_COUNT"), 0),
             "ru_age": num(d.get("RU_AGE"), -1), "exits": exs,
             "slots": [int(x) for x in d.get("ENTRY_SLOTS", "").split() if x.isdigit()],
-            "routes": routes}
+            "routes": routes,
+            # Через какой выход сам вход ходит в Telegram: K, 0 — напрямую (живых
+            # выходов нет), None — старая версия cascade.sh или служба ещё не решила
+            "tg_via": num(d.get("TG_VIA"), None), "tg_count": num(d.get("TG_COUNT"), 0)}
 
 
 def _dump_label(srv: dict) -> str:

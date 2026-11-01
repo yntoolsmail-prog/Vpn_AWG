@@ -18,7 +18,8 @@
 #   вход:      cascade.sh entry-add 'ТОКЕН_ВЫХОДА' [--entry E] [--auto N|--no-auto] [--ip АДРЕС]
 #              cascade.sh entry-del K
 #              cascade.sh auto K N                порядок выхода K в «Авто», 0 — не участвует
-#              cascade.sh ru-update               список российских сетей (таймер — раз в сутки)
+#              cascade.sh ru-update               список российских сетей и сетей Telegram (таймер — раз в сутки)
+#              cascade.sh tg-update               только сети Telegram
 #   везде:     cascade.sh status | down
 #   основной:  cascade.sh client-conf УСТРОЙСТВО АДРЕС_ВХОДА [K] [--qr]
 #
@@ -59,6 +60,13 @@ SELF="$(readlink -f "$0")"
 OBFS_ORDER=(Jc Jmin Jmax S1 S2 S3 S4 H1 H2 H3 H4 HeaderProtectionKey ContentPaddingAddition
             RekeyAfterTime RekeyTimeout RejectAfterTime KeepaliveTimeout MaxHandshakeAttempts
             RandomTrailers DisableCookies)
+# Сети Telegram — встроенная копия core.telegram.org/resources/cidr.txt на случай,
+# если список не скачался. Через выход в Telegram ходит и сам вход (бот, если вход —
+# основной, веб-панель, MTProxy), и его устройства — даже если сеть Telegram
+# окажется в российском списке
+TG_BUILTIN="91.108.56.0/22 91.108.4.0/22 91.108.8.0/22 91.108.16.0/22 91.108.12.0/22
+149.154.160.0/20 91.105.192.0/23 91.108.20.0/22 185.76.151.0/24
+2001:b28:f23d::/48 2001:b28:f23f::/48 2001:67c:4e8::/48 2001:b28:f23c::/48 2a0a:f280::/32"
 PRIVATE_NETS=(0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16
               172.16.0.0/12 192.168.0.0/16 224.0.0.0/3)
 
@@ -542,6 +550,7 @@ cmd_entry_add() {
         say "Туннель к выходу $k без изменений — не перезапускаю."
     fi
     [[ -s "$STATE/ru.zone" ]] || cmd_ru_update || warn "Список российских сетей не скачался — пока всё пойдёт через выходы"
+    [[ -s "$STATE/tg.zone" ]] || cmd_tg_update || true
     install_units
 
     [[ -n "$myip" ]] || myip=$(public_ip)
@@ -635,6 +644,29 @@ cmd_ru_update() {
     say "✅ Список российских сетей: $n записей ($src). Служба подхватит его в течение ${INTERVAL} с."
 }
 
+# ── Сети Telegram ────────────────────────────────────────────────────────────
+# Официальный список Telegram. Не скачался — остаётся прежний файл, нет и его —
+# встроенная копия (TG_BUILTIN)
+cmd_tg_update() {
+    mkdir -p "$STATE" "$RUN"
+    local tmp="$RUN/tg.new" n
+    curl -fsS --max-time 60 https://core.telegram.org/resources/cidr.txt 2>/dev/null | tr -d '\r' \
+        | grep -E '^([0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}|[0-9a-fA-F:]+:[0-9a-fA-F:]*/[0-9]{1,3})$' > "$tmp"
+    n=$(awk -F. 'NF == 4 {c++} END {print c + 0}' "$tmp")
+    if [[ $n -lt 3 ]]; then
+        rm -f "$tmp"
+        warn "Список сетей Telegram не скачался — работает $([[ -s "$STATE/tg.zone" ]] && echo прежний || echo встроенный)"
+        return 1
+    fi
+    chmod 644 "$tmp"
+    mv "$tmp" "$STATE/tg.zone"
+    say "✅ Сети Telegram: $n (IPv4). Служба подхватит их в течение ${INTERVAL} с."
+}
+
+tg_nets() {
+    if [[ -s "$STATE/tg.zone" ]]; then cat "$STATE/tg.zone"; else tr -s ' \n' '\n' <<<"$TG_BUILTIN"; fi
+}
+
 # ── Применение правил (вызывает служба) ──────────────────────────────────────
 
 load_set_from_file() {   # $1 набор, $2 файл со списком сетей (# — комментарии)
@@ -643,7 +675,7 @@ load_set_from_file() {   # $1 набор, $2 файл со списком сет
     {
         echo "create ${set}_new hash:net family inet hashsize 16384 maxelem 262144 -exist"
         echo "flush ${set}_new"
-        [[ -f "$file" ]] && sed 's/#.*//; s/[[:space:]]//g' "$file" \
+        [[ -r "$file" ]] && sed 's/#.*//; s/[[:space:]]//g' "$file" \
             | grep -E '^[0-9]{1,3}(\.[0-9]{1,3}){3}(/[0-9]{1,2})?$' | sed "s/^/add ${set}_new /"
     } | ipset restore -exist && ipset swap "${set}_new" "$set" && ipset destroy "${set}_new"
 }
@@ -687,7 +719,7 @@ alive() { [[ "${ST[$1]:-unknown}" != down ]]; }   # не проверенный 
 # он жив; иначе корзина «Авто» устройства; корзина без живого выхода — на живой
 # по порядку. Правило срабатывает, только пока метка не поставлена (mark 0)
 write_decide() {
-    local r=() k i t d alive_auto=() fallback=""
+    local r=() k i t d alive_auto=() fallback="" own=0
     for k in "${AUTO_LIST[@]}"; do alive "$k" && alive_auto+=("$k"); done
     if [[ ${#alive_auto[@]} -gt 0 ]]; then
         fallback=$(mark_of "${alive_auto[0]}")
@@ -696,7 +728,7 @@ write_decide() {
     fi
     r+=("-F CASCADE_DECIDE")
     for d in "${PRIVATE_NETS[@]}"; do r+=("-A CASCADE_DECIDE -d $d -j RETURN"); done
-    r+=("-A CASCADE_DECIDE -m set --match-set cascade_ru dst -m set ! --match-set cascade_force dst -j MARK --set-xmark $MARK_DIRECT/$MASK")
+    r+=("-A CASCADE_DECIDE -m set --match-set cascade_ru dst -m set ! --match-set cascade_force dst -m set ! --match-set cascade_tg dst -j MARK --set-xmark $MARK_DIRECT/$MASK")
     for k in "${EXITS[@]}"; do
         alive "$k" && r+=("-A CASCADE_DECIDE -m mark --mark 0/$MASK -s $SA.$SB.$((SC + k)).0/24 -j MARK --set-xmark $(mark_of "$k")/$MASK")
     done
@@ -716,7 +748,29 @@ write_decide() {
     else
         r+=("-A CASCADE_DECIDE -m mark --mark 0/$MASK -j DROP")
     fi
+    # Сам вход ходит в Telegram через выход: первый живой из «Авто», иначе любой
+    # живой, нет живых — напрямую (метка «все мертвы»: такие соединения сбросятся,
+    # когда выход оживёт). Только свои новые соединения — ответы на входящие
+    # (превью ссылок с серверов Telegram) уходят как пришли
+    for k in "${alive_auto[@]}" "${EXITS[@]}"; do alive "$k" && { own=$k; break; }; done
+    r+=("-F CASCADE_OUT"
+        "-A CASCADE_OUT -m set ! --match-set cascade_tg dst -j RETURN"
+        "-A CASCADE_OUT -j CONNMARK --restore-mark --nfmask $MASK --ctmask $MASK"
+        "-A CASCADE_OUT -m mark ! --mark 0/$MASK -j RETURN"
+        "-A CASCADE_OUT -m conntrack ! --ctstate NEW -j RETURN"
+        "-A CASCADE_OUT -j MARK --set-xmark $([[ $own -gt 0 ]] && mark_of "$own" || echo "$MARK_ALLDOWN")/$MASK"
+        "-A CASCADE_OUT -j CONNMARK --save-mark --nfmask $MASK --ctmask $MASK")
     { echo "*mangle"; printf '%s\n' "${r[@]}"; echo "COMMIT"; } | iptables-restore --noflush
+    # Туннели только IPv4: Telegram по IPv6 пошёл бы мимо выхода. Пока выход
+    # жив, IPv6 к Telegram отклоняется — приложения сразу берут IPv4
+    if ipset list -n cascade_tg6 >/dev/null 2>&1 && ip6tables -L CASCADE_OUT6 -n >/dev/null 2>&1; then
+        ip6tables -F CASCADE_OUT6
+        if [[ $own -gt 0 ]]; then
+            ip6tables -A CASCADE_OUT6 -m set --match-set cascade_tg6 dst -p tcp -j REJECT --reject-with tcp-reset
+            ip6tables -A CASCADE_OUT6 -m set --match-set cascade_tg6 dst -j REJECT
+        fi
+    fi
+    echo "$own" > "$RUN/tg_via"
 }
 
 sync_ip_rules() {
@@ -789,9 +843,22 @@ apply_static() {
         "# Сети, которые всегда идут через выход, даже если они в российском списке:" \
         "# по одной на строку (1.2.3.0/24). Служба подхватывает изменения сама." > "$STATE/force_exit.list"
     load_set_from_file cascade_force "$STATE/force_exit.list"
+    ipset create -exist cascade_tg hash:net family inet
+    load_set_from_file cascade_tg <(tg_nets)
+    if have ip6tables; then
+        ipset create -exist cascade_tg6 hash:net family inet6
+        {
+            echo "create cascade_tg6_new hash:net family inet6 -exist"
+            echo "flush cascade_tg6_new"
+            tg_nets | grep -E '^[0-9a-fA-F:]+:[0-9a-fA-F:]*/[0-9]{1,3}$' | sed 's/^/add cascade_tg6_new /'
+        } | ipset restore -exist && ipset swap cascade_tg6_new cascade_tg6 && ipset destroy cascade_tg6_new
+        ip6tables -N CASCADE_OUT6 2>/dev/null
+        ip6tables -C OUTPUT -j CASCADE_OUT6 2>/dev/null || ip6tables -I OUTPUT 1 -j CASCADE_OUT6
+    fi
     build_auto_sets
 
     ensure_chain mangle CASCADE_PRE PREROUTING
+    ensure_chain mangle CASCADE_OUT OUTPUT
     iptables -t mangle -N CASCADE_DECIDE 2>/dev/null
     {
         echo "*mangle"
@@ -807,7 +874,9 @@ apply_static() {
     write_decide
     drop_extra_auto_sets
 
-    ensure_chain mangle CASCADE_MSS FORWARD
+    # MSS — в POSTROUTING: и для устройств, и для своих соединений входа
+    iptables -t mangle -D FORWARD -j CASCADE_MSS 2>/dev/null
+    ensure_chain mangle CASCADE_MSS POSTROUTING
     iptables -t mangle -F CASCADE_MSS
     iptables -t mangle -A CASCADE_MSS -o "$TUN+" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
     ensure_chain filter CASCADE_FWD FORWARD
@@ -825,13 +894,14 @@ apply_static() {
 
 static_ok() {
     iptables -t mangle -C PREROUTING -j CASCADE_PRE 2>/dev/null \
+        && iptables -t mangle -C OUTPUT -j CASCADE_OUT 2>/dev/null \
         && iptables -t nat -C POSTROUTING -j CASCADE_NAT 2>/dev/null \
         && ipset list -n cascade_ru >/dev/null 2>&1 \
         && ip -4 rule show | grep -q "^$PRIO:"
 }
 
 config_sig() {
-    stat -c '%n %Y %s' "$STATE"/exits/*.env "$STATE/slots" "$STATE/ru.zone" "$STATE/force_exit.list" \
+    stat -c '%n %Y %s' "$STATE"/exits/*.env "$STATE/slots" "$STATE/ru.zone" "$STATE/force_exit.list" "$STATE/tg.zone" \
         "$AWG_DIR/$VPN_IF.conf" 2>/dev/null | md5sum
 }
 
@@ -1009,6 +1079,11 @@ cmd_status() {
         echo "═══ Вход: выходов ${#EXITS[@]} ═══"
         daemon_running && echo "  Служба: работает" || echo "  ⚠️  Служба не запущена: маршруты не обновляются"
         echo "  Российские сети: ${ru_n:-0} записей (файл обновлён: $ru_age)"
+        local tg_via tg_n
+        tg_via=$(cat "$RUN/tg_via" 2>/dev/null)
+        tg_n=$(ipset list -t cascade_tg 2>/dev/null | awk '/Number of entries/ {print $4}')
+        echo "  Telegram самого сервера: $(if [[ ${tg_via:-} =~ ^[1-9][0-9]*$ ]]; then echo "через выход $tg_via"
+            elif [[ -n "$tg_via" ]]; then echo "⚠️ напрямую — живых выходов нет"; else echo "…"; fi); сетей ${tg_n:-0} ($([[ -s "$STATE/tg.zone" ]] && echo "список Telegram" || echo "встроенный список"))"
         local st since rtt hsa line tr ep state
         for k in "${EXITS[@]}"; do
             line=$(awk -v k="$k" '$1 == k' "$RUN/health" 2>/dev/null)
@@ -1065,6 +1140,8 @@ cmd_info() {
         line=$(awk -v k="$k" '$1 == k {print $2, $3, $4, $5; exit}' "$RUN/health" 2>/dev/null)
         echo "HEALTH_$k=${line:-unknown 0 - -1} ${AUTO[$k]}"
     done
+    echo "TG_COUNT=$(ipset list -t cascade_tg 2>/dev/null | awk '/Number of entries/ {print $4}')"
+    echo "TG_VIA=$(cat "$RUN/tg_via" 2>/dev/null)"
     load_subnet 2>/dev/null && echo "ROUTES=$(device_routes)"
 }
 
@@ -1115,17 +1192,23 @@ cmd_down() {
         say "  туннель $k снят"
     done
     iptables -t mangle -D PREROUTING -j CASCADE_PRE 2>/dev/null
+    iptables -t mangle -D OUTPUT -j CASCADE_OUT 2>/dev/null
     iptables -t mangle -D FORWARD -j CASCADE_MSS 2>/dev/null
+    iptables -t mangle -D POSTROUTING -j CASCADE_MSS 2>/dev/null
+    if have ip6tables; then
+        ip6tables -D OUTPUT -j CASCADE_OUT6 2>/dev/null
+        ip6tables -F CASCADE_OUT6 2>/dev/null; ip6tables -X CASCADE_OUT6 2>/dev/null
+    fi
     iptables -D FORWARD -j CASCADE_FWD 2>/dev/null
     iptables -t nat -D POSTROUTING -j CASCADE_NAT 2>/dev/null
     local t c
-    for t in "mangle CASCADE_PRE" "mangle CASCADE_DECIDE" "mangle CASCADE_MSS" "filter CASCADE_FWD" "nat CASCADE_NAT"; do
+    for t in "mangle CASCADE_PRE" "mangle CASCADE_DECIDE" "mangle CASCADE_OUT" "mangle CASCADE_MSS" "filter CASCADE_FWD" "nat CASCADE_NAT"; do
         read -r t c <<<"$t"
         iptables -t "$t" -F "$c" 2>/dev/null; iptables -t "$t" -X "$c" 2>/dev/null
     done
     ip -4 rule show | awk -F: -v lo="$PRIO" -v hi="$((PRIO + 255))" '$1 + 0 >= lo && $1 + 0 <= hi {print $1}' \
         | while read -r k; do ip -4 rule del prio "$k"; done
-    for f in $(ipset list -n 2>/dev/null | grep -E '^cascade_(ru|force|auto_[0-9]+)(_new)?$'); do ipset destroy "$f" 2>/dev/null; done
+    for f in $(ipset list -n 2>/dev/null | grep -E '^cascade_(ru|force|tg6?|auto_[0-9]+)(_new)?$'); do ipset destroy "$f" 2>/dev/null; done
     if load_subnet; then
         EXITS=(); SLOTS=()
         ensure_peer_ips   # без слотов — у устройств остаётся только основной адрес
@@ -1173,7 +1256,7 @@ cmd_client_conf() {
 }
 
 usage() {
-    sed -n '2,27p' "$SELF" | sed 's/^# \{0,1\}//'
+    sed -n '2,28p' "$SELF" | sed 's/^# \{0,1\}//'
 }
 
 case "${1:-}" in
@@ -1183,7 +1266,8 @@ case "${1:-}" in
     entry-add)   shift; need_root; cmd_entry_add "$@" ;;
     entry-del)   shift; need_root; cmd_entry_del "$@" ;;
     auto)        shift; need_root; cmd_auto "$@" ;;
-    ru-update)   shift; need_root; cmd_ru_update ;;
+    ru-update)   shift; need_root; cmd_tg_update; cmd_ru_update ;;
+    tg-update)   shift; need_root; cmd_tg_update ;;
     daemon)      shift; cmd_daemon ;;
     status)      shift; cmd_status ;;
     info)        shift; cmd_info ;;

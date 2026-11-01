@@ -1292,6 +1292,10 @@ async def _cascade_card_text(srv: dict, servers: list) -> str:
                      "⚠️ Служба не запущена — нажмите «Пересвязать выходы»")
         lines.append(f"Российских сетей: {h['ru_count']}" if h["ru_count"] else
                      "⚠️ Список российских сетей пуст — всё идёт через выходы")
+        if h.get("tg_via"):
+            lines.append(f"✈️ Telegram самого сервера — через {_md(_exit_name(servers, h['tg_via']))}")
+        elif h.get("tg_via") == 0 and h["exits"]:
+            lines.append("⚠️ Telegram самого сервера — напрямую: живых выходов нет")
         for k, e in sorted(h["exits"].items()):
             name = _md(_exit_name(servers, k))
             if e["state"] == "up":
