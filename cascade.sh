@@ -671,6 +671,9 @@ tg_nets() {
 
 load_set_from_file() {   # $1 набор, $2 файл со списком сетей (# — комментарии)
     local set=$1 file=$2
+    # Те же размеры, что у _new: после swap живой набор — это он, и create
+    # с другими размерами ругался бы «set with the same name already exists»
+    ipset create -exist "$set" hash:net family inet hashsize 16384 maxelem 262144
     # Проверка формата — grep, не awk: mawk (awk по умолчанию в Ubuntu) не знает {n,m}
     {
         echo "create ${set}_new hash:net family inet hashsize 16384 maxelem 262144 -exist"
@@ -835,15 +838,12 @@ ensure_peer_ips() {
 apply_static() {
     load_exits
     load_subnet || { warn "Нет подсети устройств ($VPN_IF.conf) — жду"; return 1; }
-    ipset create -exist cascade_ru hash:net family inet hashsize 16384 maxelem 262144
-    ipset create -exist cascade_force hash:net family inet
     load_set_from_file cascade_ru "$STATE/ru.zone"
     [[ -s "$STATE/ru.zone" ]] || warn "Нет списка российских сетей — всё идёт через выходы (cascade.sh ru-update)"
     [[ -f "$STATE/force_exit.list" ]] || printf '%s\n' \
         "# Сети, которые всегда идут через выход, даже если они в российском списке:" \
         "# по одной на строку (1.2.3.0/24). Служба подхватывает изменения сама." > "$STATE/force_exit.list"
     load_set_from_file cascade_force "$STATE/force_exit.list"
-    ipset create -exist cascade_tg hash:net family inet
     load_set_from_file cascade_tg <(tg_nets)
     if have ip6tables; then
         ipset create -exist cascade_tg6 hash:net family inet6
@@ -852,8 +852,9 @@ apply_static() {
             echo "flush cascade_tg6_new"
             tg_nets | grep -E '^[0-9a-fA-F:]+:[0-9a-fA-F:]*/[0-9]{1,3}$' | sed 's/^/add cascade_tg6_new /'
         } | ipset restore -exist && ipset swap cascade_tg6_new cascade_tg6 && ipset destroy cascade_tg6_new
+        # Ядро без IPv6 — цепочки не будет, write_decide это видит и пропускает
         ip6tables -N CASCADE_OUT6 2>/dev/null
-        ip6tables -C OUTPUT -j CASCADE_OUT6 2>/dev/null || ip6tables -I OUTPUT 1 -j CASCADE_OUT6
+        ip6tables -C OUTPUT -j CASCADE_OUT6 2>/dev/null || ip6tables -I OUTPUT 1 -j CASCADE_OUT6 2>/dev/null
     fi
     build_auto_sets
 
