@@ -1065,6 +1065,33 @@ cmd_info() {
         line=$(awk -v k="$k" '$1 == k {print $2, $3, $4, $5; exit}' "$RUN/health" 2>/dev/null)
         echo "HEALTH_$k=${line:-unknown 0 - -1} ${AUTO[$k]}"
     done
+    load_subnet 2>/dev/null && echo "ROUTES=$(device_routes)"
+}
+
+# Куда сейчас выходят устройства: «N:K» — номер устройства (последний байт адреса)
+# и выход K по меткам его соединений, 0 — напрямую с IP входа. Метка ставится на
+# первом пакете и остаётся за соединением, так что это фактический выход, в том
+# числе после переезда с упавшего. Соединения через выход важнее прямых: прямыми
+# у каждого идут российские сайты. Выход берётся тот, где соединений больше
+device_routes() {
+    command -v conntrack >/dev/null || return 0
+    conntrack -L 2>/dev/null | awk -v a="$SA" -v b="$SB" -v c="$SC" '
+        { src = ""; mk = -1
+          for (i = 1; i <= NF; i++) {
+              if (src == "" && substr($i, 1, 4) == "src=") src = substr($i, 5)
+              if (substr($i, 1, 5) == "mark=") mk = substr($i, 6) + 0
+          }
+          if (mk < 0 || src == "") next
+          split(src, o, ".")
+          if (o[1] != a || o[2] != b || o[3] + 0 < c + 0) next
+          m = int(mk / 65536) % 256
+          if (m == 0) next
+          k = (m == 1 || m == 255) ? 0 : m - 1
+          cnt[o[4] "," k]++; dev[o[4]] = 1 }
+        END { for (n in dev) { best = 0; bc = 0
+                  for (key in cnt) { split(key, q, ",")
+                      if (q[1] == n && q[2] + 0 > 0 && cnt[key] > bc) { bc = cnt[key]; best = q[2] } }
+                  printf "%s%s:%s", sep, n, best; sep = " " } }'
 }
 
 cmd_down() {

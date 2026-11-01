@@ -15,6 +15,7 @@ from awg_core import (
     process_domain, run_subnet_daemon,
     load_servers, post_restore_fixup, upgrade_all_servers,
 )
+import awg_cascade as cas
 from .common import (
     back_kb, WAITING_RESTORE_FILE, BTN_BACK, BTN_BACK_MENU, BTN_BACK_MAINT, BTN_CANCEL, BTN_CLIENT_UPD,
 )
@@ -34,8 +35,11 @@ async def show_status(query):
     total_dl = sum(p.get("tx", 0) for p in peers.values())
     total_ul = sum(p.get("rx", 0) for p in peers.values())
 
+    # Имена устройств — только админу: «Статус сервера» есть и в меню пользователя
+    is_admin = (query.from_user.id == ADMIN_ID)
+    ww = await asyncio.get_event_loop().run_in_executor(None, cas.who_where)
     slave_tasks = {
-        i: asyncio.ensure_future(_srv_block_slave(srv, i))
+        i: asyncio.ensure_future(_srv_block_slave(srv, i, ww, is_admin))
         for i, srv in enumerate(servers)
         if not srv.get("is_primary")
     }
@@ -57,10 +61,9 @@ async def show_status(query):
         is_pri = srv.get("is_primary", False)
         role   = "Основной" if is_pri else "Слейв"
         lines.append(f"{emoji} {name} *({role})*")
-        lines.append(_srv_block_primary() if is_pri else slave_blocks.get(i, "⚠️ нет данных"))
+        lines.append(_srv_block_primary(ww, is_admin) if is_pri else slave_blocks.get(i, "⚠️ нет данных"))
         lines.append("")
 
-    is_admin = (query.from_user.id == ADMIN_ID)
     kb_rows = [[InlineKeyboardButton("🔄 Перезапустить бота", callback_data="restart_bot")]]
     if is_admin:
         kb_rows.append([InlineKeyboardButton("⚡ Перезапустить AWG",  callback_data="restart_awg")])

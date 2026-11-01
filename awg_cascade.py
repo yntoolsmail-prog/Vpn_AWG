@@ -16,7 +16,7 @@
 #                                номер не выдаётся — только явно, «занять слот». У
 #                                основного, а не у входов: он есть всегда, и номера не
 #                                теряются, когда убран последний вход
-import hashlib, logging, os, re, shlex, subprocess
+import hashlib, logging, os, re, shlex, subprocess, time
 
 from awg_core import SERVER_IP, load_servers, save_servers
 from awg_clients import slot_ip  # noqa: F401  (реэкспорт для обработчиков)
@@ -318,9 +318,22 @@ def info(srv: dict) -> dict:
     return d
 
 
+# {id входа: (время, {N: K})} — из последнего health(): через какой выход сейчас
+# идёт устройство N этого входа (K=0 — напрямую с его IP). Обновляет _check_cascade
+_ROUTES: dict = {}
+ROUTES_TTL = 300   # данные старше — выход устройства считаем неизвестным
+
+
 def health(srv: dict) -> dict:
-    """Состояние входа: {daemon, ru_count, ru_age, exits: {K: {state, since, rtt, hs, auto}}}."""
+    """Состояние входа: {daemon, ru_count, ru_age, exits: {K: {state, since, rtt, hs, auto}},
+    slots, routes: {N: K}}."""
     d = info(srv)
+    routes = {}
+    for pair in d.get("ROUTES", "").split():
+        n, _, k = pair.partition(":")
+        if n.isdigit() and k.isdigit():
+            routes[int(n)] = int(k)
+    _ROUTES[srv.get("id")] = (time.time(), routes)
     exs = {}
     for k, v in d.items():
         if not k.startswith("HEALTH_") or not k[7:].isdigit():
@@ -330,7 +343,68 @@ def health(srv: dict) -> dict:
     num = lambda x, dflt: int(x) if str(x).lstrip("-").isdigit() else dflt
     return {"daemon": d.get("DAEMON") == "1", "ru_count": num(d.get("RU_COUNT"), 0),
             "ru_age": num(d.get("RU_AGE"), -1), "exits": exs,
-            "slots": [int(x) for x in d.get("ENTRY_SLOTS", "").split() if x.isdigit()]}
+            "slots": [int(x) for x in d.get("ENTRY_SLOTS", "").split() if x.isdigit()],
+            "routes": routes}
+
+
+def _dump_label(srv: dict) -> str:
+    """Метка сервера в поле server у combined dump (awg_stats): основной — пусто."""
+    return "" if srv.get("is_primary") else f"{srv.get('emoji', '')} {srv.get('name', 'Slave')}".strip()
+
+
+def placement(servers: list, dump: dict, ips: dict, online_s: int = 180) -> dict:
+    """Кто где сейчас: {pub: (сервер подключения, сервер выхода)}. Онлайн — хендшейк
+    за online_s; подключение — сервер с последним хендшейком (поле server у combined
+    dump). Выход — откуда устройство выходит в интернет: сам сервер подключения,
+    если это не вход; у входа — выход по его ROUTES (K=0 — сам вход), нет свежих
+    данных — None. Без каскада выход всегда совпадает с подключением."""
+    now = time.time()
+    by_label = {_dump_label(s): s for s in servers}
+    by_slot = {int(s["slot"]): s for s in exits(servers)}
+    out = {}
+    for pub, p in dump.items():
+        hs = p.get("handshake") or 0
+        conn = by_label.get(p.get("server", ""))
+        if not hs or now - hs >= online_s or conn is None:
+            continue
+        via = conn
+        if is_entry(conn):
+            ts, routes = _ROUTES.get(conn.get("id"), (0, {}))
+            last = ips.get(pub, "").rpartition(".")[2]
+            k = routes.get(int(last)) if last.isdigit() and now - ts < ROUTES_TTL else None
+            via = None if k is None else conn if k == 0 else by_slot.get(k)
+        out[pub] = (conn, via)
+    return out
+
+
+def short_label(srv: dict) -> str:
+    """«🇳🇱 NLD» — коротко, для строк статистики."""
+    return f"{srv.get('emoji', '🖥')} {srv.get('name', '')}".strip()
+
+
+def same_srv(a: dict, b: dict) -> bool:
+    return bool(a and b) and (a.get("id") or a.get("name")) == (b.get("id") or b.get("name"))
+
+
+def route_label(conn: dict, via: dict) -> str:
+    """Путь устройства для карточки и списка: «🇷🇺 RUS → 🇳🇱 NLD», без каскада — сервер."""
+    if via is None:
+        return f"{short_label(conn)} → ?"
+    return short_label(conn) if same_srv(conn, via) else f"{short_label(conn)} → {short_label(via)}"
+
+
+def who_where() -> dict:
+    """{pub: (имя устройства, сервер подключения, сервер выхода)} — для статистики бота."""
+    from awg_clients import get_all_clients, get_client_keys, get_client_pub
+    from awg_stats import get_combined_awg_dump
+    names, ips = {}, {}
+    for name in get_all_clients():
+        pub = get_client_pub(name)
+        if pub:
+            names[pub] = name
+            ips[pub] = (get_client_keys(name) or {}).get("ip", "")
+    return {pub: (names.get(pub, pub[:8]), conn, via)
+            for pub, (conn, via) in placement(load_servers(), get_combined_awg_dump(), ips).items()}
 
 
 # ── Связка серверов ───────────────────────────────────────────────────────────

@@ -33,17 +33,40 @@ def _fmt_gb(b: int) -> str:
     return f"{b / 1024**3:.2f} GB"
 
 
-def _srv_block_primary() -> str:
+def _names(names: list, limit: int = 10) -> str:
+    shown = ", ".join(_md(n) for n in names[:limit])
+    return shown + (f" и ещё {len(names) - limit}" if len(names) > limit else "")
+
+
+def _who_lines(srv: dict, ww: dict = None, names: bool = True) -> list:
+    """«Кто на сервере» (cas.who_where): устройство числится там, откуда выходит в
+    интернет, — у выхода и те, кто пришёл через вход. У входа ещё строка: сколько
+    через него идёт и в какие выходы. Без каскада — те, кто подключён к серверу.
+    names=False — только числа: «Статус сервера» видят и пользователи."""
+    ww = cas.who_where() if ww is None else ww
+    here = sorted(n for n, conn, via in ww.values() if cas.same_srv(via, srv))
+    through = sum(1 for n, conn, via in ww.values() if cas.same_srv(via, srv) and not cas.same_srv(conn, srv))
+    lines = [f"🟢 Онлайн: {len(here)}" + (f" ({through} через вход)" if through else "")
+             + (f" — {_names(here)}" if here and names else "")]
+    if cas.is_entry(srv):
+        groups = {}
+        for n, conn, via in ww.values():
+            if cas.same_srv(conn, srv) and not cas.same_srv(via, srv):
+                key = cas.short_label(via) if via else "выход не определён"
+                groups[key] = groups.get(key, 0) + 1
+        if groups:
+            lines.append(f"🔀 Через вход в выходы: {sum(groups.values())} ("
+                         + ", ".join(f"{_md(k)} — {v}" for k, v in sorted(groups.items())) + ")")
+    return lines
+
+
+def _srv_block_primary(ww: dict = None, names: bool = True) -> str:
     """Блок статистики для основного сервера."""
     from .bandwidth import get_primary_bw
     sys_s  = get_system_stats()
     bw     = get_primary_bw()
     rx, tx = read_iface_bytes(AWG_IFACE)
-    now    = int(time.time())
-
-    dump   = get_combined_awg_dump()
-    online = sum(1 for p in dump.values()
-                 if not p.get("server") and p.get("handshake") and now - p["handshake"] < 180)
+    primary = next((s for s in load_servers() if s.get("is_primary")), {"is_primary": True})
 
     ram_pct = round(sys_s["ram_used"] / sys_s["ram_total"] * 100) if sys_s.get("ram_total") else 0
 
@@ -59,22 +82,17 @@ def _srv_block_primary() -> str:
         "",
         f"💾 RAM: {ram_pct}%  💿 Диск: {sys_s['disk_pct']}%",
         f"⬇️ {awg_down} / ⬆️ {awg_up} Mbit/s",
-        f"🟢 Онлайн: {online}",
+        *_who_lines(primary, ww, names),
         f"📊 Трафик (с перезагрузки): ↓{_fmt_gb(tx)} ↑{_fmt_gb(rx)}",
     ]
     return "\n".join(lines)
 
 
-async def _srv_block_slave(srv: dict, idx: int) -> str:
+async def _srv_block_slave(srv: dict, idx: int, ww: dict = None, names: bool = True) -> str:
     """Блок статистики для slave-сервера (SSH)."""
     from .bandwidth import get_slave_bw_detail
 
     sid   = srv.get("id") or srv.get("name", "")
-    now   = int(time.time())
-    dump  = get_combined_awg_dump()
-    label = f"{srv.get('emoji', '')} {srv.get('name', 'Slave')}".strip()
-    online = sum(1 for p in dump.values()
-                 if p.get("server") == label and p.get("handshake") and now - p["handshake"] < 180)
 
     bw_d   = get_slave_bw_detail().get(sid, {})
     awg_down = bw_d.get("awg_down", 0)
@@ -116,7 +134,7 @@ async def _srv_block_slave(srv: dict, idx: int) -> str:
         "",
         f"💾 RAM: {ram_pct}%  💿 Диск: {disk_pct}%",
         f"⬇️ {awg_down} / ⬆️ {awg_up} Mbit/s",
-        f"🟢 Онлайн: {online}",
+        *_who_lines(srv, ww, names),
         f"📊 Трафик (с перезагрузки): {traffic}",
     ]
     return "\n".join(lines)
@@ -130,12 +148,13 @@ async def show_servers_list(query):
         _modules = None
 
     servers = load_servers()
+    ww = await asyncio.get_event_loop().run_in_executor(None, cas.who_where)
 
     # Собираем статблоки параллельно (основной — синхронно, slaves — async)
     slave_blocks: dict[int, str] = {}
     if _PARAMIKO_AVAILABLE:
         tasks = {
-            i: asyncio.ensure_future(_srv_block_slave(srv, i))
+            i: asyncio.ensure_future(_srv_block_slave(srv, i, ww))
             for i, srv in enumerate(servers)
             if not srv.get("is_primary")
         }
@@ -157,7 +176,7 @@ async def show_servers_list(query):
 
         lines.append(f"{emoji} {name} *({role})* · {cas.status_label(srv)}")
         if is_pri:
-            lines.append(_srv_block_primary())
+            lines.append(_srv_block_primary(ww))
         else:
             lines.append(slave_blocks.get(i, "⚠️ нет данных"))
         if cas.is_entry(srv):

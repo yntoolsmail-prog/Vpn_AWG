@@ -1,4 +1,4 @@
-import os, tempfile, shutil, re, asyncio, subprocess, html
+import os, tempfile, shutil, re, asyncio, subprocess, html, time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaDocument
 from telegram.ext import ContextTypes, ConversationHandler
 from awg_core import (
@@ -50,6 +50,16 @@ async def show_my_devices(query, user_id: int):
     kb.append([InlineKeyboardButton(BTN_BACK_MENU, callback_data=back_target)])
     await query.edit_message_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(kb))
 
+def _route_of(pub: str, stats: dict, name: str, servers: list = None) -> str:
+    """Где устройство сейчас (онлайн): «🇳🇱 NLD», через вход — «🇷🇺 RUS → 🇳🇱 NLD»
+    (awg_cascade.placement). Не онлайн — пусто."""
+    if not pub or time.time() - (stats.get("handshake") or 0) >= 180:
+        return ""
+    ip = (get_client_keys(name) or {}).get("ip", "")
+    pl = cas.placement(load_servers() if servers is None else servers, {pub: stats}, {pub: ip})
+    return cas.route_label(*pl[pub]) if pub in pl else ""
+
+
 async def show_device(query, name: str, user_id: int):
     if not can_access_device(user_id, name):
         await query.answer("⛔ Это не ваше устройство.", show_alert=True)
@@ -64,13 +74,16 @@ async def show_device(query, name: str, user_id: int):
     dl    = fmt_bytes(stats.get("tx", 0))  # tx сервера = клиент скачал (↓)
     ul    = fmt_bytes(stats.get("rx", 0))  # rx сервера = клиент отдал (↑)
     ep    = stats.get("endpoint", "—")
+    route = _route_of(pub, stats, name)
     srv_label = stats.get("server", "")
-    srv_note  = f" _({srv_label})_" if srv_label else ""
+    srv_note  = f" _({srv_label})_" if srv_label and not route else ""
+    route_line = f"📡 Сервер: {_md(route)}\n" if route else ""
 
     info = (
         f"📱 Устройство: *{short}*\n"
         f"👤 Пользователь: {name.split('.')[0]}\n\n"
         f"🕐 Хендшейк: {hs}{srv_note}\n"
+        f"{route_line}"
         f"📍 Endpoint: {ep}\n"
         f"📶 Трафик: ↓{dl} ↑{ul}"
     )
@@ -99,13 +112,15 @@ async def show_all_clients(query):
         return
 
     lines = [f"🌍 Все устройства ({len(clients)}):\n"]
+    servers = load_servers()
     for name in clients:
         pub   = get_client_pub(name)
         stats = peers.get(pub, {}) if pub else {}
         hs    = fmt_handshake(stats.get("handshake", 0))
         dl    = fmt_bytes(stats.get("tx", 0))  # tx сервера = клиент скачал (↓)
         ul    = fmt_bytes(stats.get("rx", 0))  # rx сервера = клиент отдал (↑)
-        lines.append(f"• {name} | {hs} | ↓{dl} ↑{ul}")
+        route = _route_of(pub, stats, name, servers)
+        lines.append(f"• {name} | {hs} | ↓{dl} ↑{ul}" + (f" | {route}" if route else ""))
 
     kb = [[InlineKeyboardButton(f"📋 {name}", callback_data=f"device_{name}")] for name in clients]
     kb.append([InlineKeyboardButton(BTN_BACK_MENU, callback_data="clients_menu")])
